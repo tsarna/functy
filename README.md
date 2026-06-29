@@ -3,11 +3,20 @@
 An imperative language whose values are [cty](https://github.com/zclconf/go-cty)
 values and whose expressions are [HCL](https://github.com/hashicorp/hcl).
 
+functy is **not** aiming to compete with [Starlark](https://github.com/google/starlark-go), [Tengo](https://github.com/d5/tengo), or any of the various JavaScript or Lua implementations for Go. It is intended specifically for use in software that is already relying on HCL / Cty but which needs more expressive power than eg the [HCL user function add-on](https://github.com/hashicorp/hcl/tree/main/ext/userfunc).
+
+[go-cty](https://github.com/zclconf/go-cty) describes itself this way:
+
+> One could think of cty as being the reflection API for a language that doesn't
+> exist, or that doesn't exist yet.
+
+functy aims to be that language.
+
 [![CI](https://github.com/tsarna/functy/actions/workflows/ci.yml/badge.svg)](https://github.com/tsarna/functy/actions/workflows/ci.yml)
 
 ## Overview
 
-functy is a small Go/C-style imperative language that compiles to ordinary cty
+functy is a small Go-inspired imperative language that compiles to ordinary cty
 `function.Function` values. You write functions with familiar control flow —
 `if`/`else`, `for`/`while`, `switch`, `try`/`catch` — and **every expression is a
 real HCL expression**: operators, string templates (`"hello ${name}"`), function
