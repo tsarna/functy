@@ -1,0 +1,15 @@
+// Top-level constants, declared near their point of use and resolved across the
+// file regardless of order (tau references pi, which is declared below it).
+//
+//   functy run examples/consts.cty   # => 6.28318
+
+const tau: number = pi * 2
+const pi = 3.14159
+
+func circumference(r: number) -> number {
+    return tau * r
+}
+
+func main() -> number {
+    return circumference(1)
+}

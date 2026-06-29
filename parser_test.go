@@ -1,0 +1,300 @@
+package functy
+
+import (
+	"testing"
+
+	"github.com/zclconf/go-cty/cty"
+)
+
+func parse(t *testing.T, src string) *Result {
+	t.Helper()
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected parse errors:\n%s", diags.Error())
+	}
+	return res
+}
+
+func parseErr(t *testing.T, src string) {
+	t.Helper()
+	_, diags := NewParser().Parse([]byte(src), "test")
+	if !diags.HasErrors() {
+		t.Fatalf("expected parse errors, got none")
+	}
+}
+
+func onlyFunc(t *testing.T, src string) *FuncDecl {
+	t.Helper()
+	res := parse(t, src)
+	if len(res.Funcs) != 1 {
+		t.Fatalf("expected 1 function, got %d", len(res.Funcs))
+	}
+	return res.Funcs[0]
+}
+
+func TestParseEmptyFunc(t *testing.T) {
+	fn := onlyFunc(t, "func main() {}")
+	if fn.Name != "main" {
+		t.Fatalf("name = %q", fn.Name)
+	}
+	if len(fn.Params) != 0 || len(fn.Body) != 0 {
+		t.Fatalf("expected no params/body")
+	}
+}
+
+func TestParseParams(t *testing.T) {
+	fn := onlyFunc(t, `func f(a, b: number, c = 1, d: string = "x", *rest: bool) { return a }`)
+	if len(fn.Params) != 5 {
+		t.Fatalf("expected 5 params, got %d", len(fn.Params))
+	}
+	if fn.Params[1].Type != cty.Number {
+		t.Errorf("b should be number, got %#v", fn.Params[1].Type)
+	}
+	if fn.Params[2].Default == nil {
+		t.Errorf("c should have a default")
+	}
+	if !fn.Params[4].Variadic {
+		t.Errorf("rest should be variadic")
+	}
+	// For a variadic, Type holds the element type; the builder collects into list(T).
+	if fn.Params[4].Type != cty.Bool {
+		t.Errorf("*rest: bool element type should be bool, got %#v", fn.Params[4].Type)
+	}
+}
+
+func TestParseReturnType(t *testing.T) {
+	fn := onlyFunc(t, "func f() -> object({ q = number, r = number }) { return null }")
+	if !fn.RetType.IsObjectType() {
+		t.Fatalf("expected object return type, got %#v", fn.RetType)
+	}
+}
+
+func TestParseVarForms(t *testing.T) {
+	fn := onlyFunc(t, `func f() {
+        var a = 1
+        var b: number = 2
+        var c: string
+        var d
+        a = a + 1
+        log_x(a)
+    }`)
+	if len(fn.Body) != 6 {
+		t.Fatalf("expected 6 statements, got %d", len(fn.Body))
+	}
+	if vd := fn.Body[0].(*VarDecl); vd.Type != cty.NilType || vd.Init == nil {
+		t.Errorf("a should be dynamic with an initializer")
+	}
+	if vd := fn.Body[1].(*VarDecl); vd.Type != cty.Number || vd.Init == nil {
+		t.Errorf("b should be typed number with an initializer")
+	}
+	if vd := fn.Body[2].(*VarDecl); vd.Type != cty.String || vd.Init != nil {
+		t.Errorf("c should be typed string with no init")
+	}
+	if vd := fn.Body[3].(*VarDecl); vd.Type != cty.NilType || vd.Init != nil {
+		t.Errorf("d should be dynamic with no init")
+	}
+	if _, ok := fn.Body[4].(*Assign); !ok {
+		t.Errorf("stmt4 should be Assign")
+	}
+	if _, ok := fn.Body[5].(*ExprStmt); !ok {
+		t.Errorf("stmt5 should be ExprStmt")
+	}
+}
+
+func TestParseIfChain(t *testing.T) {
+	fn := onlyFunc(t, `func f(n) {
+        if n > 0 {
+            return "pos"
+        } else if n < 0 {
+            return "neg"
+        } else {
+            return "zero"
+        }
+    }`)
+	chain, ok := fn.Body[0].(*IfChain)
+	if !ok {
+		t.Fatalf("expected IfChain")
+	}
+	if len(chain.Branches) != 2 {
+		t.Fatalf("expected 2 branches, got %d", len(chain.Branches))
+	}
+	if chain.Else == nil {
+		t.Fatalf("expected else")
+	}
+}
+
+func TestParseElseSameLine(t *testing.T) {
+	// `} else {` on one line must parse — a headline functy improvement.
+	parse(t, "func f(n) { if n > 0 { return 1 } else { return 2 } }")
+}
+
+func TestParseForForms(t *testing.T) {
+	cases := map[string]ForKind{
+		"func f() { for x > 0 { break } }":                   ForCond,
+		"func f() { while x > 0 { break } }":                 ForCond,
+		"func f() { for { break } }":                         ForCond,
+		"func f() { for var i = 0; i < 3; i = i+1 { x() } }": ForClause,
+		"func f() { for v in xs { x(v) } }":                  ForRange,
+		"func f() { for k, v in m { x(k, v) } }":             ForRange,
+	}
+	for src, kind := range cases {
+		fn := onlyFunc(t, src)
+		loop, ok := fn.Body[0].(*For)
+		if !ok {
+			t.Fatalf("%s: expected For", src)
+		}
+		if loop.Kind != kind {
+			t.Errorf("%s: kind = %v, want %v", src, loop.Kind, kind)
+		}
+	}
+}
+
+func TestParseForRangeNames(t *testing.T) {
+	fn := onlyFunc(t, "func f() { for v in xs { x(v) } }")
+	loop := fn.Body[0].(*For)
+	if loop.KeyName != "" || loop.ValName != "v" {
+		t.Fatalf("single var should bind value: key=%q val=%q", loop.KeyName, loop.ValName)
+	}
+	fn = onlyFunc(t, "func f() { for k, v in m { x(k) } }")
+	loop = fn.Body[0].(*For)
+	if loop.KeyName != "k" || loop.ValName != "v" {
+		t.Fatalf("two vars: key=%q val=%q", loop.KeyName, loop.ValName)
+	}
+}
+
+func TestParseForRangeObjectLiteralCollection(t *testing.T) {
+	// The object literal opens/closes at depth 1; the body brace terminates the
+	// collection expression at depth 0.
+	fn := onlyFunc(t, "func f() { for k, v in { a = 1 } { x(k, v) } }")
+	loop := fn.Body[0].(*For)
+	if loop.Kind != ForRange || loop.Collection == nil {
+		t.Fatalf("expected range over object literal")
+	}
+	if len(loop.Body) != 1 {
+		t.Fatalf("expected 1 body statement, got %d", len(loop.Body))
+	}
+}
+
+func TestParseSwitch(t *testing.T) {
+	fn := onlyFunc(t, `func f(s) {
+        switch s {
+        case 200, 201, 204:
+            return "ok"
+        case 404:
+            return "missing"
+        default:
+            return "error"
+        }
+    }`)
+	sw := fn.Body[0].(*Switch)
+	if sw.Subject == nil {
+		t.Fatalf("expected subject")
+	}
+	if len(sw.Cases) != 2 {
+		t.Fatalf("expected 2 cases, got %d", len(sw.Cases))
+	}
+	if len(sw.Cases[0].Values) != 3 {
+		t.Fatalf("first case should have 3 values, got %d", len(sw.Cases[0].Values))
+	}
+	if sw.Default == nil {
+		t.Fatalf("expected default")
+	}
+}
+
+func TestParseSwitchExprless(t *testing.T) {
+	fn := onlyFunc(t, `func f(n) {
+        switch {
+        case n > 0:
+            return "pos"
+        default:
+            return "rest"
+        }
+    }`)
+	sw := fn.Body[0].(*Switch)
+	if sw.Subject != nil {
+		t.Fatalf("expression-less switch should have nil subject")
+	}
+}
+
+func TestParseBareBlock(t *testing.T) {
+	fn := onlyFunc(t, "func f() { { var t = 1\n use(t) } }")
+	if _, ok := fn.Body[0].(*Block); !ok {
+		t.Fatalf("expected bare Block, got %T", fn.Body[0])
+	}
+}
+
+func TestParseSemicolonSeparated(t *testing.T) {
+	fn := onlyFunc(t, "func f() { var a = 1; var b = 2; use(a, b) }")
+	if len(fn.Body) != 3 {
+		t.Fatalf("expected 3 statements, got %d", len(fn.Body))
+	}
+}
+
+func TestParseLineContinuation(t *testing.T) {
+	// A trailing binary operator continues the statement onto the next line.
+	fn := onlyFunc(t, "func f() {\n  var x = 1 +\n    2 +\n    3\n  return x\n}")
+	if len(fn.Body) != 2 {
+		t.Fatalf("expected 2 statements, got %d", len(fn.Body))
+	}
+}
+
+func TestParseTemplateAcrossExpr(t *testing.T) {
+	parse(t, `func greet(name) { return "hello ${name}!" }`)
+}
+
+func TestParseMultiSourceConcept(t *testing.T) {
+	res := parse(t, "func a() { return 1 }\nfunc b() { return 2 }")
+	if len(res.Funcs) != 2 {
+		t.Fatalf("expected 2 functions, got %d", len(res.Funcs))
+	}
+}
+
+// ---- error cases ------------------------------------------------------------
+
+func TestParseBreakOutsideLoop(t *testing.T) { parseErr(t, "func f() { break }") }
+
+func TestParseContinueOutsideLoop(t *testing.T) { parseErr(t, "func f() { continue }") }
+
+func TestParseUnreachable(t *testing.T) {
+	parseErr(t, "func f() { return 1\n return 2 }")
+}
+
+func TestParseDuplicateVar(t *testing.T) {
+	parseErr(t, "func f() { var x = 1\n var x = 2 }")
+}
+
+func TestParseRequiredAfterOptional(t *testing.T) {
+	parseErr(t, "func f(a = 1, b) { return a }")
+}
+
+func TestParseVariadicNotLast(t *testing.T) {
+	parseErr(t, "func f(*rest, a) { return a }")
+}
+
+func TestParseTopLevelVarRejectedByDefault(t *testing.T) {
+	parseErr(t, "var x = 1")
+}
+
+func TestParseTopLevelVarAllowed(t *testing.T) {
+	res, diags := NewParser().AllowTopLevelVar(true).Parse([]byte("var x: number = 1"), "test")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected: %s", diags.Error())
+	}
+	if len(res.Vars) != 1 || res.Vars[0].Name != "x" || res.Vars[0].Type != cty.Number {
+		t.Fatalf("var not collected correctly: %+v", res.Vars)
+	}
+}
+
+func TestParseLocalConstRejected(t *testing.T) {
+	parseErr(t, "func f() { const x = 1 }")
+}
+
+func TestParseThrowAndDefer(t *testing.T) {
+	fn := onlyFunc(t, "func f() { defer cleanup()\n throw \"x\" }")
+	if _, ok := fn.Body[0].(*Defer); !ok {
+		t.Fatalf("stmt0 should be Defer, got %T", fn.Body[0])
+	}
+	if _, ok := fn.Body[1].(*Throw); !ok {
+		t.Fatalf("stmt1 should be Throw, got %T", fn.Body[1])
+	}
+}

@@ -1,0 +1,12 @@
+// Basic arithmetic and an entry point.
+//
+//   functy run examples/math.cty --func add -- 2 3   # => 5
+//   functy run examples/math.cty                     # => 5 (calls main)
+
+func add(a: number, b: number) -> number {
+    return a + b
+}
+
+func main() -> number {
+    return add(2, 3)
+}

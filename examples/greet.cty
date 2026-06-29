@@ -1,0 +1,8 @@
+// A default parameter and string-template interpolation.
+//
+//   functy run examples/greet.cty --func greet --output raw                  # => hello world
+//   functy run examples/greet.cty --func greet --output raw -- '"alice"'     # => hello alice
+
+func greet(name: string = "world") -> string {
+    return "hello ${name}"
+}
