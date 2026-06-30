@@ -419,6 +419,11 @@ func (p *parser) parseSimpleStmt(stop stopFunc) Statement {
 	if t.isKeyword("var") {
 		return p.parseVarDecl(stop)
 	}
+	// Error-capture assignment: `val, err = expr` (each target a bare identifier
+	// or the blank `_`). Detected by a bare identifier followed by a comma.
+	if t.Type == hclsyntax.TokenIdent && !t.isAnyKeyword() && p.peek(1).Type == hclsyntax.TokenComma {
+		return p.parseCaptureAssign(stop)
+	}
 	// Assignment: bare identifier (not a keyword) immediately followed by '='.
 	if t.Type == hclsyntax.TokenIdent && !t.isAnyKeyword() && p.peek(1).Type == hclsyntax.TokenEqual {
 		name := t
@@ -433,6 +438,41 @@ func (p *parser) parseSimpleStmt(stop stopFunc) Statement {
 		return nil
 	}
 	return &ExprStmt{Expr: expr, SrcRange: start}
+}
+
+// parseCaptureAssign parses the two-target error-capture assignment
+// `val, err = expr`. The caller has verified the first token is a bare
+// identifier followed by a comma. Either target may be the blank `_`.
+func (p *parser) parseCaptureAssign(stop stopFunc) Statement {
+	valTok := p.cur()
+	p.advance() // value target
+	p.advance() // ','
+	errTok, ok := p.expectIdent("error capture target")
+	if !ok {
+		p.recoverToStatementEnd()
+		return nil
+	}
+	if !p.expect(hclsyntax.TokenEqual, "=") {
+		p.recoverToStatementEnd()
+		return nil
+	}
+	valName := string(valTok.Bytes)
+	errName := errTok.text
+	targets := hcl.RangeBetween(valTok.Range, errTok.tok.Range)
+	if valName == "_" && errName == "_" {
+		p.errf(targets, "Both capture targets are blank",
+			"At least one target of a `val, err = expr` capture must be a variable; "+
+				"to evaluate an expression only for its side effects, use a plain expression statement.")
+	}
+	expr := p.parseExprStop(stop, "value")
+	return &CaptureAssign{
+		ValName:  valName,
+		ErrName:  errName,
+		Expr:     expr,
+		ValRange: valTok.Range,
+		ErrRange: errTok.tok.Range,
+		SrcRange: targets,
+	}
 }
 
 func (p *parser) parseVarDecl(stop stopFunc) Statement {

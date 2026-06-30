@@ -448,6 +448,45 @@ try {
 This complements HCL's expression-level `try()`/`can()`, which remain available
 inside any expression.
 
+### Error capture — `val, err = expr`
+
+A two-target assignment captures an evaluation failure into a variable instead of
+unwinding the function — the statement-level analog of Go's `v, err := f()`:
+
+```functy
+var val: SomeType
+var err: error
+val, err = risky(x)        // on success: val = <result>, err = null
+                           // on failure: val = null, err = <the error>
+```
+
+It is exactly sugar for a `try`/`catch`:
+
+```functy
+try {
+    val = risky(x)
+    err = null
+} catch e {
+    val = null
+    err = e
+}
+```
+
+- The right-hand side is evaluated **once**. Any failure — a `throw` unwinding out
+  of a called function, a type-conversion failure, a failing host function — is
+  caught and bound to the error target (the same object shape `catch` binds, with
+  at least `.message` and `.value`); it does not propagate past the statement.
+- Both non-blank targets must **already be declared**, like a plain `=`.
+- Either target may be the blank identifier `_` to discard it:
+  - `_, err = expr` — evaluate for side effects / error only (no value target).
+  - `val, _ = expr` — best-effort assign; on failure `val` is null and the error is
+    swallowed (Go's `v, _ = f()`).
+  - `_, _ = expr` is a compile-time error — use a plain expression statement to
+    evaluate something only for its side effects.
+- This is statement-level error capture, **not** a multi-return: the function still
+  produces a single value; the second target merely receives the caught `error` or
+  `null`.
+
 ### defer
 
 ```functy

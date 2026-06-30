@@ -50,6 +50,21 @@ type Assign struct {
 	SrcRange hcl.Range
 }
 
+// CaptureAssign is the two-target error-capture assignment `val, err = expr`.
+// It evaluates Expr exactly once; on success it assigns the value to ValName and
+// null to ErrName, and on failure it assigns null to ValName and the caught
+// error to ErrName. Either target may be "_" (the blank identifier) to discard
+// it. It is statement-level sugar for a try/catch — the function never unwinds —
+// and both non-blank targets must already be declared (consistent with `=`).
+type CaptureAssign struct {
+	ValName  string // "_" to discard the value
+	ErrName  string // "_" to discard the error
+	Expr     hcl.Expression
+	ValRange hcl.Range // the value target, for diagnostics
+	ErrRange hcl.Range // the error target, for diagnostics
+	SrcRange hcl.Range
+}
+
 // ExprStmt evaluates an expression purely for its side effects; the value is
 // discarded.
 type ExprStmt struct {
@@ -162,16 +177,17 @@ type Break struct{ SrcRange hcl.Range }
 // Continue skips to the next iteration of the innermost enclosing loop.
 type Continue struct{ SrcRange hcl.Range }
 
-func (s *VarDecl) srcRange() hcl.Range  { return s.SrcRange }
-func (s *Assign) srcRange() hcl.Range   { return s.SrcRange }
-func (s *ExprStmt) srcRange() hcl.Range { return s.SrcRange }
-func (s *Return) srcRange() hcl.Range   { return s.SrcRange }
-func (s *Block) srcRange() hcl.Range    { return s.SrcRange }
-func (s *IfChain) srcRange() hcl.Range  { return s.SrcRange }
-func (s *For) srcRange() hcl.Range      { return s.SrcRange }
-func (s *Switch) srcRange() hcl.Range   { return s.SrcRange }
-func (s *Break) srcRange() hcl.Range    { return s.SrcRange }
-func (s *Continue) srcRange() hcl.Range { return s.SrcRange }
-func (s *Throw) srcRange() hcl.Range    { return s.SrcRange }
-func (s *Defer) srcRange() hcl.Range    { return s.SrcRange }
-func (s *Try) srcRange() hcl.Range      { return s.SrcRange }
+func (s *VarDecl) srcRange() hcl.Range       { return s.SrcRange }
+func (s *Assign) srcRange() hcl.Range        { return s.SrcRange }
+func (s *CaptureAssign) srcRange() hcl.Range { return s.SrcRange }
+func (s *ExprStmt) srcRange() hcl.Range      { return s.SrcRange }
+func (s *Return) srcRange() hcl.Range        { return s.SrcRange }
+func (s *Block) srcRange() hcl.Range         { return s.SrcRange }
+func (s *IfChain) srcRange() hcl.Range       { return s.SrcRange }
+func (s *For) srcRange() hcl.Range           { return s.SrcRange }
+func (s *Switch) srcRange() hcl.Range        { return s.SrcRange }
+func (s *Break) srcRange() hcl.Range         { return s.SrcRange }
+func (s *Continue) srcRange() hcl.Range      { return s.SrcRange }
+func (s *Throw) srcRange() hcl.Range         { return s.SrcRange }
+func (s *Defer) srcRange() hcl.Range         { return s.SrcRange }
+func (s *Try) srcRange() hcl.Range           { return s.SrcRange }

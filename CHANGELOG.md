@@ -8,6 +8,20 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Added
+
+- **Error-capture assignment — `val, err = expr`.** A two-target assignment that
+  captures an evaluation failure into a variable instead of unwinding the function
+  (the statement-level analog of Go's `v, err := f()`). The right-hand side is
+  evaluated once; on success the value target receives the result and the error
+  target receives `null`, and on failure the value target receives `null` and the
+  error target receives the caught error (the object shape `catch` binds). It is
+  exactly sugar for a `try { val = expr; err = null } catch e { val = null; err = e }`.
+  Both non-blank targets must already be declared. Either target may be the blank
+  identifier `_` to discard it (`_, err = expr` for error-only; `val, _ = expr` for
+  Go-style best-effort); `_, _ = expr` is rejected. Pairs with the built-in `error`
+  type.
+
 ## [0.2.0] - 2026-06-30
 
 ### Added

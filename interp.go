@@ -63,6 +63,8 @@ func (ip *interp) executeStatement(stmt Statement, scope *Scope, ctx *hcl.EvalCo
 		return nil, execVarDecl(s, scope, ctx)
 	case *Assign:
 		return nil, execAssign(s, scope, ctx)
+	case *CaptureAssign:
+		return nil, execCaptureAssign(s, scope, ctx)
 	case *ExprStmt:
 		_, diags := s.Expr.Value(ctx)
 		return nil, diags
@@ -116,12 +118,7 @@ func execVarDecl(s *VarDecl, scope *Scope, ctx *hcl.EvalContext) hcl.Diagnostics
 
 func execAssign(s *Assign, scope *Scope, ctx *hcl.EvalContext) hcl.Diagnostics {
 	if !scope.declared(s.Name) {
-		return hcl.Diagnostics{{
-			Severity: hcl.DiagError,
-			Summary:  "Assignment to undeclared variable",
-			Detail:   s.Name + " is not declared; use \"var " + s.Name + " = ...\" to declare it.",
-			Subject:  s.SrcRange.Ptr(),
-		}}
+		return undeclaredErr(s.Name, s.SrcRange)
 	}
 	v, diags := s.Expr.Value(ctx)
 	if diags.HasErrors() {
@@ -129,6 +126,44 @@ func execAssign(s *Assign, scope *Scope, ctx *hcl.EvalContext) hcl.Diagnostics {
 	}
 	if err := scope.Set(s.Name, v); err != nil {
 		return userErr(err, s.SrcRange)
+	}
+	return nil
+}
+
+// execCaptureAssign runs the `val, err = expr` capture: it evaluates Expr once
+// and routes the outcome to the two targets instead of unwinding the function.
+// On success val receives the value and err receives null; on failure val
+// receives null and err receives the caught error value (the same object shape a
+// catch clause binds). A "_" target is skipped. Both non-blank targets must
+// already be declared, like a plain assignment.
+func execCaptureAssign(s *CaptureAssign, scope *Scope, ctx *hcl.EvalContext) hcl.Diagnostics {
+	if s.ValName != "_" && !scope.declared(s.ValName) {
+		return undeclaredErr(s.ValName, s.ValRange)
+	}
+	if s.ErrName != "_" && !scope.declared(s.ErrName) {
+		return undeclaredErr(s.ErrName, s.ErrRange)
+	}
+
+	val, errVal := cty.NilVal, cty.NilVal
+	if v, diags := s.Expr.Value(ctx); diags.HasErrors() {
+		// Error path: val stays null, err carries the caught error.
+		val = cty.NullVal(cty.DynamicPseudoType)
+		errVal = errValueFromDiags(diags)
+	} else {
+		// Success path: val carries the value, err is null.
+		val = v
+		errVal = cty.NullVal(cty.DynamicPseudoType)
+	}
+
+	if s.ValName != "_" {
+		if err := scope.Set(s.ValName, val); err != nil {
+			return userErr(err, s.ValRange)
+		}
+	}
+	if s.ErrName != "_" {
+		if err := scope.Set(s.ErrName, errVal); err != nil {
+			return userErr(err, s.ErrRange)
+		}
 	}
 	return nil
 }
@@ -439,6 +474,15 @@ func nullOf(tc TypeConstraint) cty.Value {
 		return cty.NullVal(cty.DynamicPseudoType)
 	}
 	return cty.NullVal(tc.Cty())
+}
+
+func undeclaredErr(name string, rng hcl.Range) hcl.Diagnostics {
+	return hcl.Diagnostics{{
+		Severity: hcl.DiagError,
+		Summary:  "Assignment to undeclared variable",
+		Detail:   name + " is not declared; use \"var " + name + " = ...\" to declare it.",
+		Subject:  rng.Ptr(),
+	}}
 }
 
 func userErr(err error, rng hcl.Range) hcl.Diagnostics {

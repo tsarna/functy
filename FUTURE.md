@@ -169,44 +169,8 @@ error), not a silent semantic swap.
 
 ## Error handling
 
-- **`value, err = expr` error-capture sugar.** The built-in `error` type already
-  exists; this capture sugar uses it for the `err` target. A two-target assignment
-  captures an evaluation error into a variable instead of unwinding the function:
-
-  ```functy
-  var val: SomeType
-  var err: error
-  val, err = risky(x)        // on error: val = null, err = <the error>
-  ```
-
-  `val, err = expr` is exactly sugar for:
-
-  ```functy
-  try {
-      val = expr
-      err = null
-  } catch e {
-      val = null
-      err = e
-  }
-  ```
-
-  and the discard form `_, err = expr` (evaluate for side effects / error only):
-
-  ```functy
-  try {
-      expr
-      err = null
-  } catch e {
-      err = e
-  }
-  ```
-
-  Both targets must already be declared (consistent with `=`); `_` is the throwaway
-  target. This is statement-level error capture, **not** a true multi-return — the
-  function still returns a single cty value; the second target merely receives the
-  caught `error` or `null`. Pairs naturally with typed / multiple `catch` below.
-- **Combined declare-and-capture for `value, err`.** The capture form above requires
+- **Combined declare-and-capture for `value, err`.** The `value, err = expr`
+  capture form (now implemented — see `doc/language.md`, "Error capture") requires
   both targets pre-declared, costing two `var` lines in the common case. A future
   convenience would declare *and* capture in one line — either a multi-declaration
   `var v, err = expr` (needs a type-placement rule like `var v: T, err: error = expr`)

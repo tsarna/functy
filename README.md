@@ -180,8 +180,9 @@ it, so a host registers its capsule/open types once and uses them both for parsi
 
 functy implements a complete core language: typed and dynamic variables,
 reassignment, all control-flow forms, variadic and optional parameters,
-structured error handling (`try`/`catch`/`finally`, `throw`, `defer`), a
-`null` (void) return type, and the `functy run` / `functy check` CLI commands.
+structured error handling (`try`/`catch`/`finally`, `throw`, `defer`, and
+`val, err = expr` error capture), a `null` (void) return type, and the
+`functy run` / `functy check` CLI commands.
 
 Types are resolved by functy's own resolver (not `ext/typeexpr`), with a
 host-pluggable named-type environment for capsule and open types, `type` aliases,
