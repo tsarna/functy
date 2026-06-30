@@ -130,18 +130,26 @@ func execAssign(s *Assign, scope *Scope, ctx *hcl.EvalContext) hcl.Diagnostics {
 	return nil
 }
 
-// execCaptureAssign runs the `val, err = expr` capture: it evaluates Expr once
-// and routes the outcome to the two targets instead of unwinding the function.
-// On success val receives the value and err receives null; on failure val
-// receives null and err receives the caught error value (the same object shape a
-// catch clause binds). A "_" target is skipped. Both non-blank targets must
-// already be declared, like a plain assignment.
+// execCaptureAssign runs the `val, err = expr` / `val, err := expr` capture: it
+// evaluates Expr once and routes the outcome to the two targets instead of
+// unwinding the function. On success val receives the value and err receives
+// null; on failure val receives null and err receives the caught error value
+// (the same object shape a catch clause binds). A "_" target is skipped.
+//
+// For the `=` form both non-blank targets must already be declared and are
+// reassigned (coercing through their types). For the `:=` form each non-blank
+// target is newly declared in the current scope: the value target dynamic
+// (untyped), the error target pinned to the built-in `error` type — that type is
+// statically known and invariant (the target only ever holds an error or null),
+// so pinning it matches a hand-written `var err: error`.
 func execCaptureAssign(s *CaptureAssign, scope *Scope, ctx *hcl.EvalContext) hcl.Diagnostics {
-	if s.ValName != "_" && !scope.declared(s.ValName) {
-		return undeclaredErr(s.ValName, s.ValRange)
-	}
-	if s.ErrName != "_" && !scope.declared(s.ErrName) {
-		return undeclaredErr(s.ErrName, s.ErrRange)
+	if !s.Declare {
+		if s.ValName != "_" && !scope.declared(s.ValName) {
+			return undeclaredErr(s.ValName, s.ValRange)
+		}
+		if s.ErrName != "_" && !scope.declared(s.ErrName) {
+			return undeclaredErr(s.ErrName, s.ErrRange)
+		}
 	}
 
 	val, errVal := cty.NilVal, cty.NilVal
@@ -156,16 +164,26 @@ func execCaptureAssign(s *CaptureAssign, scope *Scope, ctx *hcl.EvalContext) hcl
 	}
 
 	if s.ValName != "_" {
-		if err := scope.Set(s.ValName, val); err != nil {
+		if err := s.put(scope, s.ValName, val, nil); err != nil {
 			return userErr(err, s.ValRange)
 		}
 	}
 	if s.ErrName != "_" {
-		if err := scope.Set(s.ErrName, errVal); err != nil {
+		if err := s.put(scope, s.ErrName, errVal, errorConstraint()); err != nil {
 			return userErr(err, s.ErrRange)
 		}
 	}
 	return nil
+}
+
+// put writes a capture target: declaring a fresh binding with constraint tc for
+// the `:=` form, or reassigning an existing one (coercing through its own type)
+// for `=`. tc is ignored for the `=` form.
+func (s *CaptureAssign) put(scope *Scope, name string, val cty.Value, tc TypeConstraint) error {
+	if s.Declare {
+		return scope.Declare(name, tc, val)
+	}
+	return scope.Set(name, val)
 }
 
 func execReturn(s *Return, ctx *hcl.EvalContext) (*Signal, hcl.Diagnostics) {

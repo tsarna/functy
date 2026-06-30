@@ -308,6 +308,21 @@ var x               // dynamic local, defaults to null
 the same scope is a compile-time error; declaring a name that exists in an
 enclosing scope shadows it.
 
+#### `:=` shorthand
+
+```functy
+x := expr           // shorthand for: var x = expr   (always untyped)
+```
+
+`x := expr` is sugar for an untyped `var x = expr`. It declares a new binding
+with the same rules as `var` (re-declaring in the same scope is an error;
+shadowing an outer scope is fine), so unlike Go's `:=` it cannot reuse an
+existing variable. Because the shorthand has no place for a type annotation, it
+is rejected under strict declared-types — use `var x: T = expr` there. The
+two-target form `val, err := expr` declares *and* captures an error — the value
+target dynamic, the error target pinned to `error` (see
+[Error capture](#error-capture--val-err--expr)).
+
 ### Assignment — `=`
 
 ```functy
@@ -476,7 +491,11 @@ try {
   of a called function, a type-conversion failure, a failing host function — is
   caught and bound to the error target (the same object shape `catch` binds, with
   at least `.message` and `.value`); it does not propagate past the statement.
-- Both non-blank targets must **already be declared**, like a plain `=`.
+- Both non-blank targets must **already be declared**, like a plain `=`. The
+  `:=` form declares them instead: `val, err := risky(x)` is the capture above
+  preceded by `var val` (dynamic) and `var err: error` — the value target is
+  untyped, the error target is pinned to the built-in `error` type (it only ever
+  holds an error or null) — with the same duplicate-declaration rules as `var`.
 - Either target may be the blank identifier `_` to discard it:
   - `_, err = expr` — evaluate for side effects / error only (no value target).
   - `val, _ = expr` — best-effort assign; on failure `val` is null and the error is

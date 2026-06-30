@@ -150,3 +150,12 @@ func isCloseBracket(t hclsyntax.TokenType) bool {
 func isTerminator(t hclsyntax.TokenType) bool {
 	return t == hclsyntax.TokenNewline || t == hclsyntax.TokenSemicolon
 }
+
+// isWalrus reports whether two consecutive tokens form the `:=` operator: a colon
+// immediately followed (no intervening space) by an equals. HCL has no `:=`
+// token, so it lexes as adjacent ':' and '=' tokens; requiring adjacency keeps a
+// spaced `x : = ...` from being misread as the shorthand.
+func isWalrus(colon, eq token) bool {
+	return colon.Type == hclsyntax.TokenColon && eq.Type == hclsyntax.TokenEqual &&
+		colon.Range.End.Byte == eq.Range.Start.Byte
+}

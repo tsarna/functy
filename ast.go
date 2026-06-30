@@ -54,11 +54,16 @@ type Assign struct {
 // It evaluates Expr exactly once; on success it assigns the value to ValName and
 // null to ErrName, and on failure it assigns null to ValName and the caught
 // error to ErrName. Either target may be "_" (the blank identifier) to discard
-// it. It is statement-level sugar for a try/catch — the function never unwinds —
-// and both non-blank targets must already be declared (consistent with `=`).
+// it. It is statement-level sugar for a try/catch — the function never unwinds.
+//
+// When Declare is false (the `val, err = expr` operator) both non-blank targets
+// must already be declared, like a plain `=`. When Declare is true (the
+// `val, err := expr` shorthand) each non-blank target is newly declared (untyped)
+// in the current scope, like a pair of `var`s.
 type CaptureAssign struct {
 	ValName  string // "_" to discard the value
 	ErrName  string // "_" to discard the error
+	Declare  bool   // true for the `:=` declare-and-capture form
 	Expr     hcl.Expression
 	ValRange hcl.Range // the value target, for diagnostics
 	ErrRange hcl.Range // the error target, for diagnostics

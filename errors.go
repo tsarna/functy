@@ -55,6 +55,14 @@ func raisedError(sig *Signal, diags hcl.Diagnostics) (cty.Value, bool) {
 	return cty.NilVal, false
 }
 
+// errorConstraint is the built-in `error` open type as a TypeConstraint: the
+// shape throw raises and catch binds (an object with at least a string message),
+// or null. It is the single source of truth shared by the resolver (the `error`
+// annotation) and the `val, err := expr` form, which pins its error target to it.
+func errorConstraint() TypeConstraint {
+	return predicateConstraint{name: "error", pred: errorTypePredicate}
+}
+
 // errorTypePredicate backs the built-in `error` type: an error value is an object
 // with at least a string `message` attribute (it may also carry `value` and other
 // attributes — the check is open and non-destructive). This is the shape that

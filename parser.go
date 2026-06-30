@@ -336,6 +336,20 @@ func (p *parser) parseBlockBody() []Statement {
 	return stmts
 }
 
+// checkShortDecl registers a declare-and-capture (`:=`) target in the scope's
+// declared-name set, reporting a duplicate just like a `var`. The blank `_` is
+// ignored (it declares nothing).
+func (p *parser) checkShortDecl(name string, rng hcl.Range, declared map[string]bool) {
+	if name == "_" {
+		return
+	}
+	if declared[name] {
+		p.errf(rng, "Duplicate declaration",
+			fmt.Sprintf("%q is already declared in this scope.", name))
+	}
+	declared[name] = true
+}
+
 func (p *parser) parseStatements() []Statement {
 	var stmts []Statement
 	declared := map[string]bool{}
@@ -360,12 +374,18 @@ func (p *parser) parseStatements() []Statement {
 			p.errf(stmt.srcRange(), "Unreachable code",
 				"This statement can never be reached; it follows an unconditional return, break, or continue.")
 		}
-		if vd, ok := stmt.(*VarDecl); ok {
-			if declared[vd.Name] {
-				p.errf(vd.SrcRange, "Duplicate declaration",
-					fmt.Sprintf("%q is already declared in this scope.", vd.Name))
+		switch s := stmt.(type) {
+		case *VarDecl:
+			if declared[s.Name] {
+				p.errf(s.SrcRange, "Duplicate declaration",
+					fmt.Sprintf("%q is already declared in this scope.", s.Name))
 			}
-			declared[vd.Name] = true
+			declared[s.Name] = true
+		case *CaptureAssign:
+			if s.Declare {
+				p.checkShortDecl(s.ValName, s.ValRange, declared)
+				p.checkShortDecl(s.ErrName, s.ErrRange, declared)
+			}
 		}
 		switch stmt.(type) {
 		case *Return, *Break, *Continue:
@@ -419,10 +439,15 @@ func (p *parser) parseSimpleStmt(stop stopFunc) Statement {
 	if t.isKeyword("var") {
 		return p.parseVarDecl(stop)
 	}
-	// Error-capture assignment: `val, err = expr` (each target a bare identifier
-	// or the blank `_`). Detected by a bare identifier followed by a comma.
+	// Two-target forms: `val, err = expr` and `val, err := expr` (each target a
+	// bare identifier or the blank `_`). Detected by a bare identifier followed by
+	// a comma; parseCaptureAssign distinguishes the `=` and `:=` operators.
 	if t.Type == hclsyntax.TokenIdent && !t.isAnyKeyword() && p.peek(1).Type == hclsyntax.TokenComma {
 		return p.parseCaptureAssign(stop)
+	}
+	// `:=` declaration shorthand: `x := expr`, sugar for `var x = expr` (untyped).
+	if t.Type == hclsyntax.TokenIdent && !t.isAnyKeyword() && isWalrus(p.peek(1), p.peek(2)) {
+		return p.parseShortVarDecl(t, stop)
 	}
 	// Assignment: bare identifier (not a keyword) immediately followed by '='.
 	if t.Type == hclsyntax.TokenIdent && !t.isAnyKeyword() && p.peek(1).Type == hclsyntax.TokenEqual {
@@ -440,9 +465,10 @@ func (p *parser) parseSimpleStmt(stop stopFunc) Statement {
 	return &ExprStmt{Expr: expr, SrcRange: start}
 }
 
-// parseCaptureAssign parses the two-target error-capture assignment
-// `val, err = expr`. The caller has verified the first token is a bare
-// identifier followed by a comma. Either target may be the blank `_`.
+// parseCaptureAssign parses the two-target error-capture forms `val, err = expr`
+// (capture into existing variables) and `val, err := expr` (declare-and-capture).
+// The caller has verified the first token is a bare identifier followed by a
+// comma. Either target may be the blank `_`.
 func (p *parser) parseCaptureAssign(stop stopFunc) Statement {
 	valTok := p.cur()
 	p.advance() // value target
@@ -452,27 +478,64 @@ func (p *parser) parseCaptureAssign(stop stopFunc) Statement {
 		p.recoverToStatementEnd()
 		return nil
 	}
-	if !p.expect(hclsyntax.TokenEqual, "=") {
+
+	declare := false
+	switch {
+	case isWalrus(p.cur(), p.peek(1)):
+		declare = true
+		p.advance() // ':'
+		p.advance() // '='
+	case p.cur().Type == hclsyntax.TokenEqual:
+		p.advance() // '='
+	default:
+		p.errf(p.cur().Range, "Expected = or :=",
+			"A `val, err` capture must be followed by `=` (capture into existing variables) "+
+				"or `:=` (declare and capture).")
 		p.recoverToStatementEnd()
 		return nil
 	}
+
 	valName := string(valTok.Bytes)
 	errName := errTok.text
 	targets := hcl.RangeBetween(valTok.Range, errTok.tok.Range)
 	if valName == "_" && errName == "_" {
+		op := "="
+		if declare {
+			op = ":="
+		}
 		p.errf(targets, "Both capture targets are blank",
-			"At least one target of a `val, err = expr` capture must be a variable; "+
+			"At least one target of a `val, err "+op+" expr` capture must be a variable; "+
 				"to evaluate an expression only for its side effects, use a plain expression statement.")
 	}
 	expr := p.parseExprStop(stop, "value")
 	return &CaptureAssign{
 		ValName:  valName,
 		ErrName:  errName,
+		Declare:  declare,
 		Expr:     expr,
 		ValRange: valTok.Range,
 		ErrRange: errTok.tok.Range,
 		SrcRange: targets,
 	}
+}
+
+// parseShortVarDecl parses the `:=` declaration shorthand `x := expr`, sugar for
+// an untyped `var x = expr`. The caller has verified name is a bare identifier
+// followed by the `:=` operator. Like `var`, the shorthand cannot annotate a
+// type, so it is rejected under strict declared-types.
+func (p *parser) parseShortVarDecl(name token, stop stopFunc) Statement {
+	p.advance() // name
+	p.advance() // ':'
+	p.advance() // '='
+	vd := &VarDecl{Name: string(name.Bytes), SrcRange: name.Range}
+	if p.strict.declaredTypes.on() {
+		p.errf(vd.SrcRange, "Missing variable type",
+			fmt.Sprintf("Variable %q must declare a type (%s); the `:=` shorthand is untyped, "+
+				"so use `var %s: <type> = ...` instead.",
+				vd.Name, p.strict.declaredTypes.reason(), vd.Name))
+	}
+	vd.Init = p.parseExprStop(stop, "initializer")
+	return vd
 }
 
 func (p *parser) parseVarDecl(stop stopFunc) Statement {

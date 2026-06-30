@@ -58,11 +58,6 @@ error), not a silent semantic swap.
 
 ## Language — expressions & sugar
 
-- **`:=` declaration shorthand.** `x := expr` as pure sugar for `var x = expr`
-  (untyped). Omitted to keep one obvious way to declare; trivial to add. Worth
-  reconsidering partly for error-capture ergonomics: `v, err := expr` would give
-  combined declare-and-capture (see *Error handling*) for free, mirroring Go's
-  `v, err := f()`.
 - **`fallthrough`** in `switch`.
 - **Labeled `break` / `continue`** for nested loops.
 - **Pure-expression-statement warning.** Warn when an expression statement is
@@ -169,13 +164,6 @@ error), not a silent semantic swap.
 
 ## Error handling
 
-- **Combined declare-and-capture for `value, err`.** The `value, err = expr`
-  capture form (now implemented — see `doc/language.md`, "Error capture") requires
-  both targets pre-declared, costing two `var` lines in the common case. A future
-  convenience would declare *and* capture in one line — either a multi-declaration
-  `var v, err = expr` (needs a type-placement rule like `var v: T, err: error = expr`)
-  or, more naturally, Go-style `v, err := expr` if `:=` is adopted. Opt-in sugar over
-  the existing desugaring; no new semantics.
 - **Typed / multiple `catch` clauses** (match on error shape / kind).
 - **`defer` argument snapshotting.** Evaluate a deferred call's arguments at `defer`
   time while deferring the call itself, matching Go. Requires expression decomposition

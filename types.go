@@ -172,7 +172,7 @@ type typeEnv struct {
 func newTypeEnv() *typeEnv {
 	e := &typeEnv{named: make(map[string]TypeConstraint)}
 	// `error` is a built-in open type: the shape throw raises and catch binds.
-	e.named["error"] = predicateConstraint{name: "error", pred: errorTypePredicate}
+	e.named["error"] = errorConstraint()
 	return e
 }
 

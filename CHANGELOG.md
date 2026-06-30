@@ -10,6 +10,14 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **`:=` declaration shorthand.** `x := expr` is sugar for an untyped
+  `var x = expr`, with the same scoping and duplicate-declaration rules as `var`
+  (it declares a new binding and cannot reuse an existing one). It carries no type
+  annotation, so it is rejected under strict declared-types (use `var x: T = expr`
+  there). The two-target form `val, err := expr` declares both targets and
+  captures, combining `:=` with the error-capture assignment below: the value
+  target is dynamic and the error target is pinned to the built-in `error` type
+  (matching a hand-written `var err: error`). A target may be the blank `_`.
 - **Error-capture assignment — `val, err = expr`.** A two-target assignment that
   captures an evaluation failure into a variable instead of unwinding the function
   (the statement-level analog of Go's `v, err := f()`). The right-hand side is
