@@ -27,4 +27,5 @@ const (
 type Signal struct {
 	Kind  SignalKind
 	Value cty.Value // meaningful only for SignalReturn
+	Label string    // target loop label for SignalBreak / SignalContinue ("" = innermost)
 }

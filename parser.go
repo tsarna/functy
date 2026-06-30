@@ -26,11 +26,38 @@ type parser struct {
 	diags    hcl.Diagnostics
 	env      *typeEnv
 
-	loopDepth          int
+	loops        []string // labels of enclosing loops ("" for an unlabeled loop)
+	pendingLabel string   // a label parsed but not yet attached to its loop
+
 	voidReturn         bool // inside a `-> null` function body
 	allowTopLevelVar   bool
 	allowTopLevelConst bool
 	strict             strictness
+}
+
+// enterLoop pushes a loop onto the enclosing-loop stack, consuming any pending
+// label, and returns that label (so it can be stored on the For node). exitLoop
+// pops it. inLoop / labelInScope back break/continue validation.
+func (p *parser) enterLoop() string {
+	label := p.pendingLabel
+	p.pendingLabel = ""
+	p.loops = append(p.loops, label)
+	return label
+}
+
+func (p *parser) exitLoop() {
+	p.loops = p.loops[:len(p.loops)-1]
+}
+
+func (p *parser) inLoop() bool { return len(p.loops) > 0 }
+
+func (p *parser) labelInScope(label string) bool {
+	for _, l := range p.loops {
+		if l == label {
+			return true
+		}
+	}
+	return false
 }
 
 // cur returns the current token, or the trailing EOF token if the position is at
@@ -433,9 +460,38 @@ func (p *parser) parseStatement() Statement {
 		return p.parseDefer()
 	case t.isKeyword("try"):
 		return p.parseTry()
+	case t.Type == hclsyntax.TokenIdent && !t.isAnyKeyword() &&
+		p.peek(1).Type == hclsyntax.TokenColon && !isWalrus(p.peek(1), p.peek(2)):
+		// `label:` preceding a loop. A plain colon after a bare identifier at the
+		// start of a statement is only valid as a loop label (`x :=` is the walrus,
+		// excluded above).
+		return p.parseLabeled(t)
 	default:
 		return p.parseSimpleStmt(stopStmt)
 	}
+}
+
+// parseLabeled parses a `label:` prefix and attaches it to the following loop.
+// The label is in scope for the loop's body (so a break/continue inside may name
+// it) and must be unique among enclosing loops. A label may only precede a loop.
+func (p *parser) parseLabeled(nameTok token) Statement {
+	label := string(nameTok.Bytes)
+	p.advance() // label name
+	p.advance() // ':'
+	p.skipTerminators()
+	if !(p.cur().isKeyword("for") || p.cur().isKeyword("while")) {
+		p.errf(nameTok.Range, "Label must precede a loop",
+			"A label may only be attached to a for or while loop.")
+		return nil
+	}
+	if p.labelInScope(label) {
+		p.errf(nameTok.Range, "Duplicate label",
+			fmt.Sprintf("Label %q is already used by an enclosing loop.", label))
+	}
+	p.pendingLabel = label
+	stmt := p.parseStatement() // the for/while consumes pendingLabel via enterLoop
+	p.pendingLabel = ""        // defensive: clear if an error path skipped enterLoop
+	return stmt
 }
 
 // parseSimpleStmt parses a var declaration, assignment, or expression statement,
@@ -594,19 +650,38 @@ func isNullLiteral(expr hcl.Expression) bool {
 func (p *parser) parseBreak() Statement {
 	kw := p.cur()
 	p.advance()
-	if p.loopDepth == 0 {
-		p.errf(kw.Range, "break outside loop", "break may only be used inside a for or while loop.")
-	}
-	return &Break{SrcRange: kw.Range}
+	label := p.parseLoopControlLabel("break")
+	return &Break{Label: label, SrcRange: kw.Range}
 }
 
 func (p *parser) parseContinue() Statement {
 	kw := p.cur()
 	p.advance()
-	if p.loopDepth == 0 {
-		p.errf(kw.Range, "continue outside loop", "continue may only be used inside a for or while loop.")
+	label := p.parseLoopControlLabel("continue")
+	return &Continue{Label: label, SrcRange: kw.Range}
+}
+
+// parseLoopControlLabel parses the optional loop label following a break or
+// continue (on the same line — a newline ends the statement) and validates it.
+// kw is "break" or "continue" for diagnostics. Returns "" for the unlabeled form.
+func (p *parser) parseLoopControlLabel(kw string) string {
+	// A label, if present, is an identifier on the same line as the keyword. A
+	// newline/';' here is the statement terminator, so the current token being an
+	// identifier unambiguously marks the labeled form.
+	if t := p.cur(); t.Type == hclsyntax.TokenIdent && !t.isAnyKeyword() {
+		p.advance()
+		label := string(t.Bytes)
+		if !p.labelInScope(label) {
+			p.errf(t.Range, "Unknown loop label",
+				fmt.Sprintf("No enclosing loop is labeled %q.", label))
+		}
+		return label
 	}
-	return &Continue{SrcRange: kw.Range}
+	if !p.inLoop() {
+		p.errf(p.tokens[p.pos-1].Range, kw+" outside loop",
+			kw+" may only be used inside a for or while loop.")
+	}
+	return ""
 }
 
 func (p *parser) parseBareBlock() Statement {
@@ -715,10 +790,10 @@ func (p *parser) parseWhile() Statement {
 		p.errf(p.cur().Range, "Expected {", "A while condition must be followed by a { ... } block.")
 		return &For{Kind: ForCond, Cond: cond, SrcRange: start}
 	}
-	p.loopDepth++
+	label := p.enterLoop()
 	body := p.parseBlockBody()
-	p.loopDepth--
-	return &For{Kind: ForCond, Cond: cond, Body: body, SrcRange: start}
+	p.exitLoop()
+	return &For{Kind: ForCond, Cond: cond, Body: body, SrcRange: start, Label: label}
 }
 
 func (p *parser) parseFor() Statement {
@@ -727,10 +802,10 @@ func (p *parser) parseFor() Statement {
 
 	// Infinite loop: `for { ... }`.
 	if p.cur().Type == hclsyntax.TokenOBrace {
-		p.loopDepth++
+		label := p.enterLoop()
 		body := p.parseBlockBody()
-		p.loopDepth--
-		return &For{Kind: ForCond, Body: body, SrcRange: start}
+		p.exitLoop()
+		return &For{Kind: ForCond, Body: body, SrcRange: start, Label: label}
 	}
 
 	switch p.classifyForHeader() {
@@ -785,10 +860,10 @@ func (p *parser) parseForCond(start hcl.Range) Statement {
 		p.errf(p.cur().Range, "Expected {", "A for condition must be followed by a { ... } block.")
 		return &For{Kind: ForCond, Cond: cond, SrcRange: start}
 	}
-	p.loopDepth++
+	label := p.enterLoop()
 	body := p.parseBlockBody()
-	p.loopDepth--
-	return &For{Kind: ForCond, Cond: cond, Body: body, SrcRange: start}
+	p.exitLoop()
+	return &For{Kind: ForCond, Cond: cond, Body: body, SrcRange: start, Label: label}
 }
 
 func (p *parser) parseForClause(start hcl.Range) Statement {
@@ -813,9 +888,9 @@ func (p *parser) parseForClause(start hcl.Range) Statement {
 		p.errf(p.cur().Range, "Expected {", "A for header must be followed by a { ... } block.")
 		return loop
 	}
-	p.loopDepth++
+	loop.Label = p.enterLoop()
 	loop.Body = p.parseBlockBody()
-	p.loopDepth--
+	p.exitLoop()
 	return loop
 }
 
@@ -850,9 +925,9 @@ func (p *parser) parseForRange(start hcl.Range) Statement {
 		p.errf(p.cur().Range, "Expected {", "A range loop header must be followed by a { ... } block.")
 		return loop
 	}
-	p.loopDepth++
+	loop.Label = p.enterLoop()
 	loop.Body = p.parseBlockBody()
-	p.loopDepth--
+	p.exitLoop()
 	return loop
 }
 

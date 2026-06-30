@@ -402,6 +402,28 @@ A loop body's scope is fresh each iteration.
 Bare `break` and `continue` affect the innermost enclosing loop. Using either
 outside a loop is a compile-time error.
 
+A loop may be **labeled** (`label:` immediately before a `for`/`while`), and
+`break label` / `continue label` then target that loop instead of the innermost
+one — the idiomatic way to exit or advance an outer loop from within a nested one:
+
+```functy
+search:
+for i in rows {
+    for j in cols {
+        if match(i, j) { break search }     // exits both loops
+        if skip(i)     { continue search }  // next i, abandoning the j loop
+    }
+}
+```
+
+- A label may only precede a `for`/`while`, and must be unique among the loops
+  enclosing its use. The label after `break`/`continue` must name an enclosing
+  labeled loop (a sibling loop's label is out of scope).
+- `continue label` advances the labeled loop normally, including running a
+  three-clause loop's post statement.
+- A labeled break/continue unwinds through any `try`/`finally` blocks between it
+  and the target loop, running their `finally` clauses, just like `return`.
+
 ### switch
 
 ```functy

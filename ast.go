@@ -121,6 +121,10 @@ const (
 type For struct {
 	Kind ForKind
 
+	// Label is the loop's label ("" if unlabeled); a labeled break/continue whose
+	// target equals this label is consumed by this loop rather than an inner one.
+	Label string
+
 	// ForCond / ForClause:
 	Init Statement      // ForClause init clause (nil otherwise)
 	Cond hcl.Expression // condition (nil = always true)
@@ -180,11 +184,18 @@ type Try struct {
 	SrcRange  hcl.Range
 }
 
-// Break exits the innermost enclosing loop.
-type Break struct{ SrcRange hcl.Range }
+// Break exits an enclosing loop: the innermost one, or the loop named by Label.
+type Break struct {
+	Label    string // "" for the innermost loop
+	SrcRange hcl.Range
+}
 
-// Continue skips to the next iteration of the innermost enclosing loop.
-type Continue struct{ SrcRange hcl.Range }
+// Continue skips to the next iteration of an enclosing loop: the innermost one,
+// or the loop named by Label.
+type Continue struct {
+	Label    string // "" for the innermost loop
+	SrcRange hcl.Range
+}
 
 // Fallthrough transfers control to the next clause of the enclosing switch,
 // running its body without testing. It is legal only as the final statement of a

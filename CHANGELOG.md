@@ -10,6 +10,14 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Labeled `break` / `continue`.** A `for`/`while` may carry a `label:` prefix,
+  and `break label` / `continue label` then target that loop instead of the
+  innermost one — the standard way to exit or advance an outer loop from a nested
+  one. The label must name an enclosing labeled loop (siblings are out of scope)
+  and be unique among enclosing loops; `continue label` runs the target loop's
+  post clause, and a labeled break/continue unwinds through intervening
+  `try`/`finally` blocks like `return`. The `For` AST gains `Label`, `Break` and
+  `Continue` gain a target `Label`.
 - **`fallthrough` in `switch`.** As the final statement of a clause it transfers
   control to the next clause in source order, running its body without testing
   (it may fall into a `default`, and a `default` that is not last may fall into

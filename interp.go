@@ -79,9 +79,9 @@ func (ip *interp) executeStatement(stmt Statement, scope *Scope, ctx *hcl.EvalCo
 	case *Switch:
 		return ip.execSwitch(s, scope, ctx)
 	case *Break:
-		return &Signal{Kind: SignalBreak}, nil
+		return &Signal{Kind: SignalBreak, Label: s.Label}, nil
 	case *Continue:
-		return &Signal{Kind: SignalContinue}, nil
+		return &Signal{Kind: SignalContinue, Label: s.Label}, nil
 	case *Fallthrough:
 		return &Signal{Kind: SignalFallthrough}, nil
 	case *Throw:
@@ -316,7 +316,7 @@ func (ip *interp) execForCond(s *For, scope *Scope) (*Signal, hcl.Diagnostics) {
 		if diags.HasErrors() {
 			return nil, diags
 		}
-		if done, out := loopSignal(sig); done {
+		if done, out := loopSignal(sig, s.Label); done {
 			return out, nil
 		}
 	}
@@ -349,7 +349,7 @@ func (ip *interp) execForClause(s *For, scope *Scope) (*Signal, hcl.Diagnostics)
 		if diags.HasErrors() {
 			return nil, diags
 		}
-		if done, out := loopSignal(sig); done {
+		if done, out := loopSignal(sig, s.Label); done {
 			return out, nil
 		}
 		if s.Post != nil {
@@ -387,7 +387,7 @@ func (ip *interp) execForRange(s *For, scope *Scope, ctx *hcl.EvalContext) (*Sig
 		if diags.HasErrors() {
 			return nil, diags
 		}
-		if done, out := loopSignal(sig); done {
+		if done, out := loopSignal(sig, s.Label); done {
 			return out, nil
 		}
 	}
@@ -485,19 +485,27 @@ func rangePairs(coll cty.Value, rng hcl.Range) ([]rangeKV, hcl.Diagnostics) {
 	return pairs, nil
 }
 
-// loopSignal interprets a signal produced by a loop body: break ends the loop
-// (consumed), continue moves to the next iteration (consumed), and a return or
-// error propagates. done reports whether the loop should stop, and out is the
-// signal to propagate (nil for break).
-func loopSignal(sig *Signal) (done bool, out *Signal) {
+// loopSignal interprets a signal produced by a loop body, given the executing
+// loop's own label. An unlabeled break/continue (or one targeting this label) is
+// consumed here; one targeting an *outer* loop stops this loop and propagates the
+// signal so the enclosing loop handles it. A return or error always propagates.
+// done reports whether this loop should stop, and out is the signal to propagate
+// (nil when consumed by this loop).
+func loopSignal(sig *Signal, label string) (done bool, out *Signal) {
 	if sig == nil {
 		return false, nil
 	}
 	switch sig.Kind {
 	case SignalBreak:
-		return true, nil
+		if sig.Label == "" || sig.Label == label {
+			return true, nil // this loop is the target: stop, consume
+		}
+		return true, sig // targets an outer loop: stop and propagate
 	case SignalContinue:
-		return false, nil
+		if sig.Label == "" || sig.Label == label {
+			return false, nil // continue this loop: consume
+		}
+		return true, sig // continue an outer loop: stop this loop, propagate
 	default: // SignalReturn, SignalError
 		return true, sig
 	}
