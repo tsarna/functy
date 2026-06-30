@@ -24,14 +24,43 @@ type Source struct {
 }
 
 // Parser parses functy source into a Result. Options accrue via chained setters;
-// the zero value (via NewParser) accepts only function declarations.
+// the zero value (via NewParser) accepts only function declarations and the
+// built-in type grammar.
 type Parser struct {
 	allowTopLevelVar   bool
 	allowTopLevelConst bool
+	types              *typeEnv
 }
 
 // NewParser returns a Parser with default options.
-func NewParser() *Parser { return &Parser{} }
+func NewParser() *Parser { return &Parser{types: newTypeEnv()} }
+
+// RegisterType registers a named (capsule) type. An annotation naming it is
+// enforced by type identity: a value must already be of ty (or null), unless ty
+// itself defines a conversion. Hosts use this for their cty capsule and
+// rich-object types. Returns the Parser for chaining.
+func (p *Parser) RegisterType(name string, ty cty.Type) *Parser {
+	p.ensureTypes().registerType(name, ty)
+	return p
+}
+
+// RegisterOpenType registers a named open type backed by a predicate. An
+// annotation naming it requires the value to satisfy pred and otherwise passes it
+// through untouched (non-destructive), so extra attributes survive — suitable for
+// marker-capsule objects (e.g. a ctx carrying _ctx plus other fields) and
+// required-attribute objects (e.g. an error with at least a message). Returns the
+// Parser for chaining.
+func (p *Parser) RegisterOpenType(name string, pred func(cty.Value) error) *Parser {
+	p.ensureTypes().registerOpenType(name, pred)
+	return p
+}
+
+func (p *Parser) ensureTypes() *typeEnv {
+	if p.types == nil {
+		p.types = newTypeEnv()
+	}
+	return p.types
+}
 
 // AllowTopLevelVar controls whether a top-level `var` declaration is collected
 // into Result.Vars (true) or reported as a parse error (false, the default).
@@ -57,6 +86,7 @@ func (p *Parser) Parse(src []byte, filename string) (*Result, hcl.Diagnostics) {
 		src:                src,
 		filename:           filename,
 		tokens:             tokens,
+		env:                p.ensureTypes(),
 		allowTopLevelVar:   p.allowTopLevelVar,
 		allowTopLevelConst: p.allowTopLevelConst,
 	}
@@ -95,7 +125,7 @@ type Result struct {
 // Expr.Variables() exposes the references needed for that sort.
 type Decl struct {
 	Name     string
-	Type     cty.Type       // from an optional `: T`; cty.NilType if unannotated
+	Type     TypeConstraint // from an optional `: T`; nil if unannotated
 	Expr     hcl.Expression // initializer, lazily evaluated (nil if none)
 	DefRange hcl.Range
 }

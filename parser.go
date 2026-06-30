@@ -5,7 +5,6 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
-	"github.com/zclconf/go-cty/cty"
 )
 
 // parser is the recursive-descent statement parser. It walks the functy token
@@ -24,8 +23,10 @@ type parser struct {
 	tokens   []token
 	pos      int
 	diags    hcl.Diagnostics
+	env      *typeEnv
 
 	loopDepth          int
+	voidReturn         bool // inside a `-> null` function body
 	allowTopLevelVar   bool
 	allowTopLevelConst bool
 }
@@ -139,10 +140,10 @@ func (p *parser) parseTopLevelDecl(result *Result, isConst bool) {
 		p.recoverToTopLevel()
 		return
 	}
-	decl := Decl{Name: name.text, Type: cty.NilType, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
+	decl := Decl{Name: name.text, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
 	if p.cur().Type == hclsyntax.TokenColon {
 		p.advance()
-		decl.Type = p.parseType()
+		decl.Type = p.parseType(false)
 	}
 	if p.cur().Type == hclsyntax.TokenEqual {
 		p.advance()
@@ -165,7 +166,7 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 		p.recoverToTopLevel()
 		return nil
 	}
-	fn := &FuncDecl{Name: name.text, RetType: cty.NilType, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
+	fn := &FuncDecl{Name: name.text, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
 
 	if !p.expect(hclsyntax.TokenOParen, "(") {
 		p.recoverToTopLevel()
@@ -177,7 +178,7 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 	if p.cur().Type == hclsyntax.TokenMinus && p.peek(1).Type == hclsyntax.TokenGreaterThan {
 		p.advance()
 		p.advance()
-		fn.RetType = p.parseType()
+		fn.RetType = p.parseType(true)
 	}
 
 	if p.cur().Type != hclsyntax.TokenOBrace {
@@ -185,7 +186,11 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 		p.recoverToTopLevel()
 		return nil
 	}
+	// A `-> null` (void) function may only return null; record that for the body.
+	prevVoid := p.voidReturn
+	_, p.voidReturn = fn.RetType.(nullConstraint)
 	fn.Body = p.parseBlockBody()
+	p.voidReturn = prevVoid
 	return fn
 }
 
@@ -216,12 +221,11 @@ func (p *parser) parseParams() []Param {
 			continue
 		}
 		prm.Name = name.text
-		prm.Type = cty.NilType
 		prm.DefRange = hcl.RangeBetween(start, name.tok.Range)
 
 		if p.cur().Type == hclsyntax.TokenColon {
 			p.advance()
-			prm.Type = p.parseType()
+			prm.Type = p.parseType(false)
 		}
 		if p.cur().Type == hclsyntax.TokenEqual {
 			if prm.Variadic {
@@ -398,10 +402,10 @@ func (p *parser) parseVarDecl(stop stopFunc) Statement {
 		p.recoverToStatementEnd()
 		return nil
 	}
-	vd := &VarDecl{Name: name.text, Type: cty.NilType, SrcRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
+	vd := &VarDecl{Name: name.text, SrcRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
 	if p.cur().Type == hclsyntax.TokenColon {
 		p.advance()
-		vd.Type = p.parseType()
+		vd.Type = p.parseType(false)
 	}
 	if p.cur().Type == hclsyntax.TokenEqual {
 		p.advance()
@@ -418,7 +422,19 @@ func (p *parser) parseReturn() Statement {
 		return ret // bare return
 	}
 	ret.Expr = p.parseExprStop(stopStmt, "return value")
+	if p.voidReturn && ret.Expr != nil && !isNullLiteral(ret.Expr) {
+		p.errf(ret.SrcRange, "Invalid return in void function",
+			"A function declared -> null may only return null (a bare `return` or `return null`).")
+	}
 	return ret
+}
+
+// isNullLiteral reports whether an expression is the literal null.
+func isNullLiteral(expr hcl.Expression) bool {
+	if lit, ok := expr.(*hclsyntax.LiteralValueExpr); ok {
+		return lit.Val.IsNull()
+	}
+	return false
 }
 
 func (p *parser) parseBreak() Statement {
@@ -866,19 +882,26 @@ func (p *parser) parseExprStop(stop stopFunc, what string) hcl.Expression {
 	return expr
 }
 
-func (p *parser) parseType() cty.Type {
+// parseType parses and resolves a type annotation to a constraint (nil on error).
+// allowNull permits the `null` void return type, which is invalid elsewhere.
+func (p *parser) parseType(allowNull bool) TypeConstraint {
 	if isTerminator(p.cur().Type) || p.atEOF() {
 		p.errf(p.cur().Range, "Expected type", "Expected a type annotation here.")
-		return cty.NilType
+		return nil
 	}
 	sb, eb, sp := p.scanSpan(stopType)
 	if eb <= sb {
 		p.errf(p.cur().Range, "Expected type", "Expected a type annotation here.")
-		return cty.NilType
+		return nil
 	}
-	ty, diags := parseTypeConstraint(p.src[sb:eb], p.filename, sp)
+	expr, diags := hclsyntax.ParseExpression(p.src[sb:eb], p.filename, sp)
 	p.diags = p.diags.Extend(diags)
-	return ty
+	if diags.HasErrors() {
+		return nil
+	}
+	tc, rdiags := p.env.resolveType(expr, allowNull)
+	p.diags = p.diags.Extend(rdiags)
+	return tc
 }
 
 // ---- Stop functions for each scanning context ------------------------------

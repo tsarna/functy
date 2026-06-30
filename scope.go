@@ -4,15 +4,14 @@ import (
 	"fmt"
 
 	"github.com/zclconf/go-cty/cty"
-	"github.com/zclconf/go-cty/cty/convert"
 )
 
 // binding is a single variable slot: its current value and, for a pinned
-// (typed) variable, the declared type that every assignment is converted to. A
-// dynamic variable has ty == cty.NilType and accepts any value unchanged.
+// (typed) variable, the constraint every assignment is coerced through. A
+// dynamic variable has a nil constraint and accepts any value unchanged.
 type binding struct {
 	val cty.Value
-	ty  cty.Type
+	tc  TypeConstraint
 }
 
 // Scope is a chained lexical scope. Variable lookup walks outward through the
@@ -59,31 +58,31 @@ func (s *Scope) find(name string) *binding {
 }
 
 // Declare introduces a new binding in this (innermost) scope, shadowing any
-// binding of the same name in an enclosing scope. For a typed declaration the
-// initial value is converted to ty.
-func (s *Scope) Declare(name string, ty cty.Type, val cty.Value) error {
-	if ty != cty.NilType {
-		conv, err := convert.Convert(val, ty)
+// binding of the same name in an enclosing scope. For a typed declaration (a
+// non-nil constraint) the initial value is coerced through it.
+func (s *Scope) Declare(name string, tc TypeConstraint, val cty.Value) error {
+	if tc != nil {
+		conv, err := tc.Coerce(val)
 		if err != nil {
 			return fmt.Errorf("cannot assign to %q: %w", name, err)
 		}
 		val = conv
 	}
-	s.vars[name] = &binding{val: val, ty: ty}
+	s.vars[name] = &binding{val: val, tc: tc}
 	s.dirty = true
 	return nil
 }
 
-// Set reassigns the nearest existing binding of name, converting the value to
-// that binding's pinned type. It is an error if name is not declared in any
-// enclosing scope, or if the value cannot be converted.
+// Set reassigns the nearest existing binding of name, coercing the value through
+// that binding's constraint. It is an error if name is not declared in any
+// enclosing scope, or if the value cannot satisfy the constraint.
 func (s *Scope) Set(name string, val cty.Value) error {
 	b := s.find(name)
 	if b == nil {
 		return fmt.Errorf("%q is not declared; use \"var %s = ...\" to declare it", name, name)
 	}
-	if b.ty != cty.NilType {
-		conv, err := convert.Convert(val, b.ty)
+	if b.tc != nil {
+		conv, err := b.tc.Coerce(val)
 		if err != nil {
 			return fmt.Errorf("cannot assign to %q: %w", name, err)
 		}

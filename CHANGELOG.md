@@ -1,0 +1,72 @@
+# Changelog
+
+All notable changes to functy are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and the project will follow [Semantic Versioning](https://semver.org/) once
+tagged. Until then, everything lives under **Unreleased**.
+
+## [Unreleased]
+
+### Added
+
+- **Own type resolver with a host-pluggable named-type environment** (replaces
+  delegation to `ext/typeexpr`, which is now used only as a test oracle):
+  - `Parser.RegisterType(name, cty.Type)` — register a named/capsule type,
+    enforced by **type identity** (the value must already be of that type, or
+    `null`).
+  - `Parser.RegisterOpenType(name, pred)` — register an **open** type enforced by
+    a predicate; a satisfying value passes through untouched, so extra attributes
+    are preserved (non-destructive).
+- **`null` (void) return type** — `func f() -> null { … }`. Inside such a
+  function a `return` may only be bare or `return null`; any other
+  `return <expr>` is a compile-time error. `null` is rejected as a
+  `var`/`const`/parameter type.
+
+### Changed
+
+- Type annotations are resolved by functy's own resolver. The built-in grammar
+  (`string`/`bool`/`number`/`any`, `list`/`set`/`map`/`object`/`tuple`/`optional`)
+  is unchanged and validated against `typeexpr` for parity in tests.
+- A declared type is now represented by a single public `TypeConstraint`
+  (`Cty()` for the underlying `cty.Type`, `Coerce()` for enforcement) on
+  `FuncDecl.RetType`, `Param.Type`, `VarDecl.Type`, and `Decl.Type` — replacing
+  the previous `cty.Type` field. A bare `cty.Type` cannot represent an open
+  (predicate) type, so the constraint is the single source of truth.
+
+### Notes
+
+- Nesting a named type inside a collection or structural type (`list(bus)`,
+  `object({ b = bus })`) is recognized as designed but **not yet implemented**;
+  it is reported as an error in nested position.
+
+## [0.1.0] - 2026-06-25
+
+The first functy implementation: a self-contained imperative language whose
+values are cty values and whose expressions are HCL, compiling `.cty` files to
+`cty` functions.
+
+### Added
+
+- **Language**: function declarations with required / optional / variadic
+  parameters and typed or dynamic params and returns; `var` declarations
+  (typed and dynamic) and reassignment; expression statements; bare block
+  scopes; `if` / `else if` / `else`; `for` (condition, three-clause, and
+  `for k, v in` range forms) and `while`; `switch` (value and expression-less
+  forms, no fallthrough); `break` / `continue`; structured error handling with
+  `try` / `catch` / `finally`, `throw`, and `defer` (LIFO).
+- **Expressions** are real HCL expressions (operators, templates, function
+  calls, conditionals, …) evaluated lazily against a late-bound eval context,
+  enabling recursion and mutual recursion.
+- **Library API**: `Parser` (`Parse`, `ParseAll`), `Result.Compile`,
+  `ParseSources`, and the `Source`/`Result`/`Decl` types. Top-level
+  `var`/`const` collection is opt-in via `AllowTopLevelVar` /
+  `AllowTopLevelConst`.
+- **CLI** (`cmd/functy`): `functy run` (entry function, argument evaluation,
+  `json`/`hcl`/`raw` output, top-level const/var resolution) and
+  `functy check` (parse + validate with source-located diagnostics), over a
+  baseline context of the cty standard library plus `print`/`println`.
+- Documentation, examples, and CI.
+
+The library depends only on `github.com/hashicorp/hcl/v2` and
+`github.com/zclconf/go-cty`.

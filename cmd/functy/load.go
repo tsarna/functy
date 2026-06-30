@@ -7,7 +7,6 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/tsarna/functy"
 	"github.com/zclconf/go-cty/cty"
-	"github.com/zclconf/go-cty/cty/convert"
 	"github.com/zclconf/go-cty/cty/function"
 )
 
@@ -101,8 +100,8 @@ func evalTopLevelDecls(decls []functy.Decl, ctx *hcl.EvalContext) hcl.Diagnostic
 				continue
 			}
 			val := cty.NullVal(cty.DynamicPseudoType)
-			if d.Type != cty.NilType {
-				val = cty.NullVal(d.Type)
+			if d.Type != nil {
+				val = cty.NullVal(d.Type.Cty())
 			}
 			if d.Expr != nil {
 				v, vdiags := d.Expr.Value(ctx)
@@ -114,8 +113,8 @@ func evalTopLevelDecls(decls []functy.Decl, ctx *hcl.EvalContext) hcl.Diagnostic
 				}
 				val = v
 			}
-			if d.Type != cty.NilType {
-				conv, err := convert.Convert(val, d.Type)
+			if d.Type != nil {
+				conv, err := d.Type.Coerce(val)
 				if err != nil {
 					diags = diags.Append(&hcl.Diagnostic{
 						Severity: hcl.DiagError,

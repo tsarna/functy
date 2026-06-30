@@ -3,6 +3,10 @@
 An imperative language whose values are [cty](https://github.com/zclconf/go-cty)
 values and whose expressions are [HCL](https://github.com/hashicorp/hcl).
 
+*Pronounced **funk-tie** — the `-ty` rhymes with
+[cty](https://github.com/zclconf/go-cty) ("see-tie"). But I won't be mad if you
+pronounce it **funk-tee**. I sometimes forget too.*
+
 functy is **not** aiming to compete with [Starlark](https://github.com/google/starlark-go), [Tengo](https://github.com/d5/tengo), or any of the various JavaScript or Lua implementations for Go. It is intended specifically for use in software that is already relying on HCL / Cty but which needs more expressive power than eg the [HCL user function add-on](https://github.com/hashicorp/hcl/tree/main/ext/userfunc).
 
 [go-cty](https://github.com/zclconf/go-cty) describes itself this way:
@@ -137,17 +141,32 @@ ambient values into one eval context. `functy.ParseSources` collects `.cty`
 sources from file paths, directories, or an `embed.FS`; `Parser.ParseAll`
 parses several sources into one `Result`.
 
+A host can also register its own named types so they can be used in annotations:
+
+```go
+p := functy.NewParser().
+    RegisterType("bus", busCapsuleType).            // identity-enforced capsule type
+    RegisterOpenType("ctx", isContextObject)        // predicate-backed open type
+```
+
+Identity types must match by type; open types must satisfy a predicate and pass
+through untouched (extra attributes preserved). See
+[doc/language.md](doc/language.md#named-and-open-types-host-registered).
+
 ## Status
 
 functy implements a complete core language: typed and dynamic variables,
 reassignment, all control-flow forms, variadic and optional parameters,
-structured error handling (`try`/`catch`/`finally`, `throw`, `defer`), and the
-`functy run` / `functy check` CLI commands.
+structured error handling (`try`/`catch`/`finally`, `throw`, `defer`), a
+`null` (void) return type, and the `functy run` / `functy check` CLI commands.
+
+Types are resolved by functy's own resolver (not `ext/typeexpr`), with a
+host-pluggable named-type environment for capsule and open types.
 
 Designed-but-not-yet-implemented features (a REPL, a formatter, `type` aliases,
-module imports, closures, ...) are noted where relevant in the
-documentation.
+nested named types, module imports, closures, ...) are noted where relevant in
+the documentation.
 
 ## License
 
-MIT — see [LICENSE](LICENSE), like cty itself.
+MIT, like cty itself — see [LICENSE](LICENSE).

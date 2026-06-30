@@ -6,6 +6,14 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
+// ctyOf returns a constraint's cty.Type, or cty.NilType for a dynamic (nil) one.
+func ctyOf(tc TypeConstraint) cty.Type {
+	if tc == nil {
+		return cty.NilType
+	}
+	return tc.Cty()
+}
+
 func parse(t *testing.T, src string) *Result {
 	t.Helper()
 	res, diags := NewParser().Parse([]byte(src), "test")
@@ -47,7 +55,7 @@ func TestParseParams(t *testing.T) {
 	if len(fn.Params) != 5 {
 		t.Fatalf("expected 5 params, got %d", len(fn.Params))
 	}
-	if fn.Params[1].Type != cty.Number {
+	if ctyOf(fn.Params[1].Type) != cty.Number {
 		t.Errorf("b should be number, got %#v", fn.Params[1].Type)
 	}
 	if fn.Params[2].Default == nil {
@@ -57,14 +65,14 @@ func TestParseParams(t *testing.T) {
 		t.Errorf("rest should be variadic")
 	}
 	// For a variadic, Type holds the element type; the builder collects into list(T).
-	if fn.Params[4].Type != cty.Bool {
+	if ctyOf(fn.Params[4].Type) != cty.Bool {
 		t.Errorf("*rest: bool element type should be bool, got %#v", fn.Params[4].Type)
 	}
 }
 
 func TestParseReturnType(t *testing.T) {
 	fn := onlyFunc(t, "func f() -> object({ q = number, r = number }) { return null }")
-	if !fn.RetType.IsObjectType() {
+	if !ctyOf(fn.RetType).IsObjectType() {
 		t.Fatalf("expected object return type, got %#v", fn.RetType)
 	}
 }
@@ -81,16 +89,16 @@ func TestParseVarForms(t *testing.T) {
 	if len(fn.Body) != 6 {
 		t.Fatalf("expected 6 statements, got %d", len(fn.Body))
 	}
-	if vd := fn.Body[0].(*VarDecl); vd.Type != cty.NilType || vd.Init == nil {
+	if vd := fn.Body[0].(*VarDecl); vd.Type != nil || vd.Init == nil {
 		t.Errorf("a should be dynamic with an initializer")
 	}
-	if vd := fn.Body[1].(*VarDecl); vd.Type != cty.Number || vd.Init == nil {
+	if vd := fn.Body[1].(*VarDecl); ctyOf(vd.Type) != cty.Number || vd.Init == nil {
 		t.Errorf("b should be typed number with an initializer")
 	}
-	if vd := fn.Body[2].(*VarDecl); vd.Type != cty.String || vd.Init != nil {
+	if vd := fn.Body[2].(*VarDecl); ctyOf(vd.Type) != cty.String || vd.Init != nil {
 		t.Errorf("c should be typed string with no init")
 	}
-	if vd := fn.Body[3].(*VarDecl); vd.Type != cty.NilType || vd.Init != nil {
+	if vd := fn.Body[3].(*VarDecl); vd.Type != nil || vd.Init != nil {
 		t.Errorf("d should be dynamic with no init")
 	}
 	if _, ok := fn.Body[4].(*Assign); !ok {
@@ -280,7 +288,7 @@ func TestParseTopLevelVarAllowed(t *testing.T) {
 	if diags.HasErrors() {
 		t.Fatalf("unexpected: %s", diags.Error())
 	}
-	if len(res.Vars) != 1 || res.Vars[0].Name != "x" || res.Vars[0].Type != cty.Number {
+	if len(res.Vars) != 1 || res.Vars[0].Name != "x" || ctyOf(res.Vars[0].Type) != cty.Number {
 		t.Fatalf("var not collected correctly: %+v", res.Vars)
 	}
 }

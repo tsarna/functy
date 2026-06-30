@@ -53,8 +53,8 @@ Type names (`string`, `number`, `bool`, `any`, `list`, `set`, `map`, `object`,
 
 ## Types
 
-functy types **are** cty types. Type annotations use the standard cty
-type-constraint grammar (the same one Terraform `variable` blocks use):
+functy types **are** cty types. Type annotations use the familiar cty
+type-constraint grammar (the same shape Terraform `variable` blocks use):
 
 ```
 string   bool   number   any
@@ -64,6 +64,11 @@ object({ name = optional(<type>), … })   // optional object attributes
 ```
 
 `any` denotes the absence of a constraint (cty's dynamic type).
+
+functy resolves these annotations with its **own** resolver rather than delegating
+to `ext/typeexpr`. The built-in grammar above behaves identically, but the
+resolver also supports host-registered **named types** (see below), which a closed
+grammar cannot express.
 
 ### Gradual typing
 
@@ -92,6 +97,32 @@ reading it before assignment yields that typed null.
 var x: number        // x == null
 var l: list(string)  // l == null
 ```
+
+### Named and open types (host-registered)
+
+A host embedding functy can register named types, which then become usable in any
+annotation as a whole-annotation leaf (`w: widget`, `e: ctx`). Two flavors:
+
+- **Named (capsule) types** — registered with `Parser.RegisterType(name, ty)`.
+  Enforced by **type identity**: a value must already be of that type (or `null`).
+  This is how host cty capsule and rich-object types (a message bus, a URL, a byte
+  string) are named without converting/copying them.
+- **Open types** — registered with `Parser.RegisterOpenType(name, pred)`. Enforced
+  by a **predicate**; a satisfying value is passed through **untouched**, so extra
+  attributes survive (a plain structural conversion would strip them). Useful for
+  "an object that carries at least these attributes" — e.g. a context object with a
+  marker capsule plus arbitrary other fields.
+
+Standalone (e.g. the `functy` CLI) registers no named types, so only the built-in
+grammar is available there. Nesting a named type inside a collection or structural
+type (`list(widget)`) is not yet supported.
+
+### `null` as a type
+
+`null` is valid **only** as a function return type, where it declares a void
+(null-returning) function — see [Return type and returning](#return-type-and-returning).
+It is **not** a `var`/`const`/parameter type; `var x: null` is an error. (This is
+distinct from the typed-null *default value* a typed declaration takes above.)
 
 ## Expressions
 
@@ -150,12 +181,19 @@ name: T = default    // typed, optional
 ```functy
 func f(...) -> string { … }   // every `return e` converts e to string
 func g(...)             { … }  // dynamic return
+func h(...) -> null     { … }  // void: returns only null
 ```
 
 `return expr` exits with a value; `return` (or falling off the end) returns
 `null` — typed null if a return type was declared. Statements after an
 unconditional `return` in the same block are a compile-time "unreachable code"
 error.
+
+A **void** function is declared `-> null`: it returns `null`, and a `return`
+inside it may only be bare (`return`) or `return null` — any other
+`return <expr>` is a compile-time error. Omitting the return type leaves the
+return dynamic (may return a value *or* null); use `-> null` to enforce that
+nothing meaningful is returned.
 
 A cty function returns exactly one value; express multiple results with an
 object or tuple and destructure at the call site:

@@ -5,7 +5,6 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
-	"github.com/zclconf/go-cty/cty/convert"
 	"github.com/zclconf/go-cty/cty/function"
 )
 
@@ -66,8 +65,8 @@ func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 	}
 
 	retType := cty.DynamicPseudoType
-	if fn.RetType != cty.NilType {
-		retType = fn.RetType
+	if fn.RetType != nil {
+		retType = fn.RetType.Cty()
 	}
 	spec.Type = function.StaticReturnType(retType)
 
@@ -111,7 +110,7 @@ func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 			if err != nil {
 				return cty.NilVal, err
 			}
-			_ = scope.Declare(variadic.Name, cty.NilType, v)
+			_ = scope.Declare(variadic.Name, nil, v)
 		} else if len(rest) > 0 {
 			return cty.NilVal, fmt.Errorf("too many arguments: %q takes %d", fn.Name, len(fn.Params))
 		}
@@ -136,8 +135,8 @@ func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 		if sig != nil && sig.Kind == SignalReturn {
 			result = sig.Value
 		}
-		if fn.RetType != cty.NilType {
-			conv, err := convert.Convert(result, fn.RetType)
+		if fn.RetType != nil {
+			conv, err := fn.RetType.Coerce(result)
 			if err != nil {
 				return cty.NilVal, fmt.Errorf("return value of %q: %w", fn.Name, err)
 			}
@@ -153,7 +152,7 @@ func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 // value: an untyped *rest yields a tuple; a typed *rest: T yields a list(T) with
 // each element converted to T.
 func collectVariadic(v Param, rest []cty.Value) (cty.Value, error) {
-	if v.Type == cty.NilType {
+	if v.Type == nil {
 		if len(rest) == 0 {
 			return cty.EmptyTupleVal, nil
 		}
@@ -161,12 +160,13 @@ func collectVariadic(v Param, rest []cty.Value) (cty.Value, error) {
 		copy(vals, rest)
 		return cty.TupleVal(vals), nil
 	}
+	elemTy := v.Type.Cty()
 	if len(rest) == 0 {
-		return cty.ListValEmpty(v.Type), nil
+		return cty.ListValEmpty(elemTy), nil
 	}
 	vals := make([]cty.Value, len(rest))
 	for i, r := range rest {
-		conv, err := convert.Convert(r, v.Type)
+		conv, err := v.Type.Coerce(r)
 		if err != nil {
 			return cty.NilVal, fmt.Errorf("variadic argument %d of %q: %w", i, v.Name, err)
 		}

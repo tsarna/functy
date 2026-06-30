@@ -2,14 +2,13 @@ package functy
 
 import (
 	"github.com/hashicorp/hcl/v2"
-	"github.com/zclconf/go-cty/cty"
 )
 
 // FuncDecl is a top-level function declaration.
 type FuncDecl struct {
 	Name     string
 	Params   []Param
-	RetType  cty.Type // cty.NilType when no return type is annotated (dynamic)
+	RetType  TypeConstraint // nil when no return type is annotated (dynamic)
 	Body     []Statement
 	DefRange hcl.Range
 }
@@ -22,7 +21,7 @@ type FuncDecl struct {
 // arguments into a list(T), while an untyped `*rest` collects them into a tuple.
 type Param struct {
 	Name     string
-	Type     cty.Type       // cty.NilType when unannotated (dynamic)
+	Type     TypeConstraint // nil when unannotated (dynamic)
 	Default  hcl.Expression // non-nil for an optional parameter
 	Variadic bool           // true for the trailing *rest parameter
 	DefRange hcl.Range
@@ -39,7 +38,7 @@ type Statement interface {
 // with no initializer, which defaults to null (of the declared type, if any).
 type VarDecl struct {
 	Name     string
-	Type     cty.Type
+	Type     TypeConstraint // nil when unannotated (dynamic)
 	Init     hcl.Expression
 	SrcRange hcl.Range
 }

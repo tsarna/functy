@@ -293,10 +293,10 @@ func (ip *interp) execForRange(s *For, scope *Scope, ctx *hcl.EvalContext) (*Sig
 	for _, kv := range pairs {
 		child := NewScope(scope)
 		if s.KeyName != "" {
-			_ = child.Declare(s.KeyName, cty.NilType, kv.key)
+			_ = child.Declare(s.KeyName, nil, kv.key)
 		}
 		if s.ValName != "" {
-			_ = child.Declare(s.ValName, cty.NilType, kv.val)
+			_ = child.Declare(s.ValName, nil, kv.val)
 		}
 		sig, diags := ip.execBlock(s.Body, child)
 		if diags.HasErrors() {
@@ -320,7 +320,7 @@ func (ip *interp) execTry(s *Try, scope *Scope) (*Signal, hcl.Diagnostics) {
 		if s.HasCatch {
 			catchScope := NewScope(scope)
 			if s.CatchName != "" {
-				_ = catchScope.Declare(s.CatchName, cty.NilType, errVal)
+				_ = catchScope.Declare(s.CatchName, nil, errVal)
 			}
 			sig, diags = ip.execBlock(s.Catch, catchScope)
 			errored = false // handled (the catch itself may raise anew)
@@ -434,11 +434,11 @@ func scopeEvalContext(scope *Scope, parentCtx *hcl.EvalContext) *hcl.EvalContext
 	return child
 }
 
-func nullOf(ty cty.Type) cty.Value {
-	if ty == cty.NilType {
+func nullOf(tc TypeConstraint) cty.Value {
+	if tc == nil {
 		return cty.NullVal(cty.DynamicPseudoType)
 	}
-	return cty.NullVal(ty)
+	return cty.NullVal(tc.Cty())
 }
 
 func userErr(err error, rng hcl.Range) hcl.Diagnostics {
