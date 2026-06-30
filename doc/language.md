@@ -70,6 +70,31 @@ to `ext/typeexpr`. The built-in grammar above behaves identically, but the
 resolver also supports host-registered **named types** (see below), which a closed
 grammar cannot express.
 
+### Type aliases
+
+`type Name = <type>` declares a reusable alias for a type:
+
+```functy
+type HttpResult = object({ status = number, body = string })
+
+func fetch(url: string) -> HttpResult { … }
+```
+
+- Aliases are **order-independent** — an alias may be used before it is declared,
+  and one alias may reference another (cycles are an error).
+- Aliases are **project-scoped**: every alias from the `.cty` files loaded together
+  is visible to all of them, exactly like the function namespace — so a function in
+  one file may use a type declared in another, with no import needed. A duplicate
+  alias name (within or across files) is an error.
+- An alias over a **concrete** type (`type Id = string`) may be used in nested
+  position too (`list(Id)`). An alias over a host capsule/open type may only be used
+  as a whole-annotation leaf.
+- Aliasing a built-in (`type string = …`) or a host-registered type name is an
+  error.
+
+`type` is recognized as a declaration keyword only at file top level, so it remains
+usable as an ordinary variable/parameter name inside function bodies.
+
 ### Gradual typing
 
 - An **unannotated** variable, parameter, or return is **dynamic**: it holds any

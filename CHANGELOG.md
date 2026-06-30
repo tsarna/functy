@@ -10,6 +10,15 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **`type` aliases** — `type Name = <type>` at file top level, reusable in any
+  annotation. Aliases are **order-independent** (may be used before declaration;
+  cycles are reported) and **project-scoped**: every alias from the sources parsed
+  together is visible to all of them, like the function namespace (a function in one
+  file may use a type declared in another). A concrete alias (`type Id = string`)
+  nests inside collection/structural types; an alias over a host capsule/open type is
+  a whole-annotation leaf only. Aliasing a built-in or registered type name, a
+  duplicate name (within or across files), and cycles are errors. Parser exposes
+  collected aliases as `Result.Types`.
 - **Own type resolver with a host-pluggable named-type environment** (replaces
   delegation to `ext/typeexpr`, which is now used only as a test oracle):
   - `Parser.RegisterType(name, cty.Type)` — register a named/capsule type,

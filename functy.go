@@ -81,29 +81,71 @@ func (p *Parser) AllowTopLevelConst(v bool) *Parser {
 // declarations even when diagnostics contain errors (best-effort recovery), so
 // callers should check diags before using it.
 func (p *Parser) Parse(src []byte, filename string) (*Result, hcl.Diagnostics) {
-	tokens, diags := lex(src, filename)
-	pr := &parser{
-		src:                src,
-		filename:           filename,
-		tokens:             tokens,
-		env:                p.ensureTypes(),
-		allowTopLevelVar:   p.allowTopLevelVar,
-		allowTopLevelConst: p.allowTopLevelConst,
-	}
-	result := pr.parseFile()
-	diags = diags.Extend(pr.diags)
-	return result, diags
+	return p.parseSources([]Source{{Filename: filename, Bytes: src}})
 }
 
-// ParseAll parses several sources and merges their declarations into one Result.
-// Per-source declarations are concatenated in order; duplicate function names
-// across sources are detected later by Result.Compile.
+// ParseAll parses several sources together and merges their declarations into one
+// Result. The sources share one namespace: type aliases declared in any source
+// are visible to every source (see parseSources), and per-source function/var/
+// const declarations are concatenated in order (duplicate function names across
+// sources are detected later by Result.Compile).
 func (p *Parser) ParseAll(sources []Source) (*Result, hcl.Diagnostics) {
-	merged := &Result{}
+	return p.parseSources(sources)
+}
+
+// lexedSource is a source after lexing, retained for the two-stage parse (collect
+// aliases across all sources, then parse each).
+type lexedSource struct {
+	filename string
+	src      []byte
+	tokens   []token
+}
+
+// parseSources is the shared core of Parse/ParseAll. It lexes every source,
+// collects type aliases from all of them, resolves the aliases together
+// (order-independent, project-scoped) into one combined type environment, and
+// then parses each source against that environment so any source's annotations
+// can name any alias.
+func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
+
+	lexed := make([]lexedSource, 0, len(sources))
 	for _, s := range sources {
-		r, d := p.Parse(s.Bytes, s.Filename)
-		diags = diags.Extend(d)
+		tokens, ldiags := lex(s.Bytes, s.Filename)
+		diags = diags.Extend(ldiags)
+		lexed = append(lexed, lexedSource{filename: s.Filename, src: s.Bytes, tokens: tokens})
+	}
+
+	// Collect aliases from every source first, then resolve them into a per-parse
+	// env (a clone of the parser's registered types so file aliases never leak
+	// back into the shared Parser across separate calls).
+	env := p.ensureTypes().clone()
+	var aliases []aliasDecl
+	for _, ls := range lexed {
+		ad, cdiags := collectTypeAliases(ls.tokens, ls.src, ls.filename)
+		diags = diags.Extend(cdiags)
+		aliases = append(aliases, ad...)
+	}
+	diags = diags.Extend(resolveTypeAliases(aliases, env))
+
+	merged := &Result{}
+	for _, a := range aliases {
+		if tc, ok := env.named[a.name]; ok {
+			merged.Types = append(merged.Types, TypeAlias{Name: a.name, Type: tc, DefRange: a.defRange})
+		}
+	}
+
+	for _, ls := range lexed {
+		pr := &parser{
+			src:                ls.src,
+			filename:           ls.filename,
+			tokens:             ls.tokens,
+			env:                env,
+			allowTopLevelVar:   p.allowTopLevelVar,
+			allowTopLevelConst: p.allowTopLevelConst,
+		}
+		r := pr.parseFile()
+		diags = diags.Extend(pr.diags)
 		merged.Funcs = append(merged.Funcs, r.Funcs...)
 		merged.Consts = append(merged.Consts, r.Consts...)
 		merged.Vars = append(merged.Vars, r.Vars...)
@@ -118,6 +160,17 @@ type Result struct {
 	Funcs  []*FuncDecl // parsed function declarations
 	Consts []Decl      // top-level const declarations (only when enabled)
 	Vars   []Decl      // top-level var declarations (only when enabled)
+	Types  []TypeAlias // top-level type aliases (project-scoped across all sources)
+}
+
+// TypeAlias is a resolved top-level `type Name = <type>` declaration. Aliases are
+// project-scoped: every alias collected from the sources parsed together is
+// visible to every source (like the function namespace), so a function in one
+// file may use a type declared in another.
+type TypeAlias struct {
+	Name     string
+	Type     TypeConstraint
+	DefRange hcl.Range
 }
 
 // Decl is a collected top-level var/const declaration, returned unevaluated so a

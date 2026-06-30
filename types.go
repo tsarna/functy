@@ -111,6 +111,26 @@ func newTypeEnv() *typeEnv {
 	return &typeEnv{named: make(map[string]TypeConstraint)}
 }
 
+// clone returns a copy of the environment. parseSources resolves a parse call's
+// type aliases into a clone so they stay scoped to that call — visible across all
+// of its sources (aliases are project-scoped, not file-local), but not leaking
+// back into the Parser's shared host registrations for a later, separate call.
+func (e *typeEnv) clone() *typeEnv {
+	n := newTypeEnv()
+	for k, v := range e.named {
+		n.named[k] = v
+	}
+	return n
+}
+
+// builtinTypeNames are the reserved built-in type keywords. A type alias may not
+// redefine one.
+var builtinTypeNames = map[string]bool{
+	"string": true, "bool": true, "number": true, "any": true, "null": true,
+	"list": true, "set": true, "map": true, "object": true, "tuple": true,
+	"optional": true,
+}
+
 func (e *typeEnv) registerType(name string, ty cty.Type) {
 	e.named[name] = identityConstraint{name: name, ty: ty}
 }
@@ -174,9 +194,19 @@ func (e *typeEnv) resolveCtyType(expr hcl.Expression) (cty.Type, hcl.Diagnostics
 			return cty.NilType, typeDiag(expr, "Invalid type",
 				"null is only valid as a function return type.")
 		}
-		if _, ok := e.named[kw]; ok {
-			return cty.NilType, typeDiag(expr, "Nested named type not supported",
-				fmt.Sprintf("the named type %q cannot yet appear inside a collection or structural type.", kw))
+		if c, ok := e.named[kw]; ok {
+			// A concrete alias (resolving to a plain cty.Type) may nest inside a
+			// collection or structural type; a host capsule/open named type may
+			// not (its non-destructive enforcement does not compose yet).
+			switch cc := c.(type) {
+			case convertConstraint:
+				return cc.ty, nil
+			case anyConstraint:
+				return cty.DynamicPseudoType, nil
+			default:
+				return cty.NilType, typeDiag(expr, "Nested named type not supported",
+					fmt.Sprintf("the named type %q cannot yet appear inside a collection or structural type.", kw))
+			}
 		}
 		return cty.NilType, typeDiag(expr, "Unknown type", fmt.Sprintf("%q is not a known type.", kw))
 	}

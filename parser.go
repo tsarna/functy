@@ -94,6 +94,10 @@ func (p *parser) parseFile() *Result {
 			p.parseTopLevelDecl(result, true)
 		case t.isKeyword("var"):
 			p.parseTopLevelDecl(result, false)
+		case t.Type == hclsyntax.TokenIdent && string(t.Bytes) == "type":
+			// Type aliases are collected and resolved before this parse (see
+			// parseSources); here we just consume the declaration.
+			p.skipTypeAlias()
 		default:
 			p.errf(t.Range, "Expected function declaration",
 				"Top-level functy declarations must be functions (func name(...) { ... }).")
@@ -101,6 +105,25 @@ func (p *parser) parseFile() *Result {
 		}
 	}
 	return result
+}
+
+// skipTypeAlias consumes a top-level `type Name = <type>` declaration. The alias
+// was already collected and resolved (see parseSources); diagnostics for malformed
+// declarations are produced there, so this only advances the parser past it.
+func (p *parser) skipTypeAlias() {
+	p.advance() // type
+	if p.cur().Type == hclsyntax.TokenIdent && !p.cur().isAnyKeyword() {
+		p.advance() // name
+	}
+	if p.cur().Type != hclsyntax.TokenEqual {
+		p.recoverToTopLevel()
+		return
+	}
+	p.advance() // =
+	if isTerminator(p.cur().Type) || p.cur().Type == hclsyntax.TokenCBrace || p.atEOF() {
+		return
+	}
+	p.scanSpan(stopStmt) // consume and discard the type annotation
 }
 
 // recoverToTopLevel skips to the next plausible top-level keyword so a single
