@@ -8,6 +8,8 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-30
+
 ### Added
 
 - **Public `TypeResolver`** — functy's type system as a standalone, reusable
@@ -74,11 +76,19 @@ tagged. Until then, everything lives under **Unreleased**.
   the previous `cty.Type` field. A bare `cty.Type` cannot represent an open
   (predicate) type, so the constraint is the single source of truth.
 
+### Documentation
+
+- The original design spec is retired in favor of authoritative documents:
+  `doc/` (language + CLI reference), `FUTURE.md` (planned/unimplemented work),
+  `DESIGN.md` (vision and build-vs-embed rationale), and `CONTRIBUTING.md`
+  (architecture and the expression-boundary algorithm).
+
 ### Notes
 
-- Nesting a named type inside a collection or structural type (`list(bus)`,
-  `object({ b = bus })`) is recognized as designed but **not yet implemented**;
-  it is reported as an error in nested position.
+- Nesting an **open** (predicate-backed) named type — `error`, or a host-registered
+  marker-capsule type — inside a collection or structural type is not yet supported
+  and is reported as an error in nested position. Capsule named types *do* nest
+  (`list(widget)`, `object({ w = widget })`). See `FUTURE.md` ("nested open types").
 
 ## [0.1.0] - 2026-06-25
 
