@@ -10,6 +10,13 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **`fallthrough` in `switch`.** As the final statement of a clause it transfers
+  control to the next clause in source order, running its body without testing
+  (it may fall into a `default`, and a `default` that is not last may fall into
+  the following clause). Rejected anywhere but a clause's last statement — not
+  nested in an `if`/loop, and not in the last clause. Switch clauses are now kept
+  in source order internally (the `Switch` AST exposes `Clauses []Clause` with a
+  per-clause `IsDefault`, replacing the separate `Cases`/`Default` fields).
 - **`:=` declaration shorthand.** `x := expr` is sugar for an untyped
   `var x = expr`, with the same scoping and duplicate-declaration rules as `var`
   (it declares a new binding and cannot reuse an existing one). It carries no type

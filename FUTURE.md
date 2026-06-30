@@ -58,7 +58,6 @@ error), not a silent semantic swap.
 
 ## Language — expressions & sugar
 
-- **`fallthrough`** in `switch`.
 - **Labeled `break` / `continue`** for nested loops.
 - **Pure-expression-statement warning.** Warn when an expression statement is
   obviously side-effect-free (no function call) and its value is discarded.

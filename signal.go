@@ -16,6 +16,10 @@ const (
 	// SignalError unwinds a raised error (from throw or a failing expression)
 	// until a try/catch handles it or it leaves the function.
 	SignalError
+	// SignalFallthrough transfers control to the next clause of the enclosing
+	// switch. It is produced only by a Fallthrough statement and is always
+	// consumed by execSwitch, never escaping the switch.
+	SignalFallthrough
 )
 
 // Signal carries a control-flow transfer up the call stack. A nil *Signal means

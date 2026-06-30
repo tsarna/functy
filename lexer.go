@@ -24,7 +24,8 @@ var keywords = map[string]bool{
 	"func": true, "var": true, "const": true, "return": true,
 	"if": true, "else": true, "for": true, "while": true, "in": true,
 	"break": true, "continue": true, "switch": true, "case": true, "default": true,
-	"try": true, "catch": true, "finally": true, "defer": true, "throw": true,
+	"fallthrough": true,
+	"try":         true, "catch": true, "finally": true, "defer": true, "throw": true,
 	"true": true, "false": true, "null": true,
 }
 

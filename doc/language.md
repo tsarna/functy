@@ -45,8 +45,8 @@ functy uses Go-style implicit termination:
 Identifiers match `[A-Za-z_][A-Za-z0-9_]*`.
 
 Reserved keywords: `func`, `var`, `const`, `return`, `if`, `else`, `for`,
-`while`, `in`, `break`, `continue`, `switch`, `case`, `default`, `try`, `catch`,
-`finally`, `defer`, `throw`, `true`, `false`, `null`.
+`while`, `in`, `break`, `continue`, `switch`, `case`, `default`, `fallthrough`,
+`try`, `catch`, `finally`, `defer`, `throw`, `true`, `false`, `null`.
 
 Type names (`string`, `number`, `bool`, `any`, `list`, `set`, `map`, `object`,
 `tuple`, `optional`) are contextual — reserved only in a type annotation.
@@ -416,10 +416,28 @@ default:
 ```
 
 - The subject is evaluated once; the first `case` with a value equal to the
-  subject runs, then the switch exits (no fallthrough).
+  subject runs, then the switch exits (no implicit fallthrough).
 - An expression-less `switch { case cond: … }` acts as an if/else chain (cases
   are boolean expressions).
-- At most one `default`.
+- At most one `default`. It runs when no case matches, regardless of where it
+  appears among the clauses.
+- `fallthrough` as the **final** statement of a clause transfers control to the
+  **next clause in source order**, running its body without testing its values
+  (it may fall into a `default`, and a `default` that is not last may fall into
+  the following clause):
+
+  ```functy
+  switch n {
+  case 1:
+      log("one")
+      fallthrough   // continue into case 2
+  case 2:
+      log("one or two")
+  }
+  ```
+
+  It is rejected anywhere but a clause's last statement — it cannot be nested in
+  an `if`/loop, and the last clause cannot fall through (there is no next clause).
 
 ## Error handling
 

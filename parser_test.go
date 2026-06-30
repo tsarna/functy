@@ -198,14 +198,14 @@ func TestParseSwitch(t *testing.T) {
 	if sw.Subject == nil {
 		t.Fatalf("expected subject")
 	}
-	if len(sw.Cases) != 2 {
-		t.Fatalf("expected 2 cases, got %d", len(sw.Cases))
+	if len(sw.Clauses) != 3 {
+		t.Fatalf("expected 3 clauses, got %d", len(sw.Clauses))
 	}
-	if len(sw.Cases[0].Values) != 3 {
-		t.Fatalf("first case should have 3 values, got %d", len(sw.Cases[0].Values))
+	if len(sw.Clauses[0].Values) != 3 {
+		t.Fatalf("first clause should have 3 values, got %d", len(sw.Clauses[0].Values))
 	}
-	if sw.Default == nil {
-		t.Fatalf("expected default")
+	if !sw.Clauses[2].IsDefault {
+		t.Fatalf("expected the third clause to be the default")
 	}
 }
 

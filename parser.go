@@ -411,6 +411,12 @@ func (p *parser) parseStatement() Statement {
 		return p.parseBreak()
 	case t.isKeyword("continue"):
 		return p.parseContinue()
+	case t.isKeyword("fallthrough"):
+		p.advance()
+		p.errf(t.Range, "Misplaced fallthrough",
+			"fallthrough may only be used as the final statement of a switch case, "+
+				"not nested in another statement or outside a switch.")
+		return nil
 	case t.isKeyword("if"):
 		return p.parseIf()
 	case t.isKeyword("for"):
@@ -888,7 +894,7 @@ func (p *parser) parseSwitch() Statement {
 				return sw
 			}
 			body := p.parseCaseBody()
-			sw.Cases = append(sw.Cases, Case{Values: values, Body: body, SrcRange: caseStart})
+			sw.Clauses = append(sw.Clauses, Clause{Values: values, Body: body, SrcRange: caseStart})
 		case p.cur().isKeyword("default"):
 			dflt := p.cur().Range
 			if sawDefault {
@@ -899,7 +905,8 @@ func (p *parser) parseSwitch() Statement {
 			if !p.expect(hclsyntax.TokenColon, ":") {
 				return sw
 			}
-			sw.Default = p.parseCaseBody()
+			body := p.parseCaseBody()
+			sw.Clauses = append(sw.Clauses, Clause{IsDefault: true, Body: body, SrcRange: dflt})
 		default:
 			p.errf(p.cur().Range, "Expected case or default",
 				"A switch body contains only case and default clauses.")
@@ -909,7 +916,26 @@ func (p *parser) parseSwitch() Statement {
 	if p.cur().Type == hclsyntax.TokenCBrace {
 		p.advance()
 	}
+	// fallthrough is legal only as a non-final clause's last statement; the final
+	// clause has no following clause to fall into.
+	if n := len(sw.Clauses); n > 0 {
+		if ft := endingFallthrough(sw.Clauses[n-1].Body); ft != nil {
+			p.errf(ft.SrcRange, "fallthrough in final clause",
+				"The final clause of a switch cannot fall through; there is no following clause.")
+		}
+	}
 	return sw
+}
+
+// endingFallthrough returns the trailing Fallthrough statement of a clause body,
+// or nil if the body does not end in one.
+func endingFallthrough(body []Statement) *Fallthrough {
+	if n := len(body); n > 0 {
+		if ft, ok := body[n-1].(*Fallthrough); ok {
+			return ft
+		}
+	}
+	return nil
 }
 
 // parseCaseBody parses statements until the next case, default, or closing brace.
@@ -921,6 +947,25 @@ func (p *parser) parseCaseBody() []Statement {
 		t := p.cur()
 		if t.Type == hclsyntax.TokenCBrace || t.isKeyword("case") || t.isKeyword("default") || p.atEOF() {
 			break
+		}
+		// fallthrough is recognized only here, at the top level of a case body
+		// (parseStatement rejects it everywhere else). It must be the body's final
+		// statement: the next significant token must end the clause.
+		if t.isKeyword("fallthrough") {
+			p.advance()
+			if terminated {
+				p.errf(t.Range, "Unreachable code",
+					"This fallthrough follows an unconditional return, break, or continue.")
+			}
+			p.skipTerminators()
+			nt := p.cur()
+			if !(nt.Type == hclsyntax.TokenCBrace || nt.isKeyword("case") || nt.isKeyword("default") || p.atEOF()) {
+				p.errf(t.Range, "Misplaced fallthrough",
+					"fallthrough must be the final statement of a switch case.")
+			}
+			stmts = append(stmts, &Fallthrough{SrcRange: t.Range})
+			terminated = true
+			continue
 		}
 		startPos := p.pos
 		stmt := p.parseStatement()

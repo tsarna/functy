@@ -82,6 +82,8 @@ func (ip *interp) executeStatement(stmt Statement, scope *Scope, ctx *hcl.EvalCo
 		return &Signal{Kind: SignalBreak}, nil
 	case *Continue:
 		return &Signal{Kind: SignalContinue}, nil
+	case *Fallthrough:
+		return &Signal{Kind: SignalFallthrough}, nil
 	case *Throw:
 		return execThrow(s, ctx)
 	case *Defer:
@@ -217,41 +219,71 @@ func (ip *interp) execIfChain(s *IfChain, scope *Scope, ctx *hcl.EvalContext) (*
 }
 
 func (ip *interp) execSwitch(s *Switch, scope *Scope, ctx *hcl.EvalContext) (*Signal, hcl.Diagnostics) {
-	if s.Subject == nil {
-		// Expression-less form: each case value is a boolean expression.
-		for _, c := range s.Cases {
-			for _, ve := range c.Values {
-				cond, diags := ve.Value(ctx)
-				if diags.HasErrors() {
-					return nil, diags
-				}
-				if !cond.IsNull() && cond.True() {
-					return ip.execBlock(c.Body, NewScope(scope))
-				}
-			}
-		}
-	} else {
-		subj, diags := s.Subject.Value(ctx)
+	start, diags := ip.switchStart(s, ctx)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+	if start < 0 {
+		return nil, nil // no case matched and there is no default
+	}
+
+	// Execute from the selected clause onward, advancing to the next clause only
+	// on an explicit fallthrough (which the parser allows solely as a non-final
+	// clause's last statement, so the loop never runs off the end via fallthrough).
+	for i := start; i < len(s.Clauses); i++ {
+		sig, diags := ip.execBlock(s.Clauses[i].Body, NewScope(scope))
 		if diags.HasErrors() {
 			return nil, diags
 		}
-		for _, c := range s.Cases {
-			for _, ve := range c.Values {
-				cv, vdiags := ve.Value(ctx)
-				if vdiags.HasErrors() {
-					return nil, vdiags
-				}
-				eq := subj.Equals(cv)
-				if !eq.IsNull() && eq.True() {
-					return ip.execBlock(c.Body, NewScope(scope))
-				}
+		if sig == nil {
+			return nil, nil // clause completed normally; the switch is done
+		}
+		if sig.Kind == SignalFallthrough {
+			continue // run the next clause unconditionally
+		}
+		return sig, nil // return / break / continue / error propagates out
+	}
+	return nil, nil
+}
+
+// switchStart selects the index of the first clause to execute: the first case
+// whose value matches the subject (or, in the expression-less form, the first
+// true case), falling back to the default clause's index. It returns -1 when no
+// case matches and there is no default. Case values are evaluated in order and
+// matching short-circuits at the first hit, as before.
+func (ip *interp) switchStart(s *Switch, ctx *hcl.EvalContext) (int, hcl.Diagnostics) {
+	var subj cty.Value
+	if s.Subject != nil {
+		v, diags := s.Subject.Value(ctx)
+		if diags.HasErrors() {
+			return -1, diags
+		}
+		subj = v
+	}
+
+	defaultIdx := -1
+	for i, c := range s.Clauses {
+		if c.IsDefault {
+			defaultIdx = i
+			continue
+		}
+		for _, ve := range c.Values {
+			cv, diags := ve.Value(ctx)
+			if diags.HasErrors() {
+				return -1, diags
+			}
+			var hit cty.Value
+			if s.Subject == nil {
+				hit = cv // expression-less: the value is itself the boolean test
+			} else {
+				hit = subj.Equals(cv)
+			}
+			if !hit.IsNull() && hit.True() {
+				return i, nil
 			}
 		}
 	}
-	if s.Default != nil {
-		return ip.execBlock(s.Default, NewScope(scope))
-	}
-	return nil, nil
+	return defaultIdx, nil
 }
 
 func (ip *interp) execFor(s *For, scope *Scope, ctx *hcl.EvalContext) (*Signal, hcl.Diagnostics) {
