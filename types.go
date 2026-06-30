@@ -242,8 +242,10 @@ func (e *typeEnv) resolveType(expr hcl.Expression, allowNull bool) (TypeConstrai
 
 // resolveCtyType resolves an annotation to a concrete cty.Type using only the
 // built-in grammar. It is used for nested positions (collection element types,
-// object attributes, tuple elements), where named/capsule and null types are not
-// yet allowed (deferred — see FUNCTY-SPEC §4.4 / §13).
+// object attributes, tuple elements), where open (predicate-backed) named types
+// and null are not allowed — they have no single concrete cty type. Supporting
+// open types in nested positions is future work (see FUTURE.md, "nested open
+// types").
 func (e *typeEnv) resolveCtyType(expr hcl.Expression) (cty.Type, hcl.Diagnostics) {
 	if kw := hcl.ExprAsKeyword(expr); kw != "" {
 		switch kw {

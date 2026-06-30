@@ -4,10 +4,11 @@
 // can be added to an *hcl.EvalContext and called from any HCL expression.
 //
 // The statement grammar (func, var, if/else, for/while, switch, ...) is parsed
-// by functy itself, while every embedded expression and type annotation is
-// handed to HCL (hclsyntax.ParseExpression and ext/typeexpr), so operators,
-// templates, function calls, and the cty type-constraint grammar behave exactly
-// as they do elsewhere in HCL.
+// by functy itself, while every embedded expression is handed to HCL
+// (hclsyntax.ParseExpression), so operators, templates, and function calls
+// behave exactly as they do elsewhere in HCL. Type annotations are resolved by
+// functy's own TypeResolver — a superset of the ext/typeexpr grammar that also
+// supports host-registered capsule and open (predicate-backed) named types.
 package functy
 
 import (

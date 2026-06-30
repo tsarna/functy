@@ -134,9 +134,15 @@ annotation as a whole-annotation leaf (`w: widget`, `e: ctx`). Two flavors:
   string) are named without converting/copying them.
 - **Open types** — registered with `Parser.RegisterOpenType(name, pred)`. Enforced
   by a **predicate**; a satisfying value is passed through **untouched**, so extra
-  attributes survive (a plain structural conversion would strip them). Useful for
-  "an object that carries at least these attributes" — e.g. a context object with a
-  marker capsule plus arbitrary other fields.
+  attributes survive (a plain structural conversion would strip them). Open types
+  describe "an object that carries *at least* these attributes," and come in two
+  usual shapes:
+  - **marker-capsule** — keyed on a marker attribute, e.g. a context object whose
+    `_ctx` attribute is the context capsule type; any other attributes (`args`,
+    `fields`, …) are permitted and preserved.
+  - **required-attributes** — assert some attributes exist with the right types and
+    ignore the rest, e.g. the built-in `error` (an object with at least a string
+    `message`, which may also carry other fields).
 
 functy ships one built-in open type, **`error`** — an object with at least a string
 `message` (the shape `throw` raises and `catch` binds). It is usable in any

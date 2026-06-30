@@ -184,11 +184,14 @@ structured error handling (`try`/`catch`/`finally`, `throw`, `defer`), a
 `null` (void) return type, and the `functy run` / `functy check` CLI commands.
 
 Types are resolved by functy's own resolver (not `ext/typeexpr`), with a
-host-pluggable named-type environment for capsule and open types.
+host-pluggable named-type environment for capsule and open types, `type` aliases,
+and opt-in strict typing.
 
-Designed-but-not-yet-implemented features (a REPL, a formatter, `type` aliases,
-nested named types, module imports, closures, ...) are noted where relevant in
-the documentation.
+Designed-but-not-yet-implemented features (a REPL, a formatter, module imports,
+closures, a functy standard library, nested *open* types, ...) are recorded in
+[FUTURE.md](FUTURE.md). The design rationale ("why a language, not an embedded
+one") is in [DESIGN.md](DESIGN.md), and the internal architecture is in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
