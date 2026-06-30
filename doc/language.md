@@ -149,6 +149,52 @@ type (`list(widget)`) is not yet supported.
 It is **not** a `var`/`const`/parameter type; `var x: null` is an error. (This is
 distinct from the typed-null *default value* a typed declaration takes above.)
 
+### Strict typing
+
+By default functy is gradually typed — annotations are optional. A host (or a
+file) can make them **mandatory**, so signatures and declarations are
+self-documenting and an unintended `any` is visible. The type may still be `any`,
+but it must be written.
+
+A host enables requirements on the parser:
+
+```go
+p := functy.NewParser().
+    RequireParamTypes(true).     // every parameter needs `: T`
+    RequireReturnType(true).     // every function needs `-> T`
+    RequireDeclaredTypes(true)   // every var/const needs `: T`
+```
+
+A file can request the same from within its **leading comment block** using a
+directive (see below):
+
+```functy
+//functy:strict                            // all three
+//functy:require param_types return_type   // or specific ones
+```
+
+Requirements are **tighten-only**: a file directive may *add* a requirement the
+host did not set, but cannot relax one the host mandates (effective =
+host OR file). A violation says whether the rule came from the host or a file
+directive. The explicit escapes — `: any`, `-> any`, `-> null` — satisfy a
+requirement.
+
+### Directive comments
+
+A directive comment is a line comment with **no space** after `//`, of the form
+`//<namespace>:<name> [args]` (a space, `// functy: …`, is ordinary prose). functy
+acts only on its own `functy:` namespace (`strict`, `require`); every other
+namespace is collected into `Result.Directives` and passed through untouched for
+the host to interpret:
+
+```functy
+//vinculum:cache 5m
+//myapp:route /x
+```
+
+(Currently only file-scope directives — those in a file's leading comment block —
+are collected; per-function directives are planned.)
+
 ## Expressions
 
 Every expression is a real HCL expression, parsed by HCL and evaluated lazily.

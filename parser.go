@@ -2,6 +2,7 @@ package functy
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -29,6 +30,7 @@ type parser struct {
 	voidReturn         bool // inside a `-> null` function body
 	allowTopLevelVar   bool
 	allowTopLevelConst bool
+	strict             strictness
 }
 
 // cur returns the current token, or the trailing EOF token if the position is at
@@ -164,9 +166,17 @@ func (p *parser) parseTopLevelDecl(result *Result, isConst bool) {
 		return
 	}
 	decl := Decl{Name: name.text, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
+	kind := "Variable"
+	if isConst {
+		kind = "Constant"
+	}
 	if p.cur().Type == hclsyntax.TokenColon {
 		p.advance()
 		decl.Type = p.parseType(false)
+	} else if p.strict.declaredTypes.on() {
+		p.errf(decl.DefRange, "Missing "+strings.ToLower(kind)+" type",
+			fmt.Sprintf("%s %q must declare a type (%s); use `: any` for an explicitly dynamic declaration.",
+				kind, decl.Name, p.strict.declaredTypes.reason()))
 	}
 	if p.cur().Type == hclsyntax.TokenEqual {
 		p.advance()
@@ -202,6 +212,10 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 		p.advance()
 		p.advance()
 		fn.RetType = p.parseType(true)
+	} else if p.strict.returnType.on() {
+		p.errf(fn.DefRange, "Missing return type",
+			fmt.Sprintf("Function %q must declare a return type (%s); use `-> any` for a dynamic return or `-> null` for void.",
+				fn.Name, p.strict.returnType.reason()))
 	}
 
 	if p.cur().Type != hclsyntax.TokenOBrace {
@@ -249,6 +263,10 @@ func (p *parser) parseParams() []Param {
 		if p.cur().Type == hclsyntax.TokenColon {
 			p.advance()
 			prm.Type = p.parseType(false)
+		} else if p.strict.paramTypes.on() {
+			p.errf(prm.DefRange, "Missing parameter type",
+				fmt.Sprintf("Parameter %q must declare a type (%s); use `: any` for an explicitly dynamic parameter.",
+					prm.Name, p.strict.paramTypes.reason()))
 		}
 		if p.cur().Type == hclsyntax.TokenEqual {
 			if prm.Variadic {
@@ -429,6 +447,10 @@ func (p *parser) parseVarDecl(stop stopFunc) Statement {
 	if p.cur().Type == hclsyntax.TokenColon {
 		p.advance()
 		vd.Type = p.parseType(false)
+	} else if p.strict.declaredTypes.on() {
+		p.errf(vd.SrcRange, "Missing variable type",
+			fmt.Sprintf("Variable %q must declare a type (%s); use `: any` for an explicitly dynamic variable.",
+				vd.Name, p.strict.declaredTypes.reason()))
 	}
 	if p.cur().Type == hclsyntax.TokenEqual {
 		p.advance()

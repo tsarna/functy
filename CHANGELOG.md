@@ -10,6 +10,19 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Strict typing** — opt-in requirements that type annotations be written
+  (`any` still allowed, but explicit). Parser flags `RequireParamTypes`,
+  `RequireReturnType`, `RequireDeclaredTypes`, and the in-source directives
+  `//functy:strict` / `//functy:require param_types return_type declared_types`.
+  Off by default; tighten-only (a file may add a requirement but not relax a
+  host-set one); violations report whether the rule came from the host or a file
+  directive. `: any` / `-> any` / `-> null` are the explicit escapes.
+- **Generalized directive comments** — a public `Directive{Namespace, Name, Args,
+  Range}`; a directive comment is a line comment with no space after `//`, of the
+  form `//<namespace>:<name> [args]`. Each source's leading-block directives are
+  collected into `Result.Directives`; functy interprets only its own `functy:`
+  namespace and passes the rest through for the host. (Per-function directives are
+  deferred.)
 - **`type` aliases** — `type Name = <type>` at file top level, reusable in any
   annotation. Aliases are **order-independent** (may be used before declaration;
   cycles are reported) and **project-scoped**: every alias from the sources parsed

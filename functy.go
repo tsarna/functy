@@ -29,7 +29,12 @@ type Source struct {
 type Parser struct {
 	allowTopLevelVar   bool
 	allowTopLevelConst bool
-	types              *typeEnv
+
+	requireParamTypes    bool
+	requireReturnType    bool
+	requireDeclaredTypes bool
+
+	types *typeEnv
 }
 
 // NewParser returns a Parser with default options.
@@ -52,6 +57,30 @@ func (p *Parser) RegisterType(name string, ty cty.Type) *Parser {
 // Parser for chaining.
 func (p *Parser) RegisterOpenType(name string, pred func(cty.Value) error) *Parser {
 	p.ensureTypes().registerOpenType(name, pred)
+	return p
+}
+
+// RequireParamTypes, when set, requires every function parameter to carry an
+// explicit type annotation (`: T`; `any` is allowed but must be written). Off by
+// default. A file may additionally request this via a //functy: directive, but a
+// file can never relax a host-set requirement. Returns the Parser for chaining.
+func (p *Parser) RequireParamTypes(v bool) *Parser {
+	p.requireParamTypes = v
+	return p
+}
+
+// RequireReturnType requires every function to declare a return type (`-> T`).
+// See RequireParamTypes for the off-by-default and tighten-only semantics.
+func (p *Parser) RequireReturnType(v bool) *Parser {
+	p.requireReturnType = v
+	return p
+}
+
+// RequireDeclaredTypes requires every var/const declaration to carry a type
+// (`: T`). See RequireParamTypes for the off-by-default and tighten-only
+// semantics.
+func (p *Parser) RequireDeclaredTypes(v bool) *Parser {
+	p.requireDeclaredTypes = v
 	return p
 }
 
@@ -136,6 +165,13 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	}
 
 	for _, ls := range lexed {
+		// Directives are collected per file (file-scope), drive that file's strict
+		// typing, and are passed through to the host via Result.Directives.
+		dirs := collectLeadingDirectives(ls.src, ls.filename)
+		merged.Directives = append(merged.Directives, dirs...)
+		fParam, fRet, fDecl, idiags := interpretFunctyDirectives(dirs)
+		diags = diags.Extend(idiags)
+
 		pr := &parser{
 			src:                ls.src,
 			filename:           ls.filename,
@@ -143,6 +179,11 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 			env:                env,
 			allowTopLevelVar:   p.allowTopLevelVar,
 			allowTopLevelConst: p.allowTopLevelConst,
+			strict: strictness{
+				paramTypes:    combineReq(p.requireParamTypes, fParam),
+				returnType:    combineReq(p.requireReturnType, fRet),
+				declaredTypes: combineReq(p.requireDeclaredTypes, fDecl),
+			},
 		}
 		r := pr.parseFile()
 		diags = diags.Extend(pr.diags)
@@ -161,6 +202,11 @@ type Result struct {
 	Consts []Decl      // top-level const declarations (only when enabled)
 	Vars   []Decl      // top-level var declarations (only when enabled)
 	Types  []TypeAlias // top-level type aliases (project-scoped across all sources)
+
+	// Directives are the directive comments from each source's leading comment
+	// block (file-scope), across all sources. functy acts on its own `functy:`
+	// namespace; others are passed through for the host.
+	Directives []Directive
 }
 
 // TypeAlias is a resolved top-level `type Name = <type>` declaration. Aliases are
