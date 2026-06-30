@@ -153,6 +153,29 @@ Identity types must match by type; open types must satisfy a predicate and pass
 through untouched (extra attributes preserved). See
 [doc/language.md](doc/language.md#named-and-open-types-host-registered).
 
+### Type system as a reusable component
+
+functy's type system is usable on its own, independent of parsing `.cty`
+programs — as a richer alternative to `ext/typeexpr` (the result is a
+`TypeConstraint` that can *enforce* values via `Coerce`, not just a `cty.Type`),
+or for a host to type-check its own configuration:
+
+```go
+r := functy.NewTypeResolver().RegisterType("bus", busCapsuleType)
+
+// Resolve a type annotation (from a string, or an hcl.Expression):
+tc, diags := r.ParseType([]byte("list(string)"), "config")
+// tc.Cty()  -> cty.List(cty.String)
+// tc.Coerce(value) -> the value converted/validated, or an error
+
+// ResolveType(expr) takes an already-parsed hcl.Expression (e.g. a decoded HCL
+// attribute) — the typeexpr.TypeConstraint analog.
+```
+
+A `Parser` holds a `TypeResolver` (`Parser.Types()`) and registers named types on
+it, so a host registers its capsule/open types once and uses them both for parsing
+`.cty` files and for resolving standalone annotations.
+
 ## Status
 
 functy implements a complete core language: typed and dynamic variables,

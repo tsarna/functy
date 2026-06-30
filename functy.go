@@ -34,18 +34,24 @@ type Parser struct {
 	requireReturnType    bool
 	requireDeclaredTypes bool
 
-	types *typeEnv
+	resolver *TypeResolver
 }
 
 // NewParser returns a Parser with default options.
-func NewParser() *Parser { return &Parser{types: newTypeEnv()} }
+func NewParser() *Parser { return &Parser{resolver: NewTypeResolver()} }
+
+// Types returns the parser's TypeResolver. Named types registered through the
+// Parser are registered on it, so a host can resolve standalone type annotations
+// (TypeResolver.ResolveType / ParseType) against the very same named types it uses
+// for parsing `.cty` files.
+func (p *Parser) Types() *TypeResolver { return p.types() }
 
 // RegisterType registers a named (capsule) type. An annotation naming it is
 // enforced by type identity: a value must already be of ty (or null), unless ty
 // itself defines a conversion. Hosts use this for their cty capsule and
 // rich-object types. Returns the Parser for chaining.
 func (p *Parser) RegisterType(name string, ty cty.Type) *Parser {
-	p.ensureTypes().registerType(name, ty)
+	p.types().RegisterType(name, ty)
 	return p
 }
 
@@ -56,7 +62,7 @@ func (p *Parser) RegisterType(name string, ty cty.Type) *Parser {
 // required-attribute objects (e.g. an error with at least a message). Returns the
 // Parser for chaining.
 func (p *Parser) RegisterOpenType(name string, pred func(cty.Value) error) *Parser {
-	p.ensureTypes().registerOpenType(name, pred)
+	p.types().RegisterOpenType(name, pred)
 	return p
 }
 
@@ -84,11 +90,13 @@ func (p *Parser) RequireDeclaredTypes(v bool) *Parser {
 	return p
 }
 
-func (p *Parser) ensureTypes() *typeEnv {
-	if p.types == nil {
-		p.types = newTypeEnv()
+// types returns the parser's resolver, creating it if the Parser was constructed
+// as a zero value rather than via NewParser.
+func (p *Parser) types() *TypeResolver {
+	if p.resolver == nil {
+		p.resolver = NewTypeResolver()
 	}
-	return p.types
+	return p.resolver
 }
 
 // AllowTopLevelVar controls whether a top-level `var` declaration is collected
@@ -148,7 +156,7 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	// Collect aliases from every source first, then resolve them into a per-parse
 	// env (a clone of the parser's registered types so file aliases never leak
 	// back into the shared Parser across separate calls).
-	env := p.ensureTypes().clone()
+	env := p.types().env.clone()
 	var aliases []aliasDecl
 	for _, ls := range lexed {
 		ad, cdiags := collectTypeAliases(ls.tokens, ls.src, ls.filename)

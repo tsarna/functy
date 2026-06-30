@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/convert"
 )
@@ -99,6 +100,67 @@ func (c predicateConstraint) Coerce(v cty.Value) (cty.Value, error) {
 }
 func (c predicateConstraint) Cty() cty.Type  { return cty.DynamicPseudoType }
 func (c predicateConstraint) String() string { return c.name }
+
+// TypeResolver is functy's type system as a standalone, reusable component. It
+// resolves functy type annotations (the same grammar used in `.cty` source) into
+// TypeConstraints, against the built-in types plus any host-registered named
+// types. It is usable independently of parsing functy programs — for example as a
+// richer alternative to ext/typeexpr (a TypeConstraint carries enforcement via
+// Coerce, not just a cty.Type), or for a host to type-check its own
+// configuration (e.g. resolving a declared type and enforcing a value with
+// Coerce).
+//
+// A Parser holds one (see Parser.Types); register named types once and use them
+// both for parsing `.cty` files and for resolving standalone annotations.
+type TypeResolver struct {
+	env *typeEnv
+}
+
+// NewTypeResolver returns a resolver with functy's built-in types (including the
+// `error` open type) and no host registrations.
+func NewTypeResolver() *TypeResolver {
+	return &TypeResolver{env: newTypeEnv()}
+}
+
+// RegisterType registers a named (capsule) type, enforced by type identity. See
+// Parser.RegisterType. Returns the resolver for chaining.
+func (r *TypeResolver) RegisterType(name string, ty cty.Type) *TypeResolver {
+	r.env.registerType(name, ty)
+	return r
+}
+
+// RegisterOpenType registers a named open type backed by a predicate. See
+// Parser.RegisterOpenType. Returns the resolver for chaining.
+func (r *TypeResolver) RegisterOpenType(name string, pred func(cty.Value) error) *TypeResolver {
+	r.env.registerOpenType(name, pred)
+	return r
+}
+
+// ResolveType resolves a parsed type-annotation expression (e.g. an HCL attribute
+// value) into a TypeConstraint — the analog of typeexpr.TypeConstraint, but
+// yielding a constraint that can enforce values, not just a cty.Type. `null` is
+// not accepted here (it is only meaningful as a function return type).
+func (r *TypeResolver) ResolveType(expr hcl.Expression) (TypeConstraint, hcl.Diagnostics) {
+	return r.env.resolveType(expr, false)
+}
+
+// ParseType lexes a type annotation from source bytes and resolves it — a
+// convenience for annotations stored as strings (e.g. a host config field).
+func (r *TypeResolver) ParseType(src []byte, filename string) (TypeConstraint, hcl.Diagnostics) {
+	expr, diags := hclsyntax.ParseExpression(src, filename, hcl.InitialPos)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+	tc, rdiags := r.env.resolveType(expr, false)
+	return tc, diags.Extend(rdiags)
+}
+
+// ConvertType wraps a concrete cty.Type as a TypeConstraint enforced by
+// conversion (cty/convert). Useful for a host that already has a cty.Type — for
+// example a backward-compatible path for a type that was specified some other way.
+func ConvertType(ty cty.Type) TypeConstraint {
+	return convertConstraint{ty: ty}
+}
 
 // typeEnv holds the host-registered named types consulted by the resolver. The
 // built-in primitives, constructors, and pseudo-types are handled by the resolver

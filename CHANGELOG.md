@@ -10,6 +10,14 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Public `TypeResolver`** — functy's type system as a standalone, reusable
+  component (independent of parsing `.cty` programs): `NewTypeResolver()` with
+  `RegisterType` / `RegisterOpenType`, `ResolveType(hcl.Expression)` (the
+  `typeexpr.TypeConstraint` analog, yielding an enforcing `TypeConstraint`), and
+  `ParseType([]byte, filename)` for annotations stored as strings. `Parser.Types()`
+  exposes the parser's resolver, so a host registers named types once and uses them
+  for both parsing and standalone resolution. Added `ConvertType(cty.Type)` to wrap
+  an existing cty type as a constraint.
 - **Nested capsule types** — a named capsule type (and aliases over one) now
   composes inside collections and structural types (`list(widget)`,
   `object({ w = widget })`), enforced element-wise by identity. Open/predicate
