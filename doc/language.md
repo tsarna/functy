@@ -138,9 +138,14 @@ annotation as a whole-annotation leaf (`w: widget`, `e: ctx`). Two flavors:
   "an object that carries at least these attributes" — e.g. a context object with a
   marker capsule plus arbitrary other fields.
 
-Standalone (e.g. the `functy` CLI) registers no named types, so only the built-in
-grammar is available there. Nesting a named type inside a collection or structural
-type (`list(widget)`) is not yet supported.
+functy ships one built-in open type, **`error`** — an object with at least a string
+`message` (the shape `throw` raises and `catch` binds). It is usable in any
+annotation (`var err: error`, `func f(e: error)`), accepts a caught error or
+`null`, and rejects anything else.
+
+Standalone (e.g. the `functy` CLI) registers no other named types, so only the
+built-in grammar plus `error` is available there. Nesting a named/open type inside a
+collection or structural type (`list(widget)`, `list(error)`) is not yet supported.
 
 ### `null` as a type
 

@@ -10,6 +10,11 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Built-in `error` type** — an open type (an object with at least a string
+  `message`, the shape `throw` raises and `catch` binds), usable in any annotation
+  (`var err: error`, `func f(e: error)`). It accepts a caught error or `null` and
+  rejects anything else; `error` is a reserved type name. The `value, err = expr`
+  capture sugar (§13.4) remains future work.
 - **Strict typing** — opt-in requirements that type annotations be written
   (`any` still allowed, but explicit). Parser flags `RequireParamTypes`,
   `RequireReturnType`, `RequireDeclaredTypes`, and the in-source directives

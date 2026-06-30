@@ -1,6 +1,8 @@
 package functy
 
 import (
+	"fmt"
+
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
 )
@@ -51,6 +53,21 @@ func raisedError(sig *Signal, diags hcl.Diagnostics) (cty.Value, bool) {
 		return sig.Value, true
 	}
 	return cty.NilVal, false
+}
+
+// errorTypePredicate backs the built-in `error` type: an error value is an object
+// with at least a string `message` attribute (it may also carry `value` and other
+// attributes — the check is open and non-destructive). This is the shape that
+// throw raises and catch binds.
+func errorTypePredicate(v cty.Value) error {
+	ty := v.Type()
+	if !ty.IsObjectType() || !ty.HasAttribute("message") {
+		return fmt.Errorf("an error must be an object with a message attribute")
+	}
+	if mt := ty.AttributeType("message"); mt != cty.String && mt != cty.DynamicPseudoType {
+		return fmt.Errorf("the error message must be a string")
+	}
+	return nil
 }
 
 // errorMessage extracts a human-readable message from a functy error value for

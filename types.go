@@ -108,7 +108,10 @@ type typeEnv struct {
 }
 
 func newTypeEnv() *typeEnv {
-	return &typeEnv{named: make(map[string]TypeConstraint)}
+	e := &typeEnv{named: make(map[string]TypeConstraint)}
+	// `error` is a built-in open type: the shape throw raises and catch binds.
+	e.named["error"] = predicateConstraint{name: "error", pred: errorTypePredicate}
+	return e
 }
 
 // clone returns a copy of the environment. parseSources resolves a parse call's
@@ -128,7 +131,7 @@ func (e *typeEnv) clone() *typeEnv {
 var builtinTypeNames = map[string]bool{
 	"string": true, "bool": true, "number": true, "any": true, "null": true,
 	"list": true, "set": true, "map": true, "object": true, "tuple": true,
-	"optional": true,
+	"optional": true, "error": true,
 }
 
 func (e *typeEnv) registerType(name string, ty cty.Type) {
