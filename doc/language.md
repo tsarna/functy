@@ -143,9 +143,15 @@ functy ships one built-in open type, **`error`** — an object with at least a s
 annotation (`var err: error`, `func f(e: error)`), accepts a caught error or
 `null`, and rejects anything else.
 
+A named **capsule** type (and any alias over one) **composes** inside collections
+and structural types — `list(widget)`, `object({ w = widget })` — enforced
+element-wise by identity. An **open** type does not: it has no single concrete cty
+type and is heterogeneous (an open object can carry different extra attributes), so
+`error` and host open types may only be used as a whole annotation, not nested
+(`list(error)` is an error).
+
 Standalone (e.g. the `functy` CLI) registers no other named types, so only the
-built-in grammar plus `error` is available there. Nesting a named/open type inside a
-collection or structural type (`list(widget)`, `list(error)`) is not yet supported.
+built-in grammar plus `error` is available there.
 
 ### `null` as a type
 

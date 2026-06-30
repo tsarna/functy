@@ -10,6 +10,11 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Nested capsule types** — a named capsule type (and aliases over one) now
+  composes inside collections and structural types (`list(widget)`,
+  `object({ w = widget })`), enforced element-wise by identity. Open/predicate
+  types (`error`, host open types) remain whole-annotation leaves, since they have
+  no single concrete cty type and do not form homogeneous collections.
 - **Built-in `error` type** — an open type (an object with at least a string
   `message`, the shape `throw` raises and `catch` binds), usable in any annotation
   (`var err: error`, `func f(e: error)`). It accepts a caught error or `null` and

@@ -158,12 +158,38 @@ func TestUnknownTypeIsError(t *testing.T) {
 	parseErr(t, "func f(a: widget) { return a }") // widget not registered on a default parser
 }
 
-func TestNestedNamedTypeDeferred(t *testing.T) {
+func TestNestedCapsuleType(t *testing.T) {
 	wty := cty.Capsule("widget", reflect.TypeOf(widget{}))
+	w1 := cty.CapsuleVal(wty, &widget{id: "a"})
+	w2 := cty.CapsuleVal(wty, &widget{id: "b"})
 	p := NewParser().RegisterType("widget", wty)
-	// A named type nested inside a collection is not yet supported.
-	_, diags := p.Parse([]byte("func f(a: list(widget)) { return a }"), "test")
-	if !diags.HasErrors() {
-		t.Fatalf("expected nested named type to be rejected")
+
+	// A capsule type composes inside collections and structural types, enforced
+	// element-wise by identity.
+	funcs := compileWith(t, p, `func ids(ws: list(widget)) { return ws }
+func pick(o: object({ w = widget })) { return o.w }`)
+
+	got, err := funcs["ids"].Call([]cty.Value{cty.ListVal([]cty.Value{w1, w2})})
+	if err != nil {
+		t.Fatalf("list(widget) should be accepted: %v", err)
+	}
+	if got.LengthInt() != 2 {
+		t.Fatalf("expected 2 widgets, got %d", got.LengthInt())
+	}
+
+	// A list element of the wrong type is rejected.
+	bad := cty.TupleVal([]cty.Value{w1, cty.NumberIntVal(1)})
+	if _, err := funcs["ids"].Call([]cty.Value{bad}); err == nil {
+		t.Fatalf("a non-widget element should be rejected")
+	}
+
+	// Nested in an object attribute.
+	o := cty.ObjectVal(map[string]cty.Value{"w": w1})
+	gw, err := funcs["pick"].Call([]cty.Value{o})
+	if err != nil {
+		t.Fatalf("object({ w = widget }) should be accepted: %v", err)
+	}
+	if !gw.RawEquals(w1) {
+		t.Fatalf("expected the widget back")
 	}
 }

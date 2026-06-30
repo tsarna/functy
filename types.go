@@ -198,17 +198,24 @@ func (e *typeEnv) resolveCtyType(expr hcl.Expression) (cty.Type, hcl.Diagnostics
 				"null is only valid as a function return type.")
 		}
 		if c, ok := e.named[kw]; ok {
-			// A concrete alias (resolving to a plain cty.Type) may nest inside a
-			// collection or structural type; a host capsule/open named type may
-			// not (its non-destructive enforcement does not compose yet).
+			// A type with a concrete cty.Type composes inside a collection or
+			// structural type — a primitive/structural alias (convertConstraint),
+			// `any`, or a named capsule type (identityConstraint), all enforced by
+			// cty's own conversion (capsules convert only by identity / their own
+			// ops). An open predicate type (error, host open types) has no concrete
+			// cty.Type and would lose its non-destructive enforcement when nested —
+			// and does not compose into a homogeneous collection anyway — so it stays
+			// a whole-annotation leaf.
 			switch cc := c.(type) {
 			case convertConstraint:
+				return cc.ty, nil
+			case identityConstraint:
 				return cc.ty, nil
 			case anyConstraint:
 				return cty.DynamicPseudoType, nil
 			default:
-				return cty.NilType, typeDiag(expr, "Nested named type not supported",
-					fmt.Sprintf("the named type %q cannot yet appear inside a collection or structural type.", kw))
+				return cty.NilType, typeDiag(expr, "Open type cannot be nested",
+					fmt.Sprintf("the open type %q can only be used as a whole annotation, not inside a collection or structural type.", kw))
 			}
 		}
 		return cty.NilType, typeDiag(expr, "Unknown type", fmt.Sprintf("%q is not a known type.", kw))

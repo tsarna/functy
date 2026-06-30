@@ -100,13 +100,19 @@ func id(w: W) { return w }`)
 	}
 }
 
-func TestAliasOverCapsuleNonNestable(t *testing.T) {
+func TestAliasOverCapsuleNestable(t *testing.T) {
+	// An alias over a capsule type nests like the capsule itself.
 	wty := cty.Capsule("widget", reflect.TypeOf(widget{}))
+	w := cty.CapsuleVal(wty, &widget{id: "a"})
 	p := NewParser().RegisterType("widget", wty)
-	_, diags := p.Parse([]byte(`type W = widget
-func f(ws: list(W)) { return ws }`), "test")
-	if !diags.HasErrors() {
-		t.Fatalf("a capsule-typed alias should not be nestable")
+	funcs := compileWith(t, p, `type W = widget
+func first(ws: list(W)) { for v in ws { return v } return null }`)
+	got, err := funcs["first"].Call([]cty.Value{cty.ListVal([]cty.Value{w})})
+	if err != nil {
+		t.Fatalf("alias over a capsule should nest: %v", err)
+	}
+	if !got.RawEquals(w) {
+		t.Fatalf("expected the widget back")
 	}
 }
 
