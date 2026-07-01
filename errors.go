@@ -1,11 +1,40 @@
 package functy
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 )
+
+// ThrownError is the Go error a functy function returns at its cty.Function
+// boundary when an uncaught throw unwinds out of it. It carries the raw error
+// value so a functy catch (or a Go host, via errors.As) recovers the full error
+// object; Error() renders the message for any other caller.
+type ThrownError struct{ Value cty.Value }
+
+func (e *ThrownError) Error() string { return errorMessage(e.Value) }
+
+// thrownValueFromDiags recovers the original functy error value from a set of
+// diagnostics produced by evaluating a call to a functy function that threw. HCL
+// stashes the underlying call error on a diagnostic's Extra (exposed via
+// hclsyntax.FunctionCallDiagExtra); when that error is a *ThrownError, its raw
+// value is returned so structure survives the call boundary. ok is false for any
+// other failure (a genuine eval error, a host function error), which the caller
+// then wraps as plain diagnostic text.
+func thrownValueFromDiags(diags hcl.Diagnostics) (cty.Value, bool) {
+	for _, d := range diags {
+		if fce, ok := hcl.DiagnosticExtra[hclsyntax.FunctionCallDiagExtra](d); ok {
+			var te *ThrownError
+			if errors.As(fce.FunctionCallError(), &te) {
+				return te.Value, true
+			}
+		}
+	}
+	return cty.NilVal, false
+}
 
 // errorValue converts a thrown value into a functy error value: an object with
 // at least .message (string) and .value. Throwing a string yields
@@ -47,6 +76,11 @@ func errValueFromDiags(diags hcl.Diagnostics) cty.Value {
 // expression-evaluation failure (diagnostics) count as raised errors.
 func raisedError(sig *Signal, diags hcl.Diagnostics) (cty.Value, bool) {
 	if diags.HasErrors() {
+		// A throw that unwound out of a called functy function keeps its full
+		// structure; any other eval failure flattens to diagnostic text.
+		if v, ok := thrownValueFromDiags(diags); ok {
+			return v, true
+		}
 		return errValueFromDiags(diags), true
 	}
 	if sig != nil && sig.Kind == SignalError {

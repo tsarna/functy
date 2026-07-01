@@ -20,10 +20,14 @@ tagged. Until then, everything lives under **Unreleased**.
   survive). A catch-all (no type, no guard) must be the last clause; an unmatched
   error re-raises after `finally`, and `throw e` inside a clause rethrows. The
   `Try` AST now carries `Catches []CatchClause` (replacing `HasCatch` /
-  `CatchName` / `Catch`). Known limitation: a thrown error retains its structure
-  (`code`, `kind`, …) only when caught within the same function it was thrown in;
-  crossing a function-call boundary flattens it to `{ message, value }`, so type
-  filters and guards on other attributes match only same-function throws.
+  `CatchName` / `Catch`).
+- **Structured errors survive function-call boundaries.** A thrown error now keeps
+  its full object (`code`, `kind`, custom attributes) when caught from a *called*
+  function, not just when thrown in the same function — so typed/guarded `catch`
+  works across calls. Uncaught throws surface at a function's `cty.Function` boundary
+  as the exported `ThrownError` (carrying the error value); a functy caller recovers
+  it automatically, and a Go host can via `errors.As(err, &functy.ThrownError{})`.
+  Genuine evaluation failures still flatten to `{ message, value }`.
 - **Labeled `break` / `continue`.** A `for`/`while` may carry a `label:` prefix,
   and `break label` / `continue label` then target that loop instead of the
   innermost one — the standard way to exit or advance an outer loop from a nested

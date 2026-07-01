@@ -536,14 +536,13 @@ try {
 - **Unmatched** — if no clause matches, the error re-raises and propagates outward
   after `finally`, exactly as if there were no catch. To handle some and rethrow
   the rest, `throw e` inside a clause re-raises the caught error.
-
-> **Current limitation — structured errors across function calls.** A thrown error
-> keeps its full structure (`code`, `kind`, custom attributes) only when it is
-> caught **within the same function** it was thrown in. When an error unwinds past a
-> function-call boundary — e.g. `catch`-ing an error from `return callee(x)` — it is
-> flattened to `{ message = <text>, value = null }`, so type filters and guards that
-> rely on other attributes will not match it. Catch such errors in the function that
-> throws them, or match on `.message`, until this is addressed.
+- **Across function calls** — a thrown error keeps its full structure (`code`,
+  `kind`, custom attributes) even when caught from a *called* function, e.g.
+  `catch e: object({ code = number })` on `return callee(x)`. Only genuine
+  evaluation failures (a type conversion, a failing host function) arrive as the
+  bare `{ message, value }` shape. (A Go host embedding functy can recover the same
+  structured value from a call error with
+  `errors.As(err, &functy.ThrownError{})` — `.Value` is the error object.)
 
 This complements HCL's expression-level `try()`/`can()`, which remain available
 inside any expression.

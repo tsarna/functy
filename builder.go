@@ -125,10 +125,16 @@ func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 			return cty.NilVal, fmt.Errorf("%s", ddiags.Error())
 		}
 		if diags.HasErrors() {
+			// An uncaught throw from a nested functy call arrives as diagnostics
+			// carrying the raw error value; re-emit it so structure survives this
+			// boundary too. Any other eval failure stays plain text.
+			if v, ok := thrownValueFromDiags(diags); ok {
+				return cty.NilVal, &ThrownError{Value: v}
+			}
 			return cty.NilVal, fmt.Errorf("%s", diags.Error())
 		}
 		if sig != nil && sig.Kind == SignalError {
-			return cty.NilVal, fmt.Errorf("%s", errorMessage(sig.Value))
+			return cty.NilVal, &ThrownError{Value: sig.Value}
 		}
 
 		result := cty.NullVal(cty.DynamicPseudoType)
