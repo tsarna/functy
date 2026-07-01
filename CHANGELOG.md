@@ -24,6 +24,15 @@ tagged. Until then, everything lives under **Unreleased**.
   module dependency. See `doc/stdlib.md`. (The `switch()` builtin is
   expression-position only, since `switch` is a statement keyword.)
 
+### Changed
+
+- **Error `value` attribute is now present only when meaningful.** Previously every
+  string/eval-failure error carried a null `value` (and object throws carried none at
+  all). Now `value` appears **only** when you throw a bare non-string/non-object value
+  (`throw 42` → `{ message = "error", value = 42, range }`), the sole case it is used;
+  string, object, and evaluation errors no longer carry it. The `error` type still
+  requires only `.message`.
+
 ## [0.3.0] - 2026-07-01
 
 ### Added

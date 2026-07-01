@@ -471,9 +471,11 @@ throw { message = "bad input", code = 422 }
 ```
 
 `throw` raises an error and unwinds the function until caught. Throwing a string
-produces the error value `{ message = <string>, value = null }`; throwing an
-object uses that object directly (it should carry a `message`). An uncaught error
-surfaces at the call site as an error.
+produces the error value `{ message = <string> }`; throwing an object uses that
+object directly (it should carry a `message`); throwing any other value — a number,
+bool, list, … — wraps it as `{ message = "error", value = <the value> }` so the raw
+payload is recoverable via `.value` (the only case an error carries a `value`). An
+uncaught error surfaces at the call site as an error.
 
 Every caught error also carries a **`range`** — where it was raised — shaped
 `{ filename, start = { line, column, byte }, end = { … } }` (so
@@ -582,7 +584,7 @@ try {
 - The right-hand side is evaluated **once**. Any failure — a `throw` unwinding out
   of a called function, a type-conversion failure, a failing host function — is
   caught and bound to the error target (the same object shape `catch` binds, with
-  at least `.message` and `.value`); it does not propagate past the statement.
+  at least `.message`); it does not propagate past the statement.
 - Both non-blank targets must **already be declared**, like a plain `=`. The
   `:=` form declares them instead: `val, err := risky(x)` is the capture above
   preceded by `var val` (dynamic) and `var err: error` — the value target is

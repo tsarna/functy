@@ -65,24 +65,23 @@ func withAttr(obj cty.Value, name string, val cty.Value) cty.Value {
 }
 
 // errorValue converts a thrown value into a functy error value: an object with at
-// least .message (string), .value, and .range (the raise site). Throwing a string
-// yields { message = <string>, value = null }; throwing an object uses it directly;
-// any other value is wrapped with a generic message and the value preserved. The
-// raise site is stamped as `range`, except on an object that already carries one
-// (so a rethrown error keeps its original site).
+// least .message (string) and .range (the raise site). Throwing a string yields
+// { message = <string> }; throwing an object uses it directly; throwing any other
+// value (a number, bool, list, …) wraps it as { message = "error", value = <it> }
+// so the raw payload is recoverable via .value — the only case an error carries a
+// `value`. The raise site is stamped as `range`, except on an object that already
+// carries one (so a rethrown error keeps its original site).
 func errorValue(v cty.Value, rng hcl.Range) cty.Value {
 	r := rangeToCty(rng)
 	switch {
 	case v.IsNull():
 		return cty.ObjectVal(map[string]cty.Value{
 			"message": cty.StringVal("error"),
-			"value":   cty.NullVal(cty.DynamicPseudoType),
 			"range":   r,
 		})
 	case v.Type() == cty.String:
 		return cty.ObjectVal(map[string]cty.Value{
 			"message": v,
-			"value":   cty.NullVal(cty.DynamicPseudoType),
 			"range":   r,
 		})
 	case v.Type().IsObjectType():
@@ -105,7 +104,6 @@ func errorValue(v cty.Value, rng hcl.Range) cty.Value {
 func errValueFromDiags(diags hcl.Diagnostics) cty.Value {
 	return cty.ObjectVal(map[string]cty.Value{
 		"message": cty.StringVal(diags.Error()),
-		"value":   cty.NullVal(cty.DynamicPseudoType),
 		"range":   diagRange(diags),
 	})
 }

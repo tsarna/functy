@@ -47,6 +47,22 @@ func TestThrowObjectCaught(t *testing.T) {
 	wantNum(t, call(t, funcs, "f"), 422)
 }
 
+func TestThrowBarePayloadValue(t *testing.T) {
+	// Throwing a non-string/non-object value wraps it so .value recovers it.
+	funcs := compileFuncs(t, `func f() -> number {
+        try { throw 42 } catch e { return e.value }
+    }`)
+	wantNum(t, call(t, funcs, "f"), 42)
+}
+
+func TestThrowStringHasNoValue(t *testing.T) {
+	// A string throw carries no value attribute; accessing it is an error.
+	funcs := compileFuncs(t, `func f() -> number {
+        try { throw "x" } catch e { return e.value }
+    }`)
+	callErr(t, funcs, "f")
+}
+
 func TestUncaughtPropagates(t *testing.T) {
 	funcs := compileFuncs(t, `func f() { throw "nope" }`)
 	fn := funcs["f"]
