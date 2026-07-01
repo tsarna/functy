@@ -125,6 +125,11 @@ func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 			return cty.NilVal, fmt.Errorf("%s", ddiags.Error())
 		}
 		if diags.HasErrors() {
+			// A `skip` unwinding out (directly or through a called function) is not
+			// a failure; re-emit it so a test runner can classify it as skipped.
+			if se, ok := skipFromDiags(diags); ok {
+				return cty.NilVal, se
+			}
 			// An uncaught throw from a nested functy call arrives as diagnostics
 			// carrying the raw error value; re-emit it so structure survives this
 			// boundary too. Any other eval failure stays plain text.

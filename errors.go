@@ -22,6 +22,34 @@ func (e *ThrownError) Error() string { return errorMessage(e.Value) }
 // diagnostic writer. It delegates to ErrorDiagnostics on the carried value.
 func (e *ThrownError) Diagnostics() hcl.Diagnostics { return ErrorDiagnostics(e.Value) }
 
+// SkipError is the Go error a functy function returns at its cty.Function boundary
+// when a `skip` call unwinds out of it. It is distinct from ThrownError (a skip is
+// not a failure): a test runner classifies it as skipped rather than failed. Reason
+// is the optional message passed to skip().
+type SkipError struct{ Reason string }
+
+func (e *SkipError) Error() string {
+	if e.Reason == "" {
+		return "test skipped"
+	}
+	return "test skipped: " + e.Reason
+}
+
+// skipFromDiags recovers a *SkipError raised by a `skip` call that unwound out of a
+// called function, mirroring thrownValueFromDiags: HCL stashes the underlying call
+// error on a diagnostic's Extra, and it is returned when it is a *SkipError.
+func skipFromDiags(diags hcl.Diagnostics) (*SkipError, bool) {
+	for _, d := range diags {
+		if fce, ok := hcl.DiagnosticExtra[hclsyntax.FunctionCallDiagExtra](d); ok {
+			var se *SkipError
+			if errors.As(fce.FunctionCallError(), &se) {
+				return se, true
+			}
+		}
+	}
+	return nil, false
+}
+
 // thrownValueFromDiags recovers the original functy error value from a set of
 // diagnostics produced by evaluating a call to a functy function that threw. HCL
 // stashes the underlying call error on a diagnostic's Extra (exposed via

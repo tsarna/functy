@@ -181,12 +181,15 @@ links the library directly and supplies its own richer context). Planned additio
 - **LSP / editor support** — diagnostics, hovers (using doc-comment metadata),
   go-to-definition, completion.
 - **Inline tests** — *shipped*: co-located `test "…" { … }` blocks (`Result.Tests`),
-  a core runner (`(*Result).RunTests` → `TestOutcome`), and the `functy test` CLI verb,
-  all built on the assert/error-diagnostics substrate (a failing test reports *where*
-  and *why*). See `doc/language.md#tests`. Remaining niceties: a `--run` / name filter
-  to run a subset; soft / non-fatal assertions or a `t`-style test context (today a
-  test stops at its first failure, like Go/pytest); and per-test or per-file
-  setup/teardown.
+  a core runner (`(*Result).RunTests` / `RunTestsMatching` → `TestOutcome`), the
+  `functy test` CLI verb (quiet/`-v` output with timings, `--run` name filter), and a
+  test-only `skip("reason")` builtin — all built on the assert/error-diagnostics
+  substrate (a failing test reports *where* and *why*). See `doc/language.md#tests`.
+  Per-test setup/teardown is already expressible (leading statements + `defer`).
+  Remaining niceties: soft / non-fatal assertions or a `t`-style test context (today a
+  test stops at its first failure, like Go/pytest); shared `beforeEach`-style setup
+  (fresh mutable fixtures per test); no-argument file discovery (`functy test` over
+  `*.cty` in the working dir); and machine-readable `--json` output for CI.
 - **Add-on package "functy-readiness" convention.** Sibling cty add-on packages
   (`bytes-cty-type`, `url-cty-funcs`, `rich-cty-types`, `time-cty-funcs`, …) should let
   a program that links *both* functy and the package register the package's type(s) in

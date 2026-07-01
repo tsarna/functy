@@ -94,15 +94,17 @@ break may only be used inside a for or while loop.
 
 Run every `test "..." { ... }` block defined in the source files (see
 [language.md](language.md#tests) for the block itself). A test **passes** if its body
-runs to completion and **fails** if an error — a failed `assert`, a `throw`, or an
-evaluation error — unwinds out of it. A failure is printed with source context (the
-failing line and, for a failed `assert`, the operand values); the command exits
-non-zero if any test fails.
+runs to completion, is **skipped** if it calls `skip(...)`, and **fails** if any other
+error — a failed `assert`, a `throw`, or an evaluation error — unwinds out of it. A
+failure is printed with source context (the failing line and, for a failed `assert`,
+the operand values); the command exits non-zero only if a test **fails** (a skip is not
+a failure).
 
-```
+By default the output is **quiet** — only failures are printed, followed by a summary:
+
+```code
 $ functy test examples/math.cty
-ok   add sums positives
-FAIL add handles negatives
+FAIL add handles negatives (117µs)
 Error: sum should be positive
 
   on examples/math.cty line 9:
@@ -110,8 +112,29 @@ Error: sum should be positive
 
 sum = -3
 
-2 passed, 1 failed
+2 passed, 1 failed, 0 skipped
 ```
+
+- **`-v` / `--verbose`** lists every test with its duration — `ok`, `SKIP` (with its
+  reason), and `FAIL`:
+
+  ```code
+  $ functy test -v examples/math.cty
+  ok   add sums positives (49µs)
+  FAIL add handles negatives (55µs)
+  …
+  SKIP work in progress: not implemented yet (2µs)
+
+  1 passed, 1 failed, 1 skipped
+  ```
+
+- **`--run PATTERN`** runs only the tests whose description matches the regular
+  expression `PATTERN`; the summary notes how many were deselected:
+
+  ```code
+  $ functy test --run sums examples/math.cty
+  1 passed, 0 failed, 0 skipped (2 deselected by --run)
+  ```
 
 ## Not yet implemented
 

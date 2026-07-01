@@ -91,6 +91,77 @@ test "fail" { assert(add(2, 3) == 6, "wrong") }`
 	}
 }
 
+func TestRunTestsSkip(t *testing.T) {
+	src := `test "direct skip" { skip("wip") }
+func helper() { skip("from helper") }
+test "skip via helper" { helper() }
+test "bare skip" { skip() }`
+	outcomes := compileAndRunTests(t, src)
+	if len(outcomes) != 3 {
+		t.Fatalf("got %d outcomes, want 3", len(outcomes))
+	}
+	for _, o := range outcomes {
+		if !o.Skipped {
+			t.Fatalf("test %q should be skipped, err=%v", o.Name, o.Err)
+		}
+		if o.Passed() || o.Failed() {
+			t.Fatalf("skipped test %q must be neither passed nor failed", o.Name)
+		}
+		if o.Diagnostics() != nil {
+			t.Fatalf("skipped test %q should have no diagnostics", o.Name)
+		}
+	}
+	if outcomes[0].SkipReason != "wip" {
+		t.Fatalf("reason = %q, want wip", outcomes[0].SkipReason)
+	}
+	if outcomes[1].SkipReason != "from helper" {
+		t.Fatalf("reason = %q, want 'from helper' (skip through a call)", outcomes[1].SkipReason)
+	}
+	if outcomes[2].SkipReason != "" {
+		t.Fatalf("bare skip reason = %q, want empty", outcomes[2].SkipReason)
+	}
+}
+
+func TestRunTestsMatchingFilters(t *testing.T) {
+	src := `test "alpha" { assert(true) }
+test "beta" { assert(true) }
+test "alphabet" { assert(true) }`
+	res, diags := NewParser().Parse([]byte(src), "t.cty")
+	if diags.HasErrors() {
+		t.Fatalf("parse: %s", diags.Error())
+	}
+	var ctx *hcl.EvalContext
+	funcs, _ := res.Compile(func() *hcl.EvalContext { return ctx })
+	all := testStdlib()
+	for k, v := range Stdlib() {
+		all[k] = v
+	}
+	for k, v := range funcs {
+		all[k] = v
+	}
+	ctx = &hcl.EvalContext{Functions: all, Variables: map[string]cty.Value{}}
+
+	outcomes := res.RunTestsMatching(func() *hcl.EvalContext { return ctx }, func(name string) bool {
+		return name == "alpha" || name == "alphabet"
+	})
+	if len(outcomes) != 2 {
+		t.Fatalf("filter should select 2 tests, got %d", len(outcomes))
+	}
+	if outcomes[0].Name != "alpha" || outcomes[1].Name != "alphabet" {
+		t.Fatalf("selected %q, %q", outcomes[0].Name, outcomes[1].Name)
+	}
+}
+
+func TestRunTestsRecordsDuration(t *testing.T) {
+	outcomes := compileAndRunTests(t, `test "t" { assert(true) }`)
+	if len(outcomes) != 1 {
+		t.Fatalf("got %d outcomes", len(outcomes))
+	}
+	if outcomes[0].Duration < 0 {
+		t.Fatalf("duration should be non-negative, got %v", outcomes[0].Duration)
+	}
+}
+
 func TestOutcomeDiagnostics(t *testing.T) {
 	rng := hcl.Range{Filename: "t.cty", Start: hcl.Pos{Line: 5, Column: 3, Byte: 40}, End: hcl.Pos{Line: 5, Column: 9, Byte: 46}}
 

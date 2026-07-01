@@ -151,6 +151,8 @@ func TestRunUncaughtAssertRendersDiagnostic(t *testing.T) {
 }
 
 func TestCLITestPass(t *testing.T) {
+	// A passing run exits 0 and reports the summary; quiet (default) does not list
+	// the passing test itself.
 	src := `func add(a: number, b: number) -> number { return a + b }
 test "sums" { assert(add(2, 3) == 5) }`
 	path := writeCty(t, "t.cty", src)
@@ -158,10 +160,11 @@ test "sums" { assert(add(2, 3) == 5) }`
 	if err != nil {
 		t.Fatalf("unexpected error: %v (out: %s)", err, out)
 	}
-	for _, want := range []string{"ok   sums", "1 passed, 0 failed"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("stdout missing %q; got:\n%s", want, out)
-		}
+	if !strings.Contains(out, "1 passed, 0 failed, 0 skipped") {
+		t.Fatalf("stdout missing summary; got:\n%s", out)
+	}
+	if strings.Contains(out, "ok   sums") {
+		t.Fatalf("quiet output should not list the passing test; got:\n%s", out)
 	}
 }
 
@@ -181,6 +184,79 @@ func TestCLITestFailRendersDetail(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q; got:\n%s", want, out)
 		}
+	}
+}
+
+func TestCLITestQuietHidesPasses(t *testing.T) {
+	// Quiet (default) prints only failures, not passing tests.
+	src := `test "passes" { assert(true) }
+test "fails" { var n = -3
+    assert(n > 0, "must be positive") }`
+	path := writeCty(t, "t.cty", src)
+	out, _, err := execCLI(t, "test", path)
+	if err == nil {
+		t.Fatalf("expected failure; out:\n%s", out)
+	}
+	if strings.Contains(out, "ok   passes") {
+		t.Fatalf("quiet output should not list passing tests; got:\n%s", out)
+	}
+	for _, want := range []string{"FAIL fails", "n = -3", "1 passed, 1 failed"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestCLITestVerboseListsAll(t *testing.T) {
+	src := `test "passes" { assert(true) }
+test "skipped" { skip("later") }`
+	path := writeCty(t, "t.cty", src)
+	out, _, err := execCLI(t, "test", "-v", path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v (out: %s)", err, out)
+	}
+	for _, want := range []string{"ok   passes", "SKIP skipped: later", "1 passed, 0 failed, 1 skipped"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestCLITestSkipDoesNotFail(t *testing.T) {
+	// A skipped test is not a failure: exit 0.
+	path := writeCty(t, "t.cty", `test "wip" { skip("todo") }`)
+	out, _, err := execCLI(t, "test", path)
+	if err != nil {
+		t.Fatalf("a skipped test should not fail the run: %v (out: %s)", err, out)
+	}
+	if !strings.Contains(out, "0 passed, 0 failed, 1 skipped") {
+		t.Fatalf("missing skip summary; got:\n%s", out)
+	}
+}
+
+func TestCLITestRunFilter(t *testing.T) {
+	src := `test "keep me" { assert(true) }
+test "drop me" { assert(true) }`
+	path := writeCty(t, "t.cty", src)
+	out, _, err := execCLI(t, "test", "-v", "--run", "keep", path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v (out: %s)", err, out)
+	}
+	for _, want := range []string{"ok   keep me", "1 passed, 0 failed, 0 skipped", "1 deselected by --run"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q; got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "drop me") {
+		t.Fatalf("deselected test should not run; got:\n%s", out)
+	}
+}
+
+func TestCLITestBadRunPattern(t *testing.T) {
+	path := writeCty(t, "t.cty", `test "t" { assert(true) }`)
+	_, _, err := execCLI(t, "test", "--run", "[", path)
+	if err == nil {
+		t.Fatal("expected an error for an invalid --run pattern")
 	}
 }
 

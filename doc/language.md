@@ -676,11 +676,20 @@ test "add is commutative" {
 }
 ```
 
-- **Pass/fail.** A test **passes** if its body runs to completion and **fails** if an
-  error unwinds out of it — a failed `assert`, an explicit `throw`, or an evaluation
-  error. Because `assert` raises a catchable error carrying the condition's source
-  range and operand values, a failing test reports *where* and *why* (e.g. `n = -3`).
-  Like Go/pytest, a test stops at its first failure.
+- **Pass/fail/skip.** A test **passes** if its body runs to completion, is **skipped**
+  if it calls `skip(...)`, and **fails** if any other error unwinds out of it — a
+  failed `assert`, an explicit `throw`, or an evaluation error. Because `assert` raises
+  a catchable error carrying the condition's source range and operand values, a failing
+  test reports *where* and *why* (e.g. `n = -3`). Like Go/pytest, a test stops at its
+  first failure.
+- **`skip("reason")`.** A test-only builtin that stops the current test and marks it
+  skipped (neither passed nor failed) — for work-in-progress or environment-gated
+  tests. The reason is optional (`skip()`), and `skip` may be called from a helper the
+  test invokes, not only directly in the body. `skip` exists only while running tests;
+  it is not available to `functy run`.
+- **Setup / teardown.** No special construct is needed: a test's setup is just the
+  leading statements of its body, and `defer` gives per-test teardown that runs even
+  when the test fails — `test "x" { var r = open(); defer close(r); … }`.
 - **Scope.** A test body sees everything the host's eval context provides: all
   functions defined in the sources (and any host/baseline functions), plus top-level
   `const`/`var`. It is compiled and run just like a niladic function.
@@ -689,9 +698,10 @@ test "add is commutative" {
   test description never collides with a function name. `test` is a *contextual*
   keyword — special only at top-level declaration position — so it remains usable as
   an ordinary identifier (`func test(...) { … }` still works).
-- **Running.** A host runs tests with `(*Result).RunTests(evalCtxFn)`, which returns a
-  `TestOutcome` per test (with a `Diagnostics()` for rendering failures). The `functy`
-  CLI exposes this as [`functy test`](cli.md#test).
+- **Running.** A host runs tests with `(*Result).RunTests(evalCtxFn)` (or
+  `RunTestsMatching` with a name filter), which returns a `TestOutcome` per test (with
+  `Passed`/`Failed`/`Skipped`, a `Duration`, and a `Diagnostics()` for rendering
+  failures). The `functy` CLI exposes this as [`functy test`](cli.md#test).
 
 ## Grammar
 

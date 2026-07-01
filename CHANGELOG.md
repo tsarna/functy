@@ -21,6 +21,14 @@ tagged. Until then, everything lives under **Unreleased**.
   (returning a `TestOutcome` per test, each with a `Diagnostics()` for rendering
   failures); the `functy test` CLI verb reports pass/fail with source context and exits
   non-zero on failure. See `doc/language.md#tests` and `doc/cli.md#test`.
+  - **`skip("reason")`** — a test-only builtin that marks the current test skipped
+    (neither passed nor failed), callable directly or from a helper the test invokes;
+    surfaces as the exported `SkipError`. `TestOutcome` gains `Skipped`/`SkipReason`,
+    `Failed()`, and a `Duration`.
+  - **`functy test --run PATTERN`** runs only tests whose description matches a regular
+    expression (core: `(*Result).RunTestsMatching`), and **`-v`/`--verbose`** lists
+    every test (`ok`/`SKIP`/`FAIL`) with per-test timings; the default output is quiet
+    (failures + summary only). Skips and `--run`-deselected tests are not failures.
 - **Render an uncaught error with source context — `functy.ErrorDiagnostics` /
   `(*ThrownError).Diagnostics()`.** An error that no `catch` handles unwinds to the
   host as a `*ThrownError`; these turn its carried value into `hcl.Diagnostics` (message
