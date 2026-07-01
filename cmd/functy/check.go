@@ -16,7 +16,7 @@ func checkCmd() *cobra.Command {
 			if len(args) == 0 {
 				return errors.New("no source files given")
 			}
-			_, fileMap, diags := loadProgram(args, baselineFunctions(io.Discard))
+			_, _, fileMap, diags := loadProgram(args, baselineFunctions(io.Discard))
 			writeDiags(cmd.ErrOrStderr(), fileMap, diags)
 			if diags.HasErrors() {
 				return errors.New("check failed")

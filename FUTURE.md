@@ -180,14 +180,13 @@ links the library directly and supplies its own richer context). Planned additio
   adoption-critical. Must preserve directive comments.
 - **LSP / editor support** — diagnostics, hovers (using doc-comment metadata),
   go-to-definition, completion.
-- **Inline tests** — co-located `test "…" { … }` blocks with assertions for functy
-  functions, aiding the "real language" maturity story (and runnable via the CLI).
-  The assertion + reporting substrate is in place: `assert` raises a catchable error
-  carrying `range` + operand `detail`, and `functy.ErrorDiagnostics(value)` renders any
-  caught error value with source context — so a runner catches (never crashes) and
-  reports *where* and *why* through the same formatter the host boundary uses. What
-  remains is parsing `test` blocks, collecting them into `Result`, and a `functy test`
-  runner/CLI verb.
+- **Inline tests** — *shipped*: co-located `test "…" { … }` blocks (`Result.Tests`),
+  a core runner (`(*Result).RunTests` → `TestOutcome`), and the `functy test` CLI verb,
+  all built on the assert/error-diagnostics substrate (a failing test reports *where*
+  and *why*). See `doc/language.md#tests`. Remaining niceties: a `--run` / name filter
+  to run a subset; soft / non-fatal assertions or a `t`-style test context (today a
+  test stops at its first failure, like Go/pytest); and per-test or per-file
+  setup/teardown.
 - **Add-on package "functy-readiness" convention.** Sibling cty add-on packages
   (`bytes-cty-type`, `url-cty-funcs`, `rich-cty-types`, `time-cty-funcs`, …) should let
   a program that links *both* functy and the package register the package's type(s) in

@@ -27,7 +27,7 @@ func runCmd() *cobra.Command {
 			}
 
 			baseline := baselineFunctions(cmd.OutOrStdout())
-			ctx, fileMap, diags := loadProgram(files, baseline)
+			_, ctx, fileMap, diags := loadProgram(files, baseline)
 			if diags.HasErrors() {
 				writeDiags(cmd.ErrOrStderr(), fileMap, diags)
 				return errors.New("compilation failed")

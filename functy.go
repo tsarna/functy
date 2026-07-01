@@ -197,6 +197,7 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 		r := pr.parseFile()
 		diags = diags.Extend(pr.diags)
 		merged.Funcs = append(merged.Funcs, r.Funcs...)
+		merged.Tests = append(merged.Tests, r.Tests...)
 		merged.Consts = append(merged.Consts, r.Consts...)
 		merged.Vars = append(merged.Vars, r.Vars...)
 	}
@@ -208,6 +209,7 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 // breaking callers.
 type Result struct {
 	Funcs  []*FuncDecl // parsed function declarations
+	Tests  []*TestDecl // parsed test blocks (not registered as callable functions)
 	Consts []Decl      // top-level const declarations (only when enabled)
 	Vars   []Decl      // top-level var declarations (only when enabled)
 	Types  []TypeAlias // top-level type aliases (project-scoped across all sources)

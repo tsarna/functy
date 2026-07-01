@@ -86,10 +86,19 @@ $ functy run math.cty --func add -- 2 3
 
 $ functy check math.cty
 ok
+
+$ functy test math.cty        # run co-located test "..." { ... } blocks
+ok   add sums two numbers
+1 passed, 0 failed
 ```
 
-See [doc/cli.md](doc/cli.md) for the full CLI reference and
-[doc/language.md](doc/language.md) for the language reference.
+Sources can carry co-located tests — `test "description" { ... }` blocks whose bodies
+use `assert` — run with `functy test` (or a host's `(*Result).RunTests`); a failing
+test reports the source line and operand values.
+
+See [doc/cli.md](doc/cli.md) for the full CLI reference,
+[doc/language.md](doc/language.md) for the language reference, and
+[doc/language.md#tests](doc/language.md#tests) for inline tests.
 
 ## Library usage
 

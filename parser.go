@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // parser is the recursive-descent statement parser. It walks the functy token
@@ -127,6 +128,10 @@ func (p *parser) parseFile() *Result {
 			// Type aliases are collected and resolved before this parse (see
 			// parseSources); here we just consume the declaration.
 			p.skipTypeAlias()
+		case t.Type == hclsyntax.TokenIdent && string(t.Bytes) == "test":
+			if td := p.parseTestDecl(); td != nil {
+				result.Tests = append(result.Tests, td)
+			}
 		default:
 			p.errf(t.Range, "Expected function declaration",
 				"Top-level functy declarations must be functions (func name(...) { ... }).")
@@ -166,6 +171,11 @@ func (p *parser) recoverToTopLevel() {
 	for !p.atEOF() {
 		t := p.cur()
 		if t.isKeyword("func") || t.isKeyword("const") || t.isKeyword("var") {
+			return
+		}
+		// Also sync on the contextual top-level keywords (idents, not reserved
+		// words) so an error in one block doesn't swallow a following test/type.
+		if t.Type == hclsyntax.TokenIdent && (string(t.Bytes) == "test" || string(t.Bytes) == "type") {
 			return
 		}
 		p.advance()
@@ -256,6 +266,45 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 	fn.Body = p.parseBlockBody()
 	p.voidReturn = prevVoid
 	return fn
+}
+
+// parseTestDecl parses a top-level `test "description" { … }` block. Like `type`,
+// `test` is a contextual keyword — special only at top-level declaration position —
+// so it stays usable as an ordinary identifier elsewhere. The description must be a
+// constant string; the body is parsed exactly like a function body.
+func (p *parser) parseTestDecl() *TestDecl {
+	kw := p.cur()
+	p.advance() // test
+
+	descExpr := p.parseExprStop(stopCond, "test description")
+	if descExpr == nil {
+		p.recoverToTopLevel()
+		return nil
+	}
+	name := ""
+	ok := true
+	if dv, diags := descExpr.Value(nil); diags.HasErrors() {
+		ok = false
+	} else if dv.IsNull() || !dv.IsKnown() || dv.Type() != cty.String {
+		ok = false
+	} else {
+		name = dv.AsString()
+	}
+	if !ok {
+		p.errf(descExpr.Range(), "Invalid test description",
+			`A test block's description must be a constant string, e.g. test "adds two numbers" { … }.`)
+	}
+
+	if p.cur().Type != hclsyntax.TokenOBrace {
+		p.errf(p.cur().Range, "Expected test body", "A test declaration must be followed by a { ... } body.")
+		p.recoverToTopLevel()
+		return nil
+	}
+	body := p.parseBlockBody()
+	if !ok {
+		return nil // description error already reported; body consumed to avoid cascade
+	}
+	return &TestDecl{Name: name, Body: body, DefRange: hcl.RangeBetween(kw.Range, p.tokens[p.pos-1].Range)}
 }
 
 func (p *parser) parseParams() []Param {

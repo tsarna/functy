@@ -13,6 +13,7 @@ go install github.com/tsarna/functy/cmd/functy@latest
 ```
 functy run [--func NAME] [--output json|hcl|raw] FILE... [-- ARG...]
 functy check FILE...
+functy test FILE...
 ```
 
 ## run
@@ -87,6 +88,29 @@ Error: break outside loop
    2:   break
 
 break may only be used inside a for or while loop.
+```
+
+## test
+
+Run every `test "..." { ... }` block defined in the source files (see
+[language.md](language.md#tests) for the block itself). A test **passes** if its body
+runs to completion and **fails** if an error — a failed `assert`, a `throw`, or an
+evaluation error — unwinds out of it. A failure is printed with source context (the
+failing line and, for a failed `assert`, the operand values); the command exits
+non-zero if any test fails.
+
+```
+$ functy test examples/math.cty
+ok   add sums positives
+FAIL add handles negatives
+Error: sum should be positive
+
+  on examples/math.cty line 9:
+   9:     assert(sum > 0, "sum should be positive")
+
+sum = -3
+
+2 passed, 1 failed
 ```
 
 ## Not yet implemented

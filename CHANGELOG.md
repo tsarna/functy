@@ -10,6 +10,17 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Inline tests — `test "description" { … }` blocks + `functy test`.** A top-level
+  `test` block declares a co-located test whose body is ordinary functy statements
+  (calling functions, using `assert`). A test passes if its body runs to completion
+  and fails if an error unwinds — driven by `assert`, so a failure reports *where* and
+  *why* (source line + operand values). `test` is a *contextual* keyword (special only
+  at top-level declaration position), so it stays usable as an ordinary identifier;
+  test blocks are collected in `Result.Tests`, not the function namespace, so
+  `functy run` ignores them. A host runs them with `(*Result).RunTests(evalCtxFn)`
+  (returning a `TestOutcome` per test, each with a `Diagnostics()` for rendering
+  failures); the `functy test` CLI verb reports pass/fail with source context and exits
+  non-zero on failure. See `doc/language.md#tests` and `doc/cli.md#test`.
 - **Render an uncaught error with source context — `functy.ErrorDiagnostics` /
   `(*ThrownError).Diagnostics()`.** An error that no `catch` handles unwinds to the
   host as a `*ThrownError`; these turn its carried value into `hcl.Diagnostics` (message

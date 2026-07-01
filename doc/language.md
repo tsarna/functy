@@ -656,11 +656,49 @@ them into its own dependency-sorting and evaluation, then place the results into
 the shared eval context. The `functy` CLI enables this and evaluates the
 declarations (resolving cross-references in any order) into the run context.
 
+## Tests
+
+A `test "description" { … }` block declares a co-located test. Its body is ordinary
+functy statements, so it can call the functions under test, declare locals, and use
+`assert` — the natural way to express expectations:
+
+```functy
+func add(a: number, b: number) -> number { return a + b }
+
+test "add sums two numbers" {
+    assert(add(2, 3) == 5)
+}
+
+test "add is commutative" {
+    var x = add(2, 3)
+    var y = add(3, 2)
+    assert(x == y, "add should be commutative")
+}
+```
+
+- **Pass/fail.** A test **passes** if its body runs to completion and **fails** if an
+  error unwinds out of it — a failed `assert`, an explicit `throw`, or an evaluation
+  error. Because `assert` raises a catchable error carrying the condition's source
+  range and operand values, a failing test reports *where* and *why* (e.g. `n = -3`).
+  Like Go/pytest, a test stops at its first failure.
+- **Scope.** A test body sees everything the host's eval context provides: all
+  functions defined in the sources (and any host/baseline functions), plus top-level
+  `const`/`var`. It is compiled and run just like a niladic function.
+- **Not callable.** `test` blocks are collected separately (`Result.Tests`) and are
+  **not** registered in the function namespace, so `functy run` ignores them and a
+  test description never collides with a function name. `test` is a *contextual*
+  keyword — special only at top-level declaration position — so it remains usable as
+  an ordinary identifier (`func test(...) { … }` still works).
+- **Running.** A host runs tests with `(*Result).RunTests(evalCtxFn)`, which returns a
+  `TestOutcome` per test (with a `Diagnostics()` for rendering failures). The `functy`
+  CLI exposes this as [`functy test`](cli.md#test).
+
 ## Grammar
 
 ```ebnf
-File        = { FuncDecl } .
+File        = { FuncDecl | TestDecl } .
 FuncDecl    = "func" ident "(" [ ParamList ] ")" [ "->" Type ] Block .
+TestDecl    = "test" string Block .
 ParamList   = Param { "," Param } [ "," Variadic ] | Variadic .
 Param       = ident [ ":" Type ] [ "=" Expr ] .
 Variadic    = "*" ident [ ":" Type ] .

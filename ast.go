@@ -13,6 +13,18 @@ type FuncDecl struct {
 	DefRange hcl.Range
 }
 
+// TestDecl is a top-level `test "description" { … }` block. Its body is ordinary
+// functy statements; the test passes if the body runs to completion and fails if an
+// error (a failed assert, a throw, an eval error) unwinds out of it. Tests are not
+// registered in the callable function namespace.
+type TestDecl struct {
+	Name     string      // the test description (a string literal)
+	Body     []Statement // body statements, like a function body
+	DefRange hcl.Range   // spans `test` … closing `}`
+}
+
+func (t *TestDecl) srcRange() hcl.Range { return t.DefRange }
+
 // Param is a single function parameter.
 //
 // A parameter is required unless it has a Default or is Variadic. A typed

@@ -150,6 +150,54 @@ func TestRunUncaughtAssertRendersDiagnostic(t *testing.T) {
 	}
 }
 
+func TestCLITestPass(t *testing.T) {
+	src := `func add(a: number, b: number) -> number { return a + b }
+test "sums" { assert(add(2, 3) == 5) }`
+	path := writeCty(t, "t.cty", src)
+	out, _, err := execCLI(t, "test", path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v (out: %s)", err, out)
+	}
+	for _, want := range []string{"ok   sums", "1 passed, 0 failed"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestCLITestFailRendersDetail(t *testing.T) {
+	// A failing assertion in a test reports FAIL, the message, the operand detail,
+	// and a non-zero exit.
+	src := `test "positivity" {
+    var n = -3
+    assert(n > 0, "must be positive")
+}`
+	path := writeCty(t, "t.cty", src)
+	out, _, err := execCLI(t, "test", path)
+	if err == nil {
+		t.Fatalf("expected a non-zero exit for a failing test; out:\n%s", out)
+	}
+	for _, want := range []string{"FAIL positivity", "must be positive", "n = -3", "0 passed, 1 failed"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestCLIRunIgnoresTests(t *testing.T) {
+	// `functy run` does not execute test blocks.
+	src := `func main() -> number { return 7 }
+test "would fail if run" { assert(false, "should not execute") }`
+	path := writeCty(t, "t.cty", src)
+	out, _, err := execCLI(t, "run", "--output", "raw", path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(out) != "7" {
+		t.Fatalf("got %q, want 7 (tests must not run)", out)
+	}
+}
+
 func TestRunMissingEntry(t *testing.T) {
 	path := writeCty(t, "m.cty", "func other() { return 1 }")
 	_, _, err := execCLI(t, "run", path)

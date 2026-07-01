@@ -17,8 +17,9 @@ import (
 // declared near their point of use. It returns the assembled eval context
 // (baseline + compiled functy functions, and the evaluated declarations as
 // variables), a filename->file map for rendering diagnostics with source
-// snippets, and any diagnostics produced along the way.
-func loadProgram(paths []string, baseline map[string]function.Function) (*hcl.EvalContext, map[string]*hcl.File, hcl.Diagnostics) {
+// snippets, the parsed Result (carrying test blocks and declarations), and any
+// diagnostics produced along the way.
+func loadProgram(paths []string, baseline map[string]function.Function) (*functy.Result, *hcl.EvalContext, map[string]*hcl.File, hcl.Diagnostics) {
 	sources, diags := functy.ParseSources(paths)
 
 	files := make(map[string]*hcl.File, len(sources))
@@ -26,7 +27,7 @@ func loadProgram(paths []string, baseline map[string]function.Function) (*hcl.Ev
 		files[s.Filename] = &hcl.File{Bytes: s.Bytes}
 	}
 	if diags.HasErrors() {
-		return nil, files, diags
+		return nil, nil, files, diags
 	}
 
 	var ctx *hcl.EvalContext
@@ -64,7 +65,7 @@ func loadProgram(paths []string, baseline map[string]function.Function) (*hcl.Ev
 	decls := append(append([]functy.Decl{}, res.Consts...), res.Vars...)
 	diags = diags.Extend(evalTopLevelDecls(decls, ctx))
 
-	return ctx, files, diags
+	return res, ctx, files, diags
 }
 
 // evalTopLevelDecls evaluates collected const/var declarations into ctx.Variables.
