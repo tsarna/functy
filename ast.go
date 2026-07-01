@@ -173,15 +173,27 @@ type Defer struct {
 	SrcRange hcl.Range
 }
 
-// Try runs Body, optionally routing a raised error to a catch block and always
-// running a finally block. At least one of Catch/Finally is present.
+// Try runs Body, routing a raised error through its catch clauses (first match
+// wins) and always running a finally block. At least one of Catches/Finally is
+// present.
 type Try struct {
-	Body      []Statement
-	HasCatch  bool
-	CatchName string // error binding name; "" when omitted (catch { ... })
-	Catch     []Statement
-	Finally   []Statement
-	SrcRange  hcl.Range
+	Body     []Statement
+	Catches  []CatchClause
+	Finally  []Statement
+	SrcRange hcl.Range
+}
+
+// CatchClause is one `catch [name] [: type] [if guard] { ... }` clause. It matches
+// a raised error iff its type filter's Coerce succeeds (Type == nil matches any
+// shape) and its guard evaluates true (Guard == nil is unconditional); a clause
+// with both Type and Guard nil is the catch-all. The bound name receives the raw
+// error value (the filter is a gate, not a cast).
+type CatchClause struct {
+	Name     string         // "" when omitted
+	Type     TypeConstraint // nil = no type filter
+	Guard    hcl.Expression // nil = no guard
+	Body     []Statement
+	SrcRange hcl.Range
 }
 
 // Break exits an enclosing loop: the innermost one, or the loop named by Label.

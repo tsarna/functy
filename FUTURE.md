@@ -162,7 +162,30 @@ error), not a silent semantic swap.
 
 ## Error handling
 
-- **Typed / multiple `catch` clauses** (match on error shape / kind).
+- **Preserve structured errors across function-call boundaries.** When a functy
+  function `throw`s and the error unwinds past a `cty.Function` call boundary (e.g.
+  `return callee(x)` in the caller's `try`), it surfaces as a Go call error and is
+  re-wrapped by `errValueFromDiags` into `{ message: <diagnostic text>, value: null }`
+  — the original object's attributes (`code`, `kind`, …) are lost. So a caught error
+  is only richly structured when thrown *within the same function* as the `try`. This
+  limits typed/guarded `catch` (which matches on error shape) across call boundaries.
+
+  The subtlety is that a custom sentinel Go error alone does **not** fix it: a functy
+  call site is an HCL expression (`callee(x)`), so the error crosses HCL's
+  expression-evaluation layer, which converts a function's Go error into
+  `hcl.Diagnostics` — strings, not the Go error. The structured value must survive
+  *that* boundary. Two viable paths: (a) ride the original error `cty.Value` through
+  `hcl.Diagnostic.Extra` and have functy's catch (`raisedError`, `errors.go`) pull it
+  back out; or (b) have functy intercept the call path itself rather than delegating
+  to plain HCL evaluation. Either way the return-of-a-thrown-error boundary
+  (`builder.go`) wraps the value in the sentinel.
+
+  The **non-functy caller contract is unchanged** and should stay that way: a thrown
+  error surfaces as an ordinary Go `error` (message string via `Error()`); the
+  structure is additive and opt-in — a Go host recovers it with
+  `errors.As(err, &ThrownError)`, and a pure-HCL caller simply sees the message, as
+  it does for any function error. The Go-error boundary is the *right* surface for a
+  generic caller; the fix only enriches it for those who look.
 - **`defer` argument snapshotting.** Evaluate a deferred call's arguments at `defer`
   time while deferring the call itself, matching Go. Requires expression decomposition
   machinery beyond a plain `hcl.Expression`.

@@ -491,14 +491,59 @@ try {
 
 - A `try` block runs its statements. If any statement raises an error — an
   explicit `throw` **or** an ordinary expression-evaluation failure (a failing
-  function, a type-conversion failure, etc.) — control transfers to `catch`.
-- `catch err { … }` binds the error value to `err` (an object with at least
-  `.message` and `.value`). The name is optional: `catch { … }` ignores it.
+  function, a type-conversion failure, etc.) — control transfers to the catch
+  clauses.
 - `finally { … }` runs unconditionally after the try (and catch, if it ran),
   including while a return/break/continue or an uncaught error unwinds through.
-- A `try` must have a `catch`, a `finally`, or both.
-- An error raised inside `catch` or `finally` propagates outward; a `finally`
+- A `try` must have at least one `catch`, a `finally`, or both.
+- An error raised inside a `catch` or `finally` propagates outward; a `finally`
   that itself returns or raises replaces whatever was in flight.
+
+#### Selective catch — `catch [name] [: type] [if guard]`
+
+A `try` may have **multiple catch clauses**, tried in order; the **first match
+wins**. Each clause may filter by type and/or a guard:
+
+```functy
+try {
+    process(req)
+} catch e: object({ code = number }) if e.code >= 500 {
+    retry()                       // errors carrying a numeric code >= 500
+} catch e: timeout {              // a host-registered open type, as a category
+    backoff()
+} catch e if e.kind == "user" {   // arbitrary predicate over the error
+    reject(e)
+} catch e {                       // catch-all — must be last
+    log_error("unhandled", { err = e.message })
+}
+```
+
+- **Binding** — `catch e { … }` binds the error to `e` (an object with at least
+  `.message`); the name is optional (`catch { … }`, `catch if cond { … }`). The
+  bound value is always the **raw** error — a `: type` filter is a *gate*, not a
+  cast, so all of the error's attributes survive.
+- **Type filter** — `catch e: T` runs the clause only if the error satisfies the
+  type `T`: a host-registered open type (an error *category*), a structural object
+  type (`object({ code = number })` — duck-typed on attributes), or `error`
+  (matches any error). A non-match falls through to the next clause.
+- **Guard** — `catch e if cond` runs the clause only if `cond` is true. A guard is
+  evaluated with the binding in scope; a guard that *itself* errors (e.g. reading
+  an attribute the error lacks) propagates — gate the shape with a `: type` filter
+  first when needed. Guards of earlier, non-matching clauses are evaluated (their
+  side effects happen), in order, until one matches.
+- **Catch-all** — a clause with no type and no guard matches every error and must
+  be the **last** clause (a later clause would be unreachable — a compile error).
+- **Unmatched** — if no clause matches, the error re-raises and propagates outward
+  after `finally`, exactly as if there were no catch. To handle some and rethrow
+  the rest, `throw e` inside a clause re-raises the caught error.
+
+> **Current limitation — structured errors across function calls.** A thrown error
+> keeps its full structure (`code`, `kind`, custom attributes) only when it is
+> caught **within the same function** it was thrown in. When an error unwinds past a
+> function-call boundary — e.g. `catch`-ing an error from `return callee(x)` — it is
+> flattened to `{ message = <text>, value = null }`, so type filters and guards that
+> rely on other attributes will not match it. Catch such errors in the function that
+> throws them, or match on `.message`, until this is addressed.
 
 This complements HCL's expression-level `try()`/`can()`, which remain available
 inside any expression.

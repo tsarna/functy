@@ -715,19 +715,22 @@ func (p *parser) parseTry() Statement {
 	}
 	tr.Body = p.parseBlockBody()
 
-	if p.cur().isKeyword("catch") {
-		p.advance() // catch
-		tr.HasCatch = true
-		// Optional error binding name before the block.
-		if p.cur().Type == hclsyntax.TokenIdent && !p.cur().isAnyKeyword() {
-			tr.CatchName = string(p.cur().Bytes)
-			p.advance()
-		}
-		if p.cur().Type != hclsyntax.TokenOBrace {
-			p.errf(p.cur().Range, "Expected {", "catch must be followed by a { ... } block.")
+	// Zero or more catch clauses, tried in order at runtime. A catch-all (no type
+	// filter and no guard) must be last, since a later clause is unreachable.
+	sawCatchAll := false
+	for p.cur().isKeyword("catch") {
+		c, ok := p.parseCatchClause()
+		if !ok {
 			return tr
 		}
-		tr.Catch = p.parseBlockBody()
+		if sawCatchAll {
+			p.errf(c.SrcRange, "Unreachable catch clause",
+				"A catch-all (a catch with no type filter or guard) must be the last clause.")
+		}
+		if c.Type == nil && c.Guard == nil {
+			sawCatchAll = true
+		}
+		tr.Catches = append(tr.Catches, c)
 	}
 
 	if p.cur().isKeyword("finally") {
@@ -739,10 +742,76 @@ func (p *parser) parseTry() Statement {
 		tr.Finally = p.parseBlockBody()
 	}
 
-	if !tr.HasCatch && tr.Finally == nil {
+	if len(tr.Catches) == 0 && tr.Finally == nil {
 		p.errf(start, "Incomplete try", "A try must have a catch and/or a finally block.")
 	}
 	return tr
+}
+
+// parseCatchClause parses one `catch [name] [: type] [if guard] { ... }` clause.
+// ok is false (with the parser left at the offending token) when the block is
+// missing, so parseTry can stop without looping forever.
+func (p *parser) parseCatchClause() (CatchClause, bool) {
+	c := CatchClause{SrcRange: p.cur().Range}
+	p.advance() // catch
+
+	// Optional binding name. `if` is a keyword, so it is not taken as the name —
+	// `catch if cond { ... }` is an unnamed, guarded clause.
+	if p.cur().Type == hclsyntax.TokenIdent && !p.cur().isAnyKeyword() {
+		c.Name = string(p.cur().Bytes)
+		p.advance()
+	}
+	// Optional type filter.
+	if p.cur().Type == hclsyntax.TokenColon {
+		p.advance()
+		c.Type = p.parseCatchType()
+	}
+	// Optional guard.
+	if p.cur().isKeyword("if") {
+		p.advance()
+		c.Guard = p.parseExprStop(stopCond, "catch guard")
+	}
+	if p.cur().Type != hclsyntax.TokenOBrace {
+		p.errf(p.cur().Range, "Expected {", "catch must be followed by a { ... } block.")
+		return c, false
+	}
+	c.Body = p.parseBlockBody()
+	return c, true
+}
+
+// parseCatchType parses the type filter after `catch [name] :`. Unlike parseType
+// it must also stop at the `if` guard keyword (a stopFunc sees only token types,
+// not text), so it scans the span directly and resolves it. Balanced brackets —
+// e.g. the braces of object({...}) — are at depth >= 1 and do not stop the scan.
+func (p *parser) parseCatchType() TypeConstraint {
+	start := p.cur()
+	if isTerminator(start.Type) || start.Type == hclsyntax.TokenOBrace || p.atEOF() {
+		p.errf(start.Range, "Expected type", "Expected a type annotation after ':' here.")
+		return nil
+	}
+	depth := 0
+	i := p.pos
+	for {
+		t := p.tokens[i]
+		if t.Type == hclsyntax.TokenEOF {
+			break
+		}
+		if depth == 0 {
+			if t.Type == hclsyntax.TokenOBrace || isTerminator(t.Type) ||
+				t.isKeyword("if") || isCloseBracket(t.Type) {
+				break
+			}
+		}
+		if isOpenBracket(t.Type) {
+			depth++
+		} else if isCloseBracket(t.Type) && depth > 0 {
+			depth--
+		}
+		i++
+	}
+	endByte := p.tokens[i].Range.Start.Byte
+	p.pos = i
+	return p.resolveTypeSpan(start.Range.Start.Byte, endByte, start.Range.Start)
 }
 
 func (p *parser) parseIf() Statement {
@@ -1162,7 +1231,23 @@ func (p *parser) parseType(allowNull bool) TypeConstraint {
 		p.errf(p.cur().Range, "Expected type", "Expected a type annotation here.")
 		return nil
 	}
-	expr, diags := hclsyntax.ParseExpression(p.src[sb:eb], p.filename, sp)
+	return p.resolveTypeSpanAllowNull(sb, eb, sp, allowNull)
+}
+
+// resolveTypeSpan parses the given source byte span as a type annotation and
+// resolves it to a constraint (nil on error). Shared by parseType and
+// parseCatchType.
+func (p *parser) resolveTypeSpan(startByte, endByte int, startPos hcl.Pos) TypeConstraint {
+	return p.resolveTypeSpanAllowNull(startByte, endByte, startPos, false)
+}
+
+func (p *parser) resolveTypeSpanAllowNull(startByte, endByte int, startPos hcl.Pos, allowNull bool) TypeConstraint {
+	if endByte <= startByte {
+		p.errf(hcl.Range{Filename: p.filename, Start: startPos, End: startPos},
+			"Expected type", "Expected a type annotation here.")
+		return nil
+	}
+	expr, diags := hclsyntax.ParseExpression(p.src[startByte:endByte], p.filename, startPos)
 	p.diags = p.diags.Extend(diags)
 	if diags.HasErrors() {
 		return nil

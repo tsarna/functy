@@ -402,14 +402,22 @@ func (ip *interp) execTry(s *Try, scope *Scope) (*Signal, hcl.Diagnostics) {
 	errVal, errored := raisedError(sig, diags)
 	if errored {
 		sig, diags = nil, nil
-		if s.HasCatch {
+		for _, c := range s.Catches {
 			catchScope := NewScope(scope)
-			if s.CatchName != "" {
-				_ = catchScope.Declare(s.CatchName, nil, errVal)
+			if c.Name != "" {
+				_ = catchScope.Declare(c.Name, nil, errVal) // raw error value
 			}
-			sig, diags = ip.execBlock(s.Catch, catchScope)
-			errored = false // handled (the catch itself may raise anew)
+			matched, mdiags := ip.clauseMatches(c, errVal, catchScope)
+			if mdiags.HasErrors() {
+				return nil, mdiags // a guard that itself errors propagates
+			}
+			if matched {
+				sig, diags = ip.execBlock(c.Body, catchScope)
+				errored = false // handled (the clause body may raise anew)
+				break
+			}
 		}
+		// errored stays true if no clause matched: re-raised below, after finally.
 	}
 
 	// finally runs unconditionally; an error or non-local exit within finally
@@ -430,6 +438,27 @@ func (ip *interp) execTry(s *Try, scope *Scope) (*Signal, hcl.Diagnostics) {
 		return &Signal{Kind: SignalError, Value: errVal}, nil
 	}
 	return sig, diags
+}
+
+// clauseMatches reports whether a catch clause handles errVal. The type filter
+// matches when its Coerce succeeds (a failed Coerce is a non-match, not an error);
+// the guard matches when it evaluates to a true value. A guard that errors yields
+// diagnostics (propagated by the caller). catchScope already binds the clause's
+// name to the raw error, so the guard may reference it.
+func (ip *interp) clauseMatches(c CatchClause, errVal cty.Value, catchScope *Scope) (bool, hcl.Diagnostics) {
+	if c.Type != nil {
+		if _, err := c.Type.Coerce(errVal); err != nil {
+			return false, nil
+		}
+	}
+	if c.Guard != nil {
+		v, diags := c.Guard.Value(scopeEvalContext(catchScope, ip.parentCtx))
+		if diags.HasErrors() {
+			return false, diags
+		}
+		return !v.IsNull() && v.True(), nil
+	}
+	return true, nil
 }
 
 func execThrow(s *Throw, ctx *hcl.EvalContext) (*Signal, hcl.Diagnostics) {

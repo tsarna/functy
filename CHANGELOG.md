@@ -10,6 +10,20 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Typed / multiple `catch` clauses.** A `try` may now have several `catch`
+  clauses, tried in order (first match wins), each optionally filtered by a type
+  (`catch e: T`) and/or a guard (`catch e if cond`). The type filter reuses the
+  type system as an error taxonomy — a host-registered open type is an error
+  category, a structural object type gives duck-typed matching, `error` matches
+  any — and the guard is an arbitrary expression over the bound error. The binding
+  is always the **raw** error (a `: T` filter is a gate, not a cast, so attributes
+  survive). A catch-all (no type, no guard) must be the last clause; an unmatched
+  error re-raises after `finally`, and `throw e` inside a clause rethrows. The
+  `Try` AST now carries `Catches []CatchClause` (replacing `HasCatch` /
+  `CatchName` / `Catch`). Known limitation: a thrown error retains its structure
+  (`code`, `kind`, …) only when caught within the same function it was thrown in;
+  crossing a function-call boundary flattens it to `{ message, value }`, so type
+  filters and guards on other attributes match only same-function throws.
 - **Labeled `break` / `continue`.** A `for`/`while` may carry a `label:` prefix,
   and `break label` / `continue label` then target that loop instead of the
   innermost one — the standard way to exit or advance an outer loop from a nested
