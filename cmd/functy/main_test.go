@@ -131,6 +131,25 @@ func TestCheckInvalid(t *testing.T) {
 	}
 }
 
+func TestRunUncaughtAssertRendersDiagnostic(t *testing.T) {
+	// An uncaught assertion surfaces as a source-located diagnostic: the message,
+	// the failing source line, and the captured operand values (its detail).
+	src := `func main(n: number) -> number {
+    assert(n > 0, "must be positive")
+    return n
+}`
+	path := writeCty(t, "a.cty", src)
+	_, errOut, err := execCLI(t, "run", path, "--", "-3")
+	if err == nil {
+		t.Fatalf("expected an error for the failed assertion")
+	}
+	for _, want := range []string{"must be positive", "line 2", "assert(n > 0", "n = -3"} {
+		if !strings.Contains(errOut, want) {
+			t.Fatalf("stderr missing %q; got:\n%s", want, errOut)
+		}
+	}
+}
+
 func TestRunMissingEntry(t *testing.T) {
 	path := writeCty(t, "m.cty", "func other() { return 1 }")
 	_, _, err := execCLI(t, "run", path)

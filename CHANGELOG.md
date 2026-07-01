@@ -10,6 +10,14 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Render an uncaught error with source context — `functy.ErrorDiagnostics` /
+  `(*ThrownError).Diagnostics()`.** An error that no `catch` handles unwinds to the
+  host as a `*ThrownError`; these turn its carried value into `hcl.Diagnostics` (message
+  → summary, the operand `detail` → detail, the `range` → `Subject`) for the standard
+  `hcl.NewDiagnosticTextWriter`, so a host renders the failing source line and operand
+  values instead of a flat message. The `functy run` CLI now does this for uncaught
+  errors. The renderer takes an error *value*, so it also serves a future inline-test
+  runner. (Adds `ctyToRange`, the inverse of the existing `rangeToCty`.)
 - **Standard library — `functy.Stdlib()` / `functy.StdlibExtras()`.** Dependency-free
   expression builtins a host merges into its eval context, making HCL expressions more
   capable: `typeof` (a value's type in functy's annotation grammar, e.g.

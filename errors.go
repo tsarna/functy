@@ -17,6 +17,11 @@ type ThrownError struct{ Value cty.Value }
 
 func (e *ThrownError) Error() string { return errorMessage(e.Value) }
 
+// Diagnostics renders the thrown error as hcl.Diagnostics so a host can print it with
+// source context (an underline under the failing expression) using the standard hcl
+// diagnostic writer. It delegates to ErrorDiagnostics on the carried value.
+func (e *ThrownError) Diagnostics() hcl.Diagnostics { return ErrorDiagnostics(e.Value) }
+
 // thrownValueFromDiags recovers the original functy error value from a set of
 // diagnostics produced by evaluating a call to a functy function that threw. HCL
 // stashes the underlying call error on a diagnostic's Extra (exposed via
@@ -52,6 +57,94 @@ func rangeToCty(rng hcl.Range) cty.Value {
 		"start":    pos(rng.Start),
 		"end":      pos(rng.End),
 	})
+}
+
+// ctyToRange is the inverse of rangeToCty: it reconstructs an hcl.Range from an
+// error's `range` attribute so a thrown error can be rendered as a source-underlining
+// diagnostic. It is defensive — ok is false for a null value, a non-object, or any
+// missing/ill-typed field — so a malformed or absent range degrades to "no underline"
+// rather than a panic.
+func ctyToRange(v cty.Value) (hcl.Range, bool) {
+	if v.IsNull() || !v.Type().IsObjectType() {
+		return hcl.Range{}, false
+	}
+	ty := v.Type()
+	if !ty.HasAttribute("filename") || !ty.HasAttribute("start") || !ty.HasAttribute("end") {
+		return hcl.Range{}, false
+	}
+	fn := v.GetAttr("filename")
+	if fn.IsNull() || fn.Type() != cty.String {
+		return hcl.Range{}, false
+	}
+	start, ok := ctyToPos(v.GetAttr("start"))
+	if !ok {
+		return hcl.Range{}, false
+	}
+	end, ok := ctyToPos(v.GetAttr("end"))
+	if !ok {
+		return hcl.Range{}, false
+	}
+	return hcl.Range{Filename: fn.AsString(), Start: start, End: end}, true
+}
+
+// ctyToPos reconstructs an hcl.Pos from a { line, column, byte } object.
+func ctyToPos(v cty.Value) (hcl.Pos, bool) {
+	if v.IsNull() || !v.Type().IsObjectType() {
+		return hcl.Pos{}, false
+	}
+	line, ok := attrInt(v, "line")
+	if !ok {
+		return hcl.Pos{}, false
+	}
+	col, ok := attrInt(v, "column")
+	if !ok {
+		return hcl.Pos{}, false
+	}
+	b, ok := attrInt(v, "byte")
+	if !ok {
+		return hcl.Pos{}, false
+	}
+	return hcl.Pos{Line: line, Column: col, Byte: b}, true
+}
+
+// attrInt extracts a named integer attribute from an object value.
+func attrInt(obj cty.Value, name string) (int, bool) {
+	if !obj.Type().HasAttribute(name) {
+		return 0, false
+	}
+	a := obj.GetAttr(name)
+	if a.IsNull() || a.Type() != cty.Number {
+		return 0, false
+	}
+	i, _ := a.AsBigFloat().Int64()
+	return int(i), true
+}
+
+// ErrorDiagnostics renders a functy error value as an hcl.Diagnostic so a host can
+// print it with source context (an underline under the failing expression) via the
+// standard hcl diagnostic writer. The message becomes the summary, the `detail`
+// attribute (e.g. an assert's operand values) becomes the diagnostic detail, and the
+// `range` attribute becomes the Subject — omitted (no underline) when absent or
+// malformed. It takes an error *value* so the same formatter serves the host boundary
+// (via ThrownError.Diagnostics) and any consumer that catches errors as values.
+func ErrorDiagnostics(errVal cty.Value) hcl.Diagnostics {
+	diag := &hcl.Diagnostic{
+		Severity: hcl.DiagError,
+		Summary:  errorMessage(errVal),
+	}
+	if errVal.Type().IsObjectType() {
+		if errVal.Type().HasAttribute("detail") {
+			if d := errVal.GetAttr("detail"); !d.IsNull() && d.Type() == cty.String {
+				diag.Detail = d.AsString()
+			}
+		}
+		if errVal.Type().HasAttribute("range") {
+			if rng, ok := ctyToRange(errVal.GetAttr("range")); ok {
+				diag.Subject = &rng
+			}
+		}
+	}
+	return hcl.Diagnostics{diag}
 }
 
 // withAttr returns a copy of an object value with one attribute added or replaced.

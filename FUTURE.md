@@ -16,14 +16,12 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
 
 - **`assert` diagnostic enrichment** — the `assert(cond, message?)` builtin is shipped,
   including **variables-only operand capture** (a failed assertion attaches `detail` +
-  `operands` for the variables the condition references — side-effect-free, see
-  `doc/stdlib.md`). Still open (see *Language* below): (a) **full sub-expression
+  `operands` for the variables the condition references — side-effect-free) and
+  **host-side rendering** of an uncaught error as an `hcl.Diagnostic` with source
+  context (`functy.ErrorDiagnostics` / `(*ThrownError).Diagnostics()`, used by the
+  `functy run` CLI — see `doc/stdlib.md`). Still open: **full sub-expression
   decomposition** — reporting `len(xs) = 2`, not just `xs`, by re-evaluating operand
-  sub-expressions; opt-in because it re-runs any function calls in the condition; and
-  (b) surfacing an **uncaught** assertion as a `Subject`/`Expression`-bearing diagnostic
-  that underlines the failed condition in-source (today an uncaught throw reaches the
-  host as a `ThrownError` carrying the message + range + operands, not a rendered
-  diagnostic).
+  sub-expressions; opt-in because it re-runs any function calls in the condition.
 - **`eval`** — evaluate a lazy / by-expression parameter; ships with the lazy
   `expr`-parameter story (see *Functions* below), since the two are the same feature
   from the author's side.
@@ -45,13 +43,14 @@ them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
   use — it receives `cond` *unevaluated* as an `hcl.Expression`, giving it `cond`'s exact
   source range (`.Range()`), which the raised (catchable) `error` carries. It also
   captures **operand values** — the variables the condition references, attached to the
-  error as `detail` + `operands` (via `expr.Variables()`, so side-effect-free). What
-  remains is the *rendered-diagnostic* half enabled by also holding the AST +
-  `EvalContext`: on an **uncaught** failure, emit a diagnostic whose `Subject` /
-  `Expression` / `EvalContext` make the host's standard diagnostic writer underline the
-  failed condition in-source. (Today an uncaught assertion surfaces at the `cty.Function`
-  boundary as a `ThrownError` carrying the message + range + operands, like any other
-  throw, not a rendered underline.) A further step is showing **sub-expression** values
+  error as `detail` + `operands` (via `expr.Variables()`, so side-effect-free). An
+  **uncaught** error also renders with source context: `functy.ErrorDiagnostics` /
+  `(*ThrownError).Diagnostics()` turn the carried value (message + range + `detail`)
+  into an `hcl.Diagnostic` whose `Subject` the standard diagnostic writer highlights in
+  the source line, used by the `functy run` CLI. (This renders from the error *value*,
+  not from a live `Expression`/`EvalContext` — the value-carried range/detail is the
+  only form available uniformly, since a cross-call recovered throw has no single
+  boundary expression.) A further step is showing **sub-expression** values
   (`len(xs) = 2`, not just `xs`) by walking the AST — opt-in, since it re-evaluates
   operand sub-expressions and thus re-runs any function calls in the condition. A
   dedicated `assert` *statement* was considered and rejected: the function gets the same
@@ -183,6 +182,12 @@ links the library directly and supplies its own richer context). Planned additio
   go-to-definition, completion.
 - **Inline tests** — co-located `test "…" { … }` blocks with assertions for functy
   functions, aiding the "real language" maturity story (and runnable via the CLI).
+  The assertion + reporting substrate is in place: `assert` raises a catchable error
+  carrying `range` + operand `detail`, and `functy.ErrorDiagnostics(value)` renders any
+  caught error value with source context — so a runner catches (never crashes) and
+  reports *where* and *why* through the same formatter the host boundary uses. What
+  remains is parsing `test` blocks, collecting them into `Result`, and a `functy test`
+  runner/CLI verb.
 - **Add-on package "functy-readiness" convention.** Sibling cty add-on packages
   (`bytes-cty-type`, `url-cty-funcs`, `rich-cty-types`, `time-cty-funcs`, …) should let
   a program that links *both* functy and the package register the package's type(s) in

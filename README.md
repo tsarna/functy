@@ -141,6 +141,12 @@ ambient values into one eval context. `functy.ParseSources` collects `.cty`
 sources from file paths, directories, or an `embed.FS`; `Parser.ParseAll`
 parses several sources into one `Result`.
 
+When a call returns an error, an uncaught functy `throw`/`assert` surfaces as a
+`*functy.ThrownError`; `errors.As(err, &te)` recovers it, and `te.Diagnostics()`
+(or `functy.ErrorDiagnostics(value)`) yields `hcl.Diagnostics` you can hand to
+`hcl.NewDiagnosticTextWriter` to print the failing source line — and, for a failed
+`assert`, the operand values — with source context instead of a flat message.
+
 functy also ships a small standard library of expression builtins —
 `functy.Stdlib()` (`typeof`, `typekind`, `cond`, `switch`, `error`, `assert`) and
 the opt-in `functy.StdlibExtras()` (`try`, `can`) — for a host to merge into that same

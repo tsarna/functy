@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/tsarna/functy"
@@ -168,11 +169,32 @@ func depsReady(d functy.Decl, names map[string]bool, available map[string]cty.Va
 	return true
 }
 
-// writeDiags renders diagnostics with source context to w.
+// writeDiags renders diagnostics with source context to w, colorizing (which is how
+// hcl's writer highlights the offending source span) only when w is an interactive
+// terminal.
 func writeDiags(w io.Writer, files map[string]*hcl.File, diags hcl.Diagnostics) {
 	if len(diags) == 0 {
 		return
 	}
-	wr := hcl.NewDiagnosticTextWriter(w, files, 78, false)
+	wr := hcl.NewDiagnosticTextWriter(w, files, 78, isTerminal(w))
 	_ = wr.WriteDiagnostics(diags)
+}
+
+// isTerminal reports whether w is an interactive terminal, so color is used only when
+// a human is watching (not when output is piped or redirected to a file). It honors
+// the NO_COLOR convention and detects a terminal dependency-free, by testing for a
+// character device — the standard heuristic when x/term / isatty aren't in the module.
+func isTerminal(w io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }

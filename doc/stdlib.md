@@ -128,6 +128,20 @@ side-effect-free. Consequently `assert(len(xs) > 3)` reports `xs`, not `len(xs)`
 condition that references no variables (`assert(1 > 2)`) attaches no `operands` /
 `detail`.
 
+When an assertion (or any error) is **uncaught** and reaches the host, it can be
+rendered with source context — the failing line plus the operand `detail` — through
+`functy.ErrorDiagnostics(value)` / `(*functy.ThrownError).Diagnostics()`, which feed
+the standard `hcl.NewDiagnosticTextWriter`. The `functy run` CLI does this:
+
+```
+Error: must be positive
+
+  on prog.cty line 2:
+   2:     assert(n > 0, "must be positive")
+
+n = -3
+```
+
 ## `StdlibExtras()` — opt-in
 
 Kept separate because their names collide with HCL's stock `tryfunc`; a host opts in

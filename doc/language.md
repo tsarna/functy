@@ -553,6 +553,13 @@ try {
   bare `{ message, value }` shape. (A Go host embedding functy can recover the same
   structured value from a call error with
   `errors.As(err, &functy.ThrownError{})` — `.Value` is the error object.)
+- **Uncaught, at the host boundary** — an error that no `catch` handles unwinds out
+  of the function as a `*functy.ThrownError`. A host can render it with source
+  context — the failing line and (for a failed `assert`) the operand `detail` — via
+  `te.Diagnostics()` (or `functy.ErrorDiagnostics(value)` for an error caught as a
+  value), which returns `hcl.Diagnostics` for the standard `hcl.NewDiagnosticTextWriter`.
+  The `functy run` CLI does this, so an uncaught error prints its source location and
+  detail rather than a flat message.
 
 This complements HCL's expression-level `try()`/`can()`, which remain available
 inside any expression.

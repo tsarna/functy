@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# The compiled CLI (shares the module name, so `go build` drops it at the repo root)
+/functy
+
 # Test binary, built with `go test -c`
 *.test
 

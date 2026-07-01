@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/spf13/cobra"
+	"github.com/tsarna/functy"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -45,6 +46,11 @@ func runCmd() *cobra.Command {
 
 			result, err := fn.Call(argVals)
 			if err != nil {
+				var te *functy.ThrownError
+				if errors.As(err, &te) {
+					writeDiags(cmd.ErrOrStderr(), fileMap, te.Diagnostics())
+					return errors.New("execution failed")
+				}
 				return fmt.Errorf("calling %q: %w", funcName, err)
 			}
 			return printResult(cmd.OutOrStdout(), result, output)
