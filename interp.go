@@ -156,9 +156,11 @@ func execCaptureAssign(s *CaptureAssign, scope *Scope, ctx *hcl.EvalContext) hcl
 
 	val, errVal := cty.NilVal, cty.NilVal
 	if v, diags := s.Expr.Value(ctx); diags.HasErrors() {
-		// Error path: val stays null, err carries the caught error.
+		// Error path: val stays null, err carries the caught error. Recover a
+		// structured error thrown by a called function (like try/catch), rather
+		// than flattening it to diagnostic text.
 		val = cty.NullVal(cty.DynamicPseudoType)
-		errVal = errValueFromDiags(diags)
+		errVal = errorFromDiags(diags)
 	} else {
 		// Success path: val carries the value, err is null.
 		val = v
@@ -466,7 +468,8 @@ func execThrow(s *Throw, ctx *hcl.EvalContext) (*Signal, hcl.Diagnostics) {
 	if diags.HasErrors() {
 		return nil, diags
 	}
-	return &Signal{Kind: SignalError, Value: errorValue(v)}, nil
+	rng := hcl.RangeBetween(s.SrcRange, s.Expr.Range())
+	return &Signal{Kind: SignalError, Value: errorValue(v, rng)}, nil
 }
 
 // runDefers evaluates the function's deferred expressions in LIFO order. A defer

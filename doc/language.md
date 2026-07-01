@@ -475,6 +475,14 @@ produces the error value `{ message = <string>, value = null }`; throwing an
 object uses that object directly (it should carry a `message`). An uncaught error
 surfaces at the call site as an error.
 
+Every caught error also carries a **`range`** — where it was raised — shaped
+`{ filename, start = { line, column, byte }, end = { … } }` (so
+`e.range.start.line`, `e.range.filename`). It is stamped at the `throw` (or at the
+failing expression, for an evaluation error), preserved across function-call
+boundaries and through a rethrow (`throw e` keeps the original site, not the
+rethrow site), and is `null` only when no source location is available. Throwing an
+object that already has a `range` keeps it.
+
 ### try / catch / finally
 
 ```functy

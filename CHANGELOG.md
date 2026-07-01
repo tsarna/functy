@@ -10,6 +10,14 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Errors carry a source `range`.** Every caught error now includes a `range`
+  attribute — `{ filename, start = { line, column, byte }, end = { … } }` — marking
+  where it was raised (the `throw`, or the failing expression for an evaluation
+  error). It is preserved across function-call boundaries and through a rethrow
+  (`throw e` keeps the original site), and is `null` when no location is available.
+  As part of this, `val, err = expr` now recovers a structured error thrown by a
+  called function (matching `try`/`catch`) instead of flattening it.
+
 - **Typed / multiple `catch` clauses.** A `try` may now have several `catch`
   clauses, tried in order (first match wins), each optionally filtered by a type
   (`catch e: T`) and/or a guard (`catch e if cond`). The type filter reuses the

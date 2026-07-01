@@ -36,39 +36,100 @@ func thrownValueFromDiags(diags hcl.Diagnostics) (cty.Value, bool) {
 	return cty.NilVal, false
 }
 
-// errorValue converts a thrown value into a functy error value: an object with
-// at least .message (string) and .value. Throwing a string yields
-// { message = <string>, value = null }; throwing an object uses it directly; any
-// other value is wrapped with a generic message and the value preserved.
-func errorValue(v cty.Value) cty.Value {
+// rangeToCty renders a source range as a functy value: { filename, start, end }
+// with start and end each { line, column, byte }. It is the shape of an error's
+// `range` attribute — the location where the error was raised.
+func rangeToCty(rng hcl.Range) cty.Value {
+	pos := func(p hcl.Pos) cty.Value {
+		return cty.ObjectVal(map[string]cty.Value{
+			"line":   cty.NumberIntVal(int64(p.Line)),
+			"column": cty.NumberIntVal(int64(p.Column)),
+			"byte":   cty.NumberIntVal(int64(p.Byte)),
+		})
+	}
+	return cty.ObjectVal(map[string]cty.Value{
+		"filename": cty.StringVal(rng.Filename),
+		"start":    pos(rng.Start),
+		"end":      pos(rng.End),
+	})
+}
+
+// withAttr returns a copy of an object value with one attribute added or replaced.
+func withAttr(obj cty.Value, name string, val cty.Value) cty.Value {
+	m := obj.AsValueMap()
+	if m == nil {
+		m = make(map[string]cty.Value, 1)
+	}
+	m[name] = val
+	return cty.ObjectVal(m)
+}
+
+// errorValue converts a thrown value into a functy error value: an object with at
+// least .message (string), .value, and .range (the raise site). Throwing a string
+// yields { message = <string>, value = null }; throwing an object uses it directly;
+// any other value is wrapped with a generic message and the value preserved. The
+// raise site is stamped as `range`, except on an object that already carries one
+// (so a rethrown error keeps its original site).
+func errorValue(v cty.Value, rng hcl.Range) cty.Value {
+	r := rangeToCty(rng)
 	switch {
 	case v.IsNull():
 		return cty.ObjectVal(map[string]cty.Value{
 			"message": cty.StringVal("error"),
 			"value":   cty.NullVal(cty.DynamicPseudoType),
+			"range":   r,
 		})
 	case v.Type() == cty.String:
 		return cty.ObjectVal(map[string]cty.Value{
 			"message": v,
 			"value":   cty.NullVal(cty.DynamicPseudoType),
+			"range":   r,
 		})
 	case v.Type().IsObjectType():
-		return v
+		if v.Type().HasAttribute("range") {
+			return v
+		}
+		return withAttr(v, "range", r)
 	default:
 		return cty.ObjectVal(map[string]cty.Value{
 			"message": cty.StringVal("error"),
 			"value":   v,
+			"range":   r,
 		})
 	}
 }
 
 // errValueFromDiags wraps an expression-evaluation failure as a functy error
-// value so try/catch can handle it like an explicit throw.
+// value so try/catch can handle it like an explicit throw. The `range` is taken
+// from the first diagnostic with a source subject, or null when none is available.
 func errValueFromDiags(diags hcl.Diagnostics) cty.Value {
 	return cty.ObjectVal(map[string]cty.Value{
 		"message": cty.StringVal(diags.Error()),
 		"value":   cty.NullVal(cty.DynamicPseudoType),
+		"range":   diagRange(diags),
 	})
+}
+
+// diagRange returns the range of the first diagnostic carrying a source subject,
+// as a functy range value, or null when none is available.
+func diagRange(diags hcl.Diagnostics) cty.Value {
+	for _, d := range diags {
+		if d.Subject != nil {
+			return rangeToCty(*d.Subject)
+		}
+	}
+	return cty.NullVal(cty.DynamicPseudoType)
+}
+
+// errorFromDiags turns a set of diagnostics into a functy error value: it recovers
+// the original structured error when the failure was a throw that unwound out of a
+// called functy function (preserving its attributes and range), otherwise it wraps
+// the diagnostic text. Shared by the try/catch and `val, err =` capture paths.
+func errorFromDiags(diags hcl.Diagnostics) cty.Value {
+	if v, ok := thrownValueFromDiags(diags); ok {
+		return v
+	}
+	return errValueFromDiags(diags)
 }
 
 // raisedError reports whether the outcome of a try body is an error, and if so
@@ -76,12 +137,7 @@ func errValueFromDiags(diags hcl.Diagnostics) cty.Value {
 // expression-evaluation failure (diagnostics) count as raised errors.
 func raisedError(sig *Signal, diags hcl.Diagnostics) (cty.Value, bool) {
 	if diags.HasErrors() {
-		// A throw that unwound out of a called functy function keeps its full
-		// structure; any other eval failure flattens to diagnostic text.
-		if v, ok := thrownValueFromDiags(diags); ok {
-			return v, true
-		}
-		return errValueFromDiags(diags), true
+		return errorFromDiags(diags), true
 	}
 	if sig != nil && sig.Kind == SignalError {
 		return sig.Value, true

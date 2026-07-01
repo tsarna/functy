@@ -174,9 +174,12 @@ functy, is the answer.
 ## Open questions
 
 - **Error value shape.** The `error` type is an object carrying at least a
-  string `message`. Open: should it also carry a source range or a structured
-  `code`? The type is an open type, so this is extensible later without breaking
-  existing programs.
+  string `message`. It now also carries a **`range`** (the raise site — see
+  `doc/language.md`, "throw"). Still open: a structured `code` (currently a user
+  convention via `throw { message, code }`, not imposed by functy), and a
+  cross-call **traceback** — a *chain* of ranges as the error unwinds through
+  calls, rather than only the innermost site. The type is open, so each stays
+  extensible without breaking existing programs.
 - **Set iteration index.** `for i, v in set` currently exposes a stable-order
   index, with the caveat that sets are unordered. Open: keep the index, or
   require `for v in set` only?
