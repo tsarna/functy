@@ -9,14 +9,18 @@ commitment, only a record of intent and rationale.
 
 ## Standard library
 
-functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `cond`,
-`switch`, `error`) and the opt-in `functy.StdlibExtras()` (`try`, `can`) — dependency-
-free builtins that make HCL expressions more capable (see `doc/stdlib.md`). Remaining
-additions to that library:
+functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `typekind`,
+`cond`, `switch`, `error`, `assert`) and the opt-in `functy.StdlibExtras()` (`try`,
+`can`) — dependency-free builtins that make HCL expressions more capable (see
+`doc/stdlib.md`). Remaining additions to that library:
 
-- **`assert`** — a diagnostic-rich check (see *Language* below). Raises a catchable
-  `error` when its condition is false, carrying the condition's source range (and,
-  eventually, pytest-style operand values). Deferred as the softest of the set.
+- **`assert` diagnostic enrichment** — the `assert(cond, message?)` builtin itself is
+  shipped (raises a catchable `error` carrying the condition's source range). Still
+  open is the *diagnostic-rich* half (see *Language* below): pytest-style operand
+  values, and surfacing an uncaught assertion as a `Subject`/`Expression`-bearing
+  diagnostic that underlines the failed condition in-source (today an uncaught throw
+  reaches the host as a `ThrownError` carrying the message + range, not a rendered
+  diagnostic).
 - **`eval`** — evaluate a lazy / by-expression parameter; ships with the lazy
   `expr`-parameter story (see *Functions* below), since the two are the same feature
   from the author's side.
@@ -32,19 +36,19 @@ them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
 
 - **Pure-expression-statement warning.** Warn when an expression statement is
   obviously side-effect-free (no function call) and its value is discarded.
-- **`assert(cond, message?)` built-in (diagnostic-rich).** A check that raises an
-  `error` (catchable, composes with `val, err =`) when `cond` is false. Implemented
-  as a built-in **function**, not a statement, using HCL's
-  `customdecode.ExpressionClosureType` — the same mechanism `try()` / `can()` use — so
-  it receives `cond` *unevaluated* as an `hcl.Expression` together with the
-  `EvalContext`. That gives it `cond`'s exact source range (`.Range()`) and AST, so it
-  evaluates the condition itself and, on failure, emits a diagnostic whose `Subject` /
-  `Expression` / `EvalContext` make the host's standard diagnostic writer underline the
-  failed condition in-source — optionally showing operand values pytest-style by
-  walking the AST. No new grammar, and it works because functy always evaluates within
-  an HCL `EvalContext`. A dedicated `assert` *statement* was considered and rejected:
-  the function gets the same source location and introspection, so the statement would
-  add only marginal value.
+- **`assert(cond, message?)` diagnostic enrichment.** The `assert` builtin ships (a
+  **function**, not a statement, in `Stdlib()` — see `doc/stdlib.md`): using HCL's
+  `customdecode.ExpressionClosureType` — the same mechanism `try()` / `can()` / `error()`
+  use — it receives `cond` *unevaluated* as an `hcl.Expression`, giving it `cond`'s exact
+  source range (`.Range()`), which the raised (catchable) `error` carries. What remains
+  is the *diagnostic-rich* half enabled by also holding the AST + `EvalContext`: on an
+  **uncaught** failure, emit a diagnostic whose `Subject` / `Expression` / `EvalContext`
+  make the host's standard diagnostic writer underline the failed condition in-source —
+  and optionally show operand values pytest-style by walking the AST. (Today an uncaught
+  assertion surfaces at the `cty.Function` boundary as a `ThrownError` carrying the
+  message + range, like any other throw, not a rendered underline.) A dedicated `assert`
+  *statement* was considered and rejected: the function gets the same source location and
+  introspection, so the statement would add only marginal value.
 
 ## Functions
 

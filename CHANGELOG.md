@@ -23,6 +23,14 @@ tagged. Until then, everything lives under **Unreleased**.
   each branch at most once. Uses `hcl/v2/ext/customdecode` and `ext/tryfunc` — no new
   module dependency. See `doc/stdlib.md`. (The `switch()` builtin is
   expression-position only, since `switch` is a statement keyword.)
+- **`assert(cond, message?)` in `Stdlib()`.** A runtime check that raises a
+  catchable error when `cond` is false — the expression-position analog of a guard.
+  The condition is received unevaluated, so the error carries the *condition's*
+  source `range`; on success it returns `true`. The optional `message` (a string or
+  object, like `error()`/`throw`) is lazy — evaluated only on failure — and defaults
+  to `"assertion failed"`. It composes with `try`/`catch` and `val, err =`, and a
+  condition that itself fails to evaluate propagates that error (a structured throw
+  survives) instead of masking it as an assertion failure.
 
 ### Changed
 

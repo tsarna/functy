@@ -13,7 +13,7 @@ import "github.com/tsarna/functy"
 
 ctx.Functions = merge(
     ctyStdlib,          // the cty standard library
-    functy.Stdlib(),    // typeof, cond, switch, error
+    functy.Stdlib(),    // typeof, typekind, cond, switch, error, assert
     functy.StdlibExtras(), // try, can   (opt-in)
     hostFunctions,      // your own
     compiledFuncs,      // functions compiled from .cty sources
@@ -81,6 +81,28 @@ and `val, err =`, and carries a source `range`:
 ```functy
 coalesce(config.host, error("host is required"))
 cond(code >= 500, error({ message = "server error", code = code }), body)
+```
+
+### `assert(cond, message?)`
+
+Raise a catchable error when `cond` is false — a runtime check in expression
+position. The condition is received unevaluated, so the error carries the
+**condition's** source `range` (a surfaced diagnostic underlines exactly what
+failed); on success `assert` returns `true`. The optional `message` — a string or an
+object, exactly like `error()`/`throw` — is itself lazy, evaluated **only on
+failure**; without one the message is `"assertion failed"`. It composes with
+`try`/`catch` and `val, err =`, and a condition that itself fails to evaluate
+propagates that error (a structured throw survives) rather than reporting an
+assertion failure.
+
+```functy
+assert(n > 0)                                   // -> error { message = "assertion failed", range }
+assert(port > 0, "port must be positive")       // string message
+assert(ok, { message = "denied", code = 403 })  // object message, like error()
+
+var _ok
+var err: error
+_ok, err = assert(valid(x), "invalid x")        // capture instead of unwinding
 ```
 
 ## `StdlibExtras()` — opt-in

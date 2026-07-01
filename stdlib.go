@@ -24,6 +24,7 @@ import (
 //   - cond(c1, r1, …, else)         lazy multi-branch conditional (single-eval)
 //   - switch(on, v1, r1, …, def?)   lazy value dispatch (single-eval)
 //   - error(v)                      raise an error from an expression
+//   - assert(cond, message?)        raise a catchable error when cond is false
 //
 // The name-colliding, opt-in try/can live in StdlibExtras() instead.
 func Stdlib() map[string]function.Function {
@@ -33,6 +34,7 @@ func Stdlib() map[string]function.Function {
 		"cond":     condFunc,
 		"switch":   switchFunc,
 		"error":    errorFunc,
+		"assert":   assertFunc,
 	}
 }
 
@@ -96,6 +98,70 @@ var errorFunc = function.New(&function.Spec{
 			return cty.NilVal, diagsToError("error", diags)
 		}
 		return cty.NilVal, &ThrownError{Value: errorValue(v, closure.Expression.Range())}
+	},
+})
+
+// assertFunc raises a catchable error when a condition is false — the
+// expression-position form of a runtime check. Like error() it composes with
+// try/catch and `val, err =`, and carries a source range: the range of the
+// *condition* expression, so a surfaced diagnostic underlines exactly what failed.
+//
+// Usage: assert(cond, message?). The condition is received unevaluated (a lazy
+// closure) so assert can capture its range; on success assert returns true. The
+// optional message — a string or object, exactly like error()/throw — is itself
+// lazy, so it is evaluated only when the assertion fails; without one the error
+// message is "assertion failed". A condition that fails to evaluate propagates that
+// error (recovering a structured throw) rather than reporting an assertion failure.
+var assertFunc = function.New(&function.Spec{
+	Description: "Assert that a condition holds: assert(cond, message?). Raises a catchable error (carrying the condition's source range) when cond is false; returns true otherwise. The optional message (string or object, like error()) is evaluated only on failure.",
+	Params: []function.Parameter{
+		{Name: "condition", Type: customdecode.ExpressionClosureType},
+	},
+	VarParam: &function.Parameter{
+		Name: "message",
+		Type: customdecode.ExpressionClosureType,
+	},
+	Type: func(args []cty.Value) (cty.Type, error) {
+		if len(args) > 2 {
+			return cty.NilType, fmt.Errorf("assert takes at most 2 arguments (a condition and an optional message), got %d", len(args))
+		}
+		return cty.DynamicPseudoType, nil
+	},
+	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+		condClosure := customdecode.ExpressionClosureFromVal(args[0])
+		cv, diags := condClosure.Value()
+		if diags.HasErrors() {
+			// The condition itself failed to evaluate — surface that error
+			// (recovering a structured throw), not an assertion failure.
+			if tv, ok := thrownValueFromDiags(diags); ok {
+				return cty.NilVal, &ThrownError{Value: tv}
+			}
+			return cty.NilVal, diagsToError("assert: condition", diags)
+		}
+		bv, err := convert.Convert(cv, cty.Bool)
+		if err != nil {
+			return cty.NilVal, fmt.Errorf("assert: condition must be boolean: %w", err)
+		}
+		if bv.IsNull() {
+			return cty.NilVal, errors.New("assert: condition is null")
+		}
+		if bv.True() {
+			return cty.True, nil
+		}
+		// Failed: raise a catchable error carrying the condition's range. The
+		// message (string or object) is evaluated only now, on failure.
+		msg := cty.StringVal("assertion failed")
+		if len(args) == 2 {
+			mv, mdiags := customdecode.ExpressionClosureFromVal(args[1]).Value()
+			if mdiags.HasErrors() {
+				if tv, ok := thrownValueFromDiags(mdiags); ok {
+					return cty.NilVal, &ThrownError{Value: tv}
+				}
+				return cty.NilVal, diagsToError("assert: message", mdiags)
+			}
+			msg = mv
+		}
+		return cty.NilVal, &ThrownError{Value: errorValue(msg, condClosure.Expression.Range())}
 	},
 })
 

@@ -142,8 +142,8 @@ sources from file paths, directories, or an `embed.FS`; `Parser.ParseAll`
 parses several sources into one `Result`.
 
 functy also ships a small standard library of expression builtins —
-`functy.Stdlib()` (`typeof`, `cond`, `switch`, `error`) and the opt-in
-`functy.StdlibExtras()` (`try`, `can`) — for a host to merge into that same
+`functy.Stdlib()` (`typeof`, `typekind`, `cond`, `switch`, `error`, `assert`) and
+the opt-in `functy.StdlibExtras()` (`try`, `can`) — for a host to merge into that same
 context. See [doc/stdlib.md](doc/stdlib.md).
 
 A host can also register its own named types so they can be used in annotations:
