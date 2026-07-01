@@ -133,7 +133,7 @@ rendered with source context — the failing line plus the operand `detail` — 
 `functy.ErrorDiagnostics(value)` / `(*functy.ThrownError).Diagnostics()`, which feed
 the standard `hcl.NewDiagnosticTextWriter`. The `functy run` CLI does this:
 
-```
+```console
 Error: must be positive
 
   on prog.cty line 2:

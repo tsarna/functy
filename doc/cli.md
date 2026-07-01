@@ -6,11 +6,11 @@ functy library directly and supplies its own richer eval context. The CLI's
 baseline context is the cty standard library plus `print`/`println`, and
 deliberately lacks host-specific functions or ambient values.
 
-```
+```sh
 go install github.com/tsarna/functy/cmd/functy@latest
 ```
 
-```
+```text
 functy run [--func NAME] [--output json|hcl|raw] FILE... [-- ARG...]
 functy check FILE...
 functy test FILE...
@@ -20,7 +20,7 @@ functy test FILE...
 
 Load the given source files into one eval context and invoke an entry function.
 
-```
+```console
 $ functy run examples/math.cty
 5
 
@@ -77,7 +77,7 @@ Both return `null`.
 Parse and type-check the source files without running them. Diagnostics are
 printed with source context; the command exits non-zero if any are errors.
 
-```
+```console
 $ functy check examples/greet.cty
 ok
 
@@ -102,7 +102,7 @@ a failure).
 
 By default the output is **quiet** — only failures are printed, followed by a summary:
 
-```code
+```console
 $ functy test examples/math.cty
 FAIL add handles negatives (117µs)
 Error: sum should be positive
@@ -118,7 +118,7 @@ sum = -3
 - **`-v` / `--verbose`** lists every test with its duration — `ok`, `SKIP` (with its
   reason), and `FAIL`:
 
-  ```code
+  ```console
   $ functy test -v examples/math.cty
   ok   add sums positives (49µs)
   FAIL add handles negatives (55µs)
@@ -131,7 +131,7 @@ sum = -3
 - **`--run PATTERN`** runs only the tests whose description matches the regular
   expression `PATTERN`; the summary notes how many were deselected:
 
-  ```code
+  ```console
   $ functy test --run sums examples/math.cty
   1 passed, 0 failed, 0 skipped (2 deselected by --run)
   ```

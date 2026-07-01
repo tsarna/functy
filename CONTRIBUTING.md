@@ -86,7 +86,7 @@ functions:
 Root package (`github.com/tsarna/functy`):
 
 | File | Responsibility |
-|---|---|
+| --- | --- |
 | `functy.go` | Public `Parser` API: chained option setters, `Parse`/`ParseAll`, the two-stage `parseSources` core, and the `Result`/`TypeAlias`/`Decl` result types. |
 | `source.go` | `ParseSources` — discovers `.cty` sources from paths, directories, `embed.FS`, `[]byte`, and `Source` values; defines the `.cty` `Extension`. |
 | `lexer.go` | `lex` and the `token` type: wraps `hclsyntax.LexConfig`, adapts comments/semicolons, and provides the token classifiers (bracket, terminator, line-continuation) the parser depends on. |

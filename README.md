@@ -53,7 +53,7 @@ functy source files use the `.cty` extension.
 
 As a library:
 
-```
+```sh
 go get github.com/tsarna/functy
 ```
 
@@ -62,13 +62,13 @@ The library depends only on `github.com/hashicorp/hcl/v2` and
 
 As a CLI:
 
-```
+```sh
 go install github.com/tsarna/functy/cmd/functy@latest
 ```
 
 ## CLI quick start
 
-```
+```console
 $ cat > math.cty <<'EOF'
 func add(a: number, b: number) -> number {
     return a + b

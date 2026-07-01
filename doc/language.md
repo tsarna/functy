@@ -56,7 +56,7 @@ Type names (`string`, `number`, `bool`, `any`, `list`, `set`, `map`, `object`,
 functy types **are** cty types. Type annotations use the familiar cty
 type-constraint grammar (the same shape Terraform `variable` blocks use):
 
-```
+```text
 string   bool   number   any
 list(<type>)        set(<type>)        map(<type>)
 tuple([<type>, …])  object({ name = <type>, … })
@@ -248,7 +248,7 @@ Each `func` compiles to one cty function registered under `name`.
 
 ### Parameters
 
-```
+```text
 name                 // dynamic, required
 name: T              // typed, required
 name = default       // dynamic, optional

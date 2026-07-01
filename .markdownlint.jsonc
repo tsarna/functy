@@ -1,0 +1,13 @@
+{
+  // Markdown lint rules for functy docs. Defaults on, with two project conventions:
+  "default": true,
+  // Prose is wrapped by hand ~80 cols and code samples (Go, shell) carry lines
+  // that can't sensibly wrap, so line length is not enforced.
+  "MD013": false,
+  // Go code samples are indented with tabs (gofmt), which is correct inside a
+  // fenced code block; only flag hard tabs outside code.
+  "MD010": { "code_blocks": false },
+  // The changelog repeats "### Added" / "### Changed" under each version; allow
+  // duplicate headings as long as they are not siblings under the same parent.
+  "MD024": { "siblings_only": true }
+}
