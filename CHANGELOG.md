@@ -8,6 +8,8 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-01
+
 ### Added
 
 - **Errors carry a source `range`.** Every caught error now includes a `range`
