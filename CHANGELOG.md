@@ -30,7 +30,12 @@ tagged. Until then, everything lives under **Unreleased**.
   object, like `error()`/`throw`) is lazy — evaluated only on failure — and defaults
   to `"assertion failed"`. It composes with `try`/`catch` and `val, err =`, and a
   condition that itself fails to evaluate propagates that error (a structured throw
-  survives) instead of masking it as an assertion failure.
+  survives) instead of masking it as an assertion failure. On failure it also reports
+  *why*: it captures the values of the variables the condition references (pytest-style)
+  and attaches them as `detail` (a rendered string, e.g. `"n = -3"`) and `operands`
+  (a list of `{ name, value }` with the raw values, inspectable in a `catch`). Only
+  referenced variables are captured — via `expr.Variables()`, which never re-runs
+  function calls — so gathering operands is side-effect-free.
 
 ### Changed
 

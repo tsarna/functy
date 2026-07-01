@@ -161,7 +161,23 @@ var assertFunc = function.New(&function.Spec{
 			}
 			msg = mv
 		}
-		return cty.NilVal, &ThrownError{Value: errorValue(msg, condClosure.Expression.Range())}
+		ev := errorValue(msg, condClosure.Expression.Range())
+		// Enrich with the referenced variables' values (pytest-style), so a caught
+		// assertion can report why it failed. Attached independent of a custom
+		// message, which stays the headline.
+		if ops := conditionOperands(condClosure.Expression, condClosure.EvalContext); len(ops) > 0 {
+			objs := make([]cty.Value, len(ops))
+			for i, o := range ops {
+				objs[i] = cty.ObjectVal(map[string]cty.Value{
+					"name":  cty.StringVal(o.name),
+					"value": o.value,
+				})
+			}
+			// Heterogeneous operand objects → Tuple (a List would reject mixed types).
+			ev = withAttr(ev, "operands", cty.TupleVal(objs))
+			ev = withAttr(ev, "detail", cty.StringVal(renderOperands(ops)))
+		}
+		return cty.NilVal, &ThrownError{Value: ev}
 	},
 })
 

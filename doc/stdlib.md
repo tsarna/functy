@@ -96,7 +96,7 @@ propagates that error (a structured throw survives) rather than reporting an
 assertion failure.
 
 ```functy
-assert(n > 0)                                   // -> error { message = "assertion failed", range }
+assert(n > 0)                                   // -> error { message = "assertion failed", range, … }
 assert(port > 0, "port must be positive")       // string message
 assert(ok, { message = "denied", code = 403 })  // object message, like error()
 
@@ -104,6 +104,29 @@ var _ok
 var err: error
 _ok, err = assert(valid(x), "invalid x")        // capture instead of unwinding
 ```
+
+On failure, `assert` also reports **why** by capturing the values of the variables the
+condition references (pytest-style). The error gains two attributes:
+
+- `detail` — a rendered string, e.g. `"n = -3"` or `"a = 1, b = 5"`.
+- `operands` — a list of `{ name, value }` with the **raw** values (so a `catch`
+  clause can inspect them programmatically), deduped by name.
+
+```functy
+try {
+    assert(n > 0 && n < limit, "out of range")
+} catch e {
+    log(e.message)              // "out of range"      (message stays the headline)
+    log(e.detail)               // "n = 42, limit = 10"
+    log(e.operands[0].value)    // 42                   (a real number)
+}
+```
+
+Only the referenced **variables** are captured — via `expr.Variables()`, which reads
+already-bound values and **never re-runs function calls**, so gathering operands is
+side-effect-free. Consequently `assert(len(xs) > 3)` reports `xs`, not `len(xs)`; a
+condition that references no variables (`assert(1 > 2)`) attaches no `operands` /
+`detail`.
 
 ## `StdlibExtras()` — opt-in
 

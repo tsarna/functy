@@ -14,12 +14,15 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
 `can`) — dependency-free builtins that make HCL expressions more capable (see
 `doc/stdlib.md`). Remaining additions to that library:
 
-- **`assert` diagnostic enrichment** — the `assert(cond, message?)` builtin itself is
-  shipped (raises a catchable `error` carrying the condition's source range). Still
-  open is the *diagnostic-rich* half (see *Language* below): pytest-style operand
-  values, and surfacing an uncaught assertion as a `Subject`/`Expression`-bearing
-  diagnostic that underlines the failed condition in-source (today an uncaught throw
-  reaches the host as a `ThrownError` carrying the message + range, not a rendered
+- **`assert` diagnostic enrichment** — the `assert(cond, message?)` builtin is shipped,
+  including **variables-only operand capture** (a failed assertion attaches `detail` +
+  `operands` for the variables the condition references — side-effect-free, see
+  `doc/stdlib.md`). Still open (see *Language* below): (a) **full sub-expression
+  decomposition** — reporting `len(xs) = 2`, not just `xs`, by re-evaluating operand
+  sub-expressions; opt-in because it re-runs any function calls in the condition; and
+  (b) surfacing an **uncaught** assertion as a `Subject`/`Expression`-bearing diagnostic
+  that underlines the failed condition in-source (today an uncaught throw reaches the
+  host as a `ThrownError` carrying the message + range + operands, not a rendered
   diagnostic).
 - **`eval`** — evaluate a lazy / by-expression parameter; ships with the lazy
   `expr`-parameter story (see *Functions* below), since the two are the same feature
@@ -40,15 +43,19 @@ them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
   **function**, not a statement, in `Stdlib()` — see `doc/stdlib.md`): using HCL's
   `customdecode.ExpressionClosureType` — the same mechanism `try()` / `can()` / `error()`
   use — it receives `cond` *unevaluated* as an `hcl.Expression`, giving it `cond`'s exact
-  source range (`.Range()`), which the raised (catchable) `error` carries. What remains
-  is the *diagnostic-rich* half enabled by also holding the AST + `EvalContext`: on an
-  **uncaught** failure, emit a diagnostic whose `Subject` / `Expression` / `EvalContext`
-  make the host's standard diagnostic writer underline the failed condition in-source —
-  and optionally show operand values pytest-style by walking the AST. (Today an uncaught
-  assertion surfaces at the `cty.Function` boundary as a `ThrownError` carrying the
-  message + range, like any other throw, not a rendered underline.) A dedicated `assert`
-  *statement* was considered and rejected: the function gets the same source location and
-  introspection, so the statement would add only marginal value.
+  source range (`.Range()`), which the raised (catchable) `error` carries. It also
+  captures **operand values** — the variables the condition references, attached to the
+  error as `detail` + `operands` (via `expr.Variables()`, so side-effect-free). What
+  remains is the *rendered-diagnostic* half enabled by also holding the AST +
+  `EvalContext`: on an **uncaught** failure, emit a diagnostic whose `Subject` /
+  `Expression` / `EvalContext` make the host's standard diagnostic writer underline the
+  failed condition in-source. (Today an uncaught assertion surfaces at the `cty.Function`
+  boundary as a `ThrownError` carrying the message + range + operands, like any other
+  throw, not a rendered underline.) A further step is showing **sub-expression** values
+  (`len(xs) = 2`, not just `xs`) by walking the AST — opt-in, since it re-evaluates
+  operand sub-expressions and thus re-runs any function calls in the condition. A
+  dedicated `assert` *statement* was considered and rejected: the function gets the same
+  source location and introspection, so the statement would add only marginal value.
 
 ## Functions
 
