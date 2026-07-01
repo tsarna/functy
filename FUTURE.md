@@ -9,52 +9,24 @@ commitment, only a record of intent and rationale.
 
 ## Standard library
 
-functy is designed to eventually ship its **own** standard library: a
-`map[string]function.Function` of language-level builtins exposed by the package
-(e.g. `functy.Stdlib()`), **distinct** from cty's own `cty/function/stdlib` and from
-any host-specific functions. A host would assemble its eval context from layers: the
-cty stdlib (base math / string / collection / encoding primitives), the functy
-stdlib (host-agnostic, dependency-free builtins the language leans on), and its own
-runtime-coupled host functions (`send`, `log_*`, `get`/`set`/`delete`, HTTP, …).
+functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `cond`,
+`switch`, `error`) and the opt-in `functy.StdlibExtras()` (`try`, `can`) — dependency-
+free builtins that make HCL expressions more capable (see `doc/stdlib.md`). Remaining
+additions to that library:
 
-The proposed default `functy.Stdlib()` is pure, dependency-free, and pulls in no
-external cty modules:
+- **`assert`** — a diagnostic-rich check (see *Language* below). Raises a catchable
+  `error` when its condition is false, carrying the condition's source range (and,
+  eventually, pytest-style operand values). Deferred as the softest of the set.
+- **`eval`** — evaluate a lazy / by-expression parameter; ships with the lazy
+  `expr`-parameter story (see *Functions* below), since the two are the same feature
+  from the author's side.
 
-- **`cond`** — lazy multi-branch conditional (`c1, r1, …, else`).
-- **`switch`** — lazy value dispatch over `(match, result)` pairs.
-- **`typeof`** — friendly type name.
-- **`error`** — raise an error (pairs with the built-in `error` type and `throw`).
-- **`assert`** — diagnostic-rich check (see *Language* below).
-- **`eval`** — evaluate a lazy / by-expression parameter (see *Functions* below).
-- **`tostring` / `length` dispatch** — rich-object-aware versions that try a
-  `Stringable` / `Lengthable` interface and fall back to the cty stdlib. Safe to
-  include by default because they are a backward-compatible superset, and
-  dependency-free: Go interfaces are structural, so functy defines its own tiny
-  `Stringable` (`ToString() (string, error)`) / `Lengthable` (`Length() (int, error)`)
-  and any capsule whose Go value already has those methods satisfies them
-  automatically — no import of a rich-object package.
-
-`cond` / `switch` build on `customdecode` lazy evaluation with a **single-eval**
-guarantee — the same mechanism functy adopts for `assert` / `eval` — so the stdlib is
-the canonical home for the single-eval control-flow builtins. These names don't
-collide with any standard HCL/cty function, so default inclusion is safe.
-
-**Held back from the default set (opt-in).** Builtins whose name collides with a
-common HCL/cty function but diverges semantically are offered via a separate accessor
-(e.g. `functy.Try()` / a `StdlibExtras()` set), not the default `Stdlib()`:
-
-- **`try`** — functy's lazy, single-eval "first non-erroring expression" form. Its
-  name collides with HCL `ext/tryfunc`'s `try`, which has different (eager,
-  type-guaranteeing) semantics, so it is not a backward-compatible drop-in;
-  auto-including it would silently change behavior for a host already using tryfunc's
-  `try`. Same treatment for any future builtin that matches a common HCL/cty name but
-  diverges (e.g. `can`).
-
-The stdlib is opt-in overall — a host merges it in exactly as it does the cty stdlib,
-keeping full control of the namespace. The residual risk for the novel names
-(`error`, `eval`, `assert`, …) is merely that a host might already define a function
-of the same name; that surfaces as a merge-time **duplicate** (an explicit collision
-error), not a silent semantic swap.
+Explicitly **out of scope**: `tostring` / `length` with `Stringable` / `Lengthable`
+dispatch. They must *dispatch behavior* on a rich object's capsule (call its
+`ToString` / `Length` methods), which only matters for rich-object users, who already
+depend on [`rich-cty-types`](https://github.com/tsarna/rich-cty-types) (which provides
+them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
+(`typeof` / `typekind`, a cheap read of the capsule's name) — not for method dispatch.
 
 ## Language — expressions & sugar
 

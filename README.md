@@ -141,6 +141,11 @@ ambient values into one eval context. `functy.ParseSources` collects `.cty`
 sources from file paths, directories, or an `embed.FS`; `Parser.ParseAll`
 parses several sources into one `Result`.
 
+functy also ships a small standard library of expression builtins —
+`functy.Stdlib()` (`typeof`, `cond`, `switch`, `error`) and the opt-in
+`functy.StdlibExtras()` (`try`, `can`) — for a host to merge into that same
+context. See [doc/stdlib.md](doc/stdlib.md).
+
 A host can also register its own named types so they can be used in annotations:
 
 ```go
@@ -189,7 +194,7 @@ host-pluggable named-type environment for capsule and open types, `type` aliases
 and opt-in strict typing.
 
 Designed-but-not-yet-implemented features (a REPL, a formatter, module imports,
-closures, a functy standard library, nested *open* types, ...) are recorded in
+closures, nested *open* types, ...) are recorded in
 [FUTURE.md](FUTURE.md). The design rationale ("why a language, not an embedded
 one") is in [DESIGN.md](DESIGN.md), and the internal architecture is in
 [CONTRIBUTING.md](CONTRIBUTING.md).

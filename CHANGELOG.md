@@ -8,6 +8,22 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Added
+
+- **Standard library — `functy.Stdlib()` / `functy.StdlibExtras()`.** Dependency-free
+  expression builtins a host merges into its eval context, making HCL expressions more
+  capable: `typeof` (a value's type in functy's annotation grammar, e.g.
+  `object({ a = string })`, so it round-trips — and a rich object carrying a
+  `_capsule` / `_ctx` marker is named by that capsule, e.g. `bytes` / `ctx`),
+  `typekind` (the top-level kind, for dispatch), `cond` (lazy multi-branch — the
+  single-eval conditional HCL's eager `?:`
+  can't be), `switch` (lazy value dispatch), and `error` (raise from expression
+  position, composing with `try`/`catch` and `val, err =`); plus the opt-in `try`
+  (single-eval, unlike stock HCL `try()`) and `can`. All lazy builtins evaluate
+  each branch at most once. Uses `hcl/v2/ext/customdecode` and `ext/tryfunc` — no new
+  module dependency. See `doc/stdlib.md`. (The `switch()` builtin is
+  expression-position only, since `switch` is a statement keyword.)
+
 ## [0.3.0] - 2026-07-01
 
 ### Added

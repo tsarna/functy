@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/tsarna/functy"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
 	"github.com/zclconf/go-cty/cty/function/stdlib"
@@ -76,6 +77,15 @@ func baselineFunctions(out io.Writer) map[string]function.Function {
 		// CLI conveniences
 		"print":   printFunc(out, false),
 		"println": printFunc(out, true),
+	}
+
+	// functy's own standard library: the expression power-up kit (typeof, cond,
+	// switch, error) plus the opt-in try/can.
+	for name, fn := range functy.Stdlib() {
+		funcs[name] = fn
+	}
+	for name, fn := range functy.StdlibExtras() {
+		funcs[name] = fn
 	}
 	return funcs
 }
