@@ -297,6 +297,15 @@ name: T = default    // typed, optional
 - A typed parameter converts its argument (or default) to `T`.
 - At most one variadic parameter, which must be last. Without it, extra
   arguments are an error.
+- The list may span multiple lines — newlines after `(`, between parameters, and
+  before `)` are insignificant — and a trailing comma is allowed:
+
+  ```functy
+  func f(
+      a: string,
+      b: bool,
+  ) -> http_response { … }
+  ```
 
 ### Return type and returning
 

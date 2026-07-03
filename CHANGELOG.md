@@ -21,6 +21,14 @@ tagged. Until then, everything lives under **Unreleased**.
   available at runtime. Foundation for a future `functy fmt`. See
   [doc/language.md](doc/language.md#doc-comments).
 
+### Changed
+
+- **Function parameter lists may span multiple lines.** Newlines after `(`,
+  between parameters, and before `)` are now insignificant (as are comment lines
+  between parameters), and a trailing comma is allowed — previously a parameter
+  list had to be written on a single line. Only affects `func` *declarations*;
+  call argument lists (parsed by HCL) already allowed multiple lines.
+
 ## [0.4.0] - 2026-07-01
 
 ### Added

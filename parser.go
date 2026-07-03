@@ -105,6 +105,16 @@ func (p *parser) skipTerminators() {
 	}
 }
 
+// skipNewlines advances past newline tokens only (not semicolons). It is used
+// where a construct may span multiple lines without `;` being meaningful — e.g.
+// inside a parameter list — so a newline there is insignificant whitespace rather
+// than a statement terminator.
+func (p *parser) skipNewlines() {
+	for p.cur().Type == hclsyntax.TokenNewline {
+		p.advance()
+	}
+}
+
 // ---- Top level --------------------------------------------------------------
 
 func (p *parser) parseFile() *Result {
@@ -313,6 +323,9 @@ func (p *parser) parseParams() []Param {
 	sawVariadic := false
 
 	for {
+		// A parameter list may span multiple lines: newlines after `(`, after a
+		// comma, and before `)` are insignificant.
+		p.skipNewlines()
 		if p.cur().Type == hclsyntax.TokenCParen {
 			p.advance()
 			break
@@ -368,6 +381,9 @@ func (p *parser) parseParams() []Param {
 
 		params = append(params, prm)
 
+		// Allow a newline between the parameter and its separator (a trailing
+		// parameter before `)`, or before its comma).
+		p.skipNewlines()
 		if p.cur().Type == hclsyntax.TokenComma {
 			p.advance()
 			continue

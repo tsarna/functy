@@ -70,6 +70,50 @@ func TestParseParams(t *testing.T) {
 	}
 }
 
+func TestParseParamsMultiline(t *testing.T) {
+	// A parameter list may span multiple lines, including a trailing comma and
+	// comment lines between parameters.
+	fn := onlyFunc(t, `func f(
+	    a: string,
+	    // the toggle
+	    b: bool,
+	    *rest: number,
+	) -> bool {
+	    return b
+	}`)
+	if len(fn.Params) != 3 {
+		t.Fatalf("expected 3 params, got %d", len(fn.Params))
+	}
+	if fn.Params[0].Name != "a" || ctyOf(fn.Params[0].Type) != cty.String {
+		t.Errorf("param 0 = %+v", fn.Params[0])
+	}
+	if fn.Params[1].Name != "b" || ctyOf(fn.Params[1].Type) != cty.Bool {
+		t.Errorf("param 1 = %+v", fn.Params[1])
+	}
+	if !fn.Params[2].Variadic || fn.Params[2].Name != "rest" {
+		t.Errorf("param 2 = %+v", fn.Params[2])
+	}
+	if ctyOf(fn.RetType) != cty.Bool {
+		t.Errorf("ret type = %#v", fn.RetType)
+	}
+}
+
+func TestParseParamsMultilineNoTrailingComma(t *testing.T) {
+	// A newline may separate the final parameter from the closing `)`.
+	fn := onlyFunc(t, "func f(\n    a: string,\n    b: bool\n) { return a }")
+	if len(fn.Params) != 2 {
+		t.Fatalf("expected 2 params, got %d", len(fn.Params))
+	}
+}
+
+func TestParseParamsMultilineEmpty(t *testing.T) {
+	// A newline between `(` and `)` is insignificant.
+	fn := onlyFunc(t, "func f(\n) { return 1 }")
+	if len(fn.Params) != 0 {
+		t.Fatalf("expected 0 params, got %d", len(fn.Params))
+	}
+}
+
 func TestParseReturnType(t *testing.T) {
 	fn := onlyFunc(t, "func f() -> object({ q = number, r = number }) { return null }")
 	if !ctyOf(fn.RetType).IsObjectType() {
