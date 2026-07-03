@@ -254,11 +254,17 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 	}
 	fn.Params = p.parseParams()
 
+	// The rest of the signature may continue on later lines: newlines before the
+	// return-type arrow, its type, and the body brace are insignificant.
+	p.skipNewlines()
+
 	// Optional return type: "->" Type
 	if p.cur().Type == hclsyntax.TokenMinus && p.peek(1).Type == hclsyntax.TokenGreaterThan {
 		p.advance()
 		p.advance()
+		p.skipNewlines()
 		fn.RetType = p.parseType(true)
+		p.skipNewlines()
 	} else if p.strict.returnType.on() {
 		p.errf(fn.DefRange, "Missing return type",
 			fmt.Sprintf("Function %q must declare a return type (%s); use `-> any` for a dynamic return or `-> null` for void.",

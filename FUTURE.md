@@ -25,25 +25,24 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
 - **`eval`** — evaluate a lazy / by-expression parameter; ships with the lazy
   `expr`-parameter story (see *Functions* below), since the two are the same feature
   from the author's side.
-- **`help(name)` / `doc(name)` — function-doc reflection.** A builtin returning a
-  function's doc comment (the `FuncDecl.Doc` shipped with *Doc-comment metadata*) at
-  runtime, à la Python's `help()`. Because an HCL expression cannot reference a
-  function as a *value* — it can only **call** one — the target must be named by
-  **string**: `help("add")`, not `help(add)`. (Same first-class-function limitation
-  that motivates *First-class function values / closures* under *Functions*; if
-  functions ever become values, a value-taking overload could follow.) Mechanism:
-  functy can set each compiled function's cty `function.Spec.Description` from its
-  `Doc` at build time — making the description visible to *any* cty tooling, not just
-  this builtin — and `help` then resolves the name in the eval context's function
-  table and returns that description. Reaching the eval context needs the
-  `customdecode` capture that `cond` / `assert` already use (the argument is still a
-  plain string, just evaluated through the captured context). Open: the name
-  (`help` / `doc` / `describe`); the return shape (the bare `Doc` string vs. a
-  structured `{ name, doc, params }` once per-parameter docs land — see *Doc-comment
-  metadata*); and the unknown / host-provided-function case (a host function has no
-  functy `Doc`, though it may carry a cty `Description` — likely return that, or "").
-  Read-only reflection, so unlike dynamic-expression eval it carries no injection
-  risk.
+- **`doc(name)` — function-doc reflection** — *shipped* as `functy.DocFunc(evalCtxFn)`.
+  Returns a function's description by string name (`doc("add")`) — necessarily by
+  **string**, because an HCL expression cannot reference a function as a *value*, only
+  **call** one (the same first-class-function limitation that motivates *First-class
+  function values / closures*; a value-taking overload could follow if functions ever
+  become values). Mechanism: `FuncDecl.Doc` is wired into each compiled function's cty
+  `function.Spec.Description` (visible to any cty tooling), and `doc` looks the name up
+  in the merged context's flat `Functions` map — reached via the `evalCtxFn`
+  late-binding closure, **not** `customdecode` (`doc` wants the merged context, which
+  `evalCtxFn` already yields, not the call-site expression). Tri-state: `null` (no such
+  function), `""` (exists but undocumented), or the description — so a mistyped name is
+  distinguishable from an undocumented one without `doc` throwing. Read-only reflection,
+  so no injection risk. **Still open — richer `help(name)`:**
+  the `help` name is reserved for a function that assembles a *complete* human-readable
+  help string — calling convention (signature, required vs. optional, variadic), the
+  return type, and **per-parameter docs** — built on top of `doc` plus parameter
+  introspection (needs per-parameter docs; see *Doc-comment metadata*). `doc` is the
+  primitive; `help` is the formatted composition over it.
 
 Explicitly **out of scope**: `tostring` / `length` with `Stringable` / `Lengthable`
 dispatch. They must *dispatch behavior* on a rich object's capsule (call its

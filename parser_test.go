@@ -114,6 +114,18 @@ func TestParseParamsMultilineEmpty(t *testing.T) {
 	}
 }
 
+func TestParseMultilineSignature(t *testing.T) {
+	// The whole signature may break across lines: after `)`, before `->`, its
+	// type, and the `{`.
+	fn := onlyFunc(t, "func f(\n    a: number,\n    b: number,\n)\n-> number\n{\n    return a + b\n}")
+	if len(fn.Params) != 2 {
+		t.Fatalf("expected 2 params, got %d", len(fn.Params))
+	}
+	if ctyOf(fn.RetType) != cty.Number {
+		t.Fatalf("ret type = %#v", fn.RetType)
+	}
+}
+
 func TestParseReturnType(t *testing.T) {
 	fn := onlyFunc(t, "func f() -> object({ q = number, r = number }) { return null }")
 	if !ctyOf(fn.RetType).IsObjectType() {

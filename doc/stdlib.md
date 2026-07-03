@@ -163,6 +163,40 @@ try(jsondecode(s), {})
 
 Whether an expression evaluates without error (from `hcl/v2/ext/tryfunc`).
 
+## `DocFunc(evalCtxFn)` — context-aware
+
+### `doc(name) -> string`
+
+Returns a function's documentation by name: `doc("add")`. It looks the name up in
+the assembled eval context's function table and returns that function's
+**description** — the doc comment captured on a functy declaration
+(`FuncDecl.Doc`, wired into the compiled function's cty `Description`), or whatever
+`Description` a host function carries. It is **tri-state**:
+
+- `null` — no such function (absent from the context);
+- `""` — the function exists but is undocumented;
+- `"text"` — the function's description.
+
+Distinguishing absent (`null`) from undocumented (`""`) lets a caller catch a
+mistyped name without `doc` having to throw — absence is a normal reflection
+answer, so strictness is opt-in (`assert(doc(x) != null)`), and the two states
+compose with `coalesce` / `cond`.
+
+Unlike the functions above it is **not** in `Stdlib()`, because it needs a handle
+to the context. `functy.DocFunc(evalCtxFn)` takes the same late-binding closure
+passed to `Result.Compile`; at call time that yields the merged context whose flat
+`Functions` map holds every function (host- and functy-defined). A host wires it in
+under the name `doc`:
+
+```go
+ctx.Functions["doc"] = functy.DocFunc(evalCtxFn)
+```
+
+The argument is a plain string (no laziness / `customdecode`): `doc` needs the
+*merged* context, which `evalCtxFn` already provides, not the call-site expression.
+A richer `help(name)` — assembling a function's full calling convention and
+per-argument docs — is left for later; `doc` is the primitive it will build on.
+
 ## Notes
 
 - **No new dependencies.** The lazy builtins use `hcl/v2/ext/customdecode` and

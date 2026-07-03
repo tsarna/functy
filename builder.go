@@ -59,7 +59,7 @@ func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 		params[i] = function.Parameter{Name: p.Name, Type: cty.DynamicPseudoType, AllowNull: true}
 	}
 
-	spec := &function.Spec{Params: params}
+	spec := &function.Spec{Params: params, Description: fn.Doc}
 	if len(optional) > 0 || variadic != nil {
 		spec.VarParam = &function.Parameter{Name: "args", Type: cty.DynamicPseudoType, AllowNull: true}
 	}

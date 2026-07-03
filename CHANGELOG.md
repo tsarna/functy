@@ -16,18 +16,27 @@ tagged. Until then, everything lives under **Unreleased**.
   `const`). Directive lines are excluded from the prose; block comments do not form
   docs. This is built on a new comment-retention foundation — `Result.Comments`
   holds **every** comment with its source position (the statement parser stream
-  stays comment-free), captured in a single lex pass. A host can use `Doc` for
-  generated docs, editor hovers, or anywhere it wants a function's description
-  available at runtime. Foundation for a future `functy fmt`. See
+  stays comment-free), captured in a single lex pass. Each function's `Doc` is also
+  wired into its compiled cty `function.Spec.Description`, so the description reaches
+  the runtime function object and any cty tooling. A host can use `Doc` for generated
+  docs, editor hovers, or anywhere it wants a function's description available at
+  runtime. Foundation for a future `functy fmt`. See
   [doc/language.md](doc/language.md#doc-comments).
+- **`doc(name)` reflection builtin — `functy.DocFunc(evalCtxFn)`.** Returns a
+  function's description by string name (`doc("add")`), read from the merged eval
+  context's function table. Tri-state: `null` (no such function), `""` (exists but
+  undocumented), or the description. Not part of `Stdlib()` because it needs the
+  late-binding context handle. See
+  [doc/stdlib.md](doc/stdlib.md#docfuncevalctxfn--context-aware).
 
 ### Changed
 
-- **Function parameter lists may span multiple lines.** Newlines after `(`,
-  between parameters, and before `)` are now insignificant (as are comment lines
-  between parameters), and a trailing comma is allowed — previously a parameter
-  list had to be written on a single line. Only affects `func` *declarations*;
-  call argument lists (parsed by HCL) already allowed multiple lines.
+- **Function declarations may span multiple lines.** Newlines inside the parameter
+  list (after `(`, between parameters — including comment lines — and before `)`,
+  with a trailing comma allowed) and across the rest of the signature (before `->`,
+  its type, and the `{`) are now insignificant; previously a declaration's signature
+  had to be written on a single line. Only affects `func` *declarations*; call
+  argument lists (parsed by HCL) already allowed multiple lines.
 
 ## [0.4.0] - 2026-07-01
 
