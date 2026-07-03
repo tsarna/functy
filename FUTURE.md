@@ -25,6 +25,25 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
 - **`eval`** — evaluate a lazy / by-expression parameter; ships with the lazy
   `expr`-parameter story (see *Functions* below), since the two are the same feature
   from the author's side.
+- **`help(name)` / `doc(name)` — function-doc reflection.** A builtin returning a
+  function's doc comment (the `FuncDecl.Doc` shipped with *Doc-comment metadata*) at
+  runtime, à la Python's `help()`. Because an HCL expression cannot reference a
+  function as a *value* — it can only **call** one — the target must be named by
+  **string**: `help("add")`, not `help(add)`. (Same first-class-function limitation
+  that motivates *First-class function values / closures* under *Functions*; if
+  functions ever become values, a value-taking overload could follow.) Mechanism:
+  functy can set each compiled function's cty `function.Spec.Description` from its
+  `Doc` at build time — making the description visible to *any* cty tooling, not just
+  this builtin — and `help` then resolves the name in the eval context's function
+  table and returns that description. Reaching the eval context needs the
+  `customdecode` capture that `cond` / `assert` already use (the argument is still a
+  plain string, just evaluated through the captured context). Open: the name
+  (`help` / `doc` / `describe`); the return shape (the bare `Doc` string vs. a
+  structured `{ name, doc, params }` once per-parameter docs land — see *Doc-comment
+  metadata*); and the unknown / host-provided-function case (a host function has no
+  functy `Doc`, though it may carry a cty `Description` — likely return that, or "").
+  Read-only reflection, so unlike dynamic-expression eval it carries no injection
+  risk.
 
 Explicitly **out of scope**: `tostring` / `length` with `Stringable` / `Lengthable`
 dispatch. They must *dispatch behavior* on a rich object's capsule (call its
@@ -58,12 +77,23 @@ them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
 
 ## Functions
 
-- **Doc-comment metadata.** A doc comment attached to a `func` (e.g. `///` or a
-  contiguous leading `//` / `#` block) captured into `FuncDecl` (description, and
-  ideally per-parameter docs). Powers generated docs and LSP hovers, and lets a host
-  surface them — e.g. backing an MCP tool/prompt or HTTP handler with a functy
-  function and pulling its description and parameter docs straight from source. Adds
-  fields to `Result` / `FuncDecl`.
+- **Doc-comment metadata** — *shipped (function/decl level)*. A contiguous leading
+  `//` / `#` (or `///`) comment block directly above a declaration is captured as its
+  description: `FuncDecl.Doc` and `Decl.Doc` (top-level var/const). Directive lines are
+  excluded from the prose; block comments do not form docs (see
+  `doc/language.md#doc-comments`). Built on the comment-retention foundation
+  (`Result.Comments` — every comment retained with position, captured in `lexAll`; the
+  parser stream stays comment-free). Powers generated docs and LSP hovers.
+  **Future integration point (not current):** a host that lets a functy function
+  *back* a callable surface — an MCP tool/prompt, an HTTP handler — could pull that
+  surface's description from the function's `Doc`. No host wires this up today;
+  Vinculum's MCP/HTTP handlers map to **action expressions**, not functy functions
+  (an expression may *call* a function, but there is no plumbing from a function's
+  `Doc` to a tool/handler description), so this needs a function-backed handler
+  surface first. **Still open:** **per-parameter docs** — `Param.DefRange` + the
+  comment table make trailing-comment-per-param (or a structured `// @param name …`
+  convention) attachment straightforward; deferred as a distinct heuristic. See also
+  *Annotations* for an evaluated (`@name`) alternative to comment-based metadata.
 - **Function visibility (exported vs. internal helpers).** Today every top-level
   `func` is registered globally. A convention or keyword (Go-style lowercase, an
   `export` / `pub` keyword, or `_`-prefix) would let a file define local helpers
@@ -142,6 +172,57 @@ them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
   as the intended direction. (Type aliases already provide project-scoped *sharing*;
   this is for *namespacing / organization*.)
 
+## Annotations
+
+- **Declaration annotations (`@name` / `@name(args)`).** A syntactic annotation
+  attached to a `var` (and possibly a `func`) declaration, capturing structured,
+  host-interpreted metadata as *values* rather than as comment text:
+
+  ```functy
+  @annotation
+  var foo: T = …
+  ```
+
+  An annotation is an **expression** evaluated in a dedicated, host-controlled
+  eval context — separate from the normal one — in which the host registers the
+  permitted symbols and functions. A bare symbol (`@bar`) resolves to a
+  host-registered value; a call form (`@baz("qux")`) invokes a host-registered
+  function. The resulting value is recorded on the declaration (a new
+  `Annotations` field on `Decl` / `FuncDecl`), and a declaration may carry a
+  **list** of annotations. The host likely declares which annotation names are
+  allowed (an allowlist), so an unknown `@name` is a diagnostic rather than
+  silently ignored — and so the annotation context is closed, not the full
+  ambient scope.
+
+  Because the values are evaluated (not just parsed as text), a host receives
+  typed, validated metadata it can act on structurally. Illustrative use case in
+  Vinculum: a top-level `var` normally maps to a Vinculum `var` block, but
+  annotations could redirect it to a *different* host construct — e.g.
+  a `metric` block:
+
+  ```functy
+  @help("Number of currently active jobs")
+  @labels(["queue", "priority"])
+  @namespace("myapp")
+  @metric("gauge")
+  var active_jobs: number
+  ```
+
+  (Illustrative only — whether Vinculum would actually let metrics be declared
+  this way, as an alternative to `metric` blocks in VCL as today, is a separate
+  host decision; the point here is the functy-side mechanism.)
+
+  This is an **alternative to comment-based metadata** — the *Doc-comment
+  metadata* (Functions) and *Per-function directives* (Type system) items below.
+  Trade-off: annotations are first-class, evaluated, host-validated expressions
+  (structured values, arguments, an allowlist), where directive/doc comments are
+  free-form text parsed by convention. The two could coexist (comments for
+  human-facing docs, annotations for machine-interpreted host metadata) or
+  annotations could subsume the directive use cases. Open questions: whether
+  annotations apply to `func` as well as `var` (and `const`), the exact evaluation
+  timing (parse-time vs. a host pass, given the special context), and whether the
+  annotation context may reference the declaration's own name/type.
+
 ## Error handling
 
 - **`defer` argument snapshotting.** Evaluate a deferred call's arguments at `defer`
@@ -177,9 +258,64 @@ links the library directly and supplies its own richer context). Planned additio
   stdlib, language semantics, and loaded functions.
 - **`functy fmt [FILE …]`** — canonical formatter. For a language targeting the
   HCL/Terraform audience (who expect `terraform fmt` / `gofmt`), this is close to
-  adoption-critical. Must preserve directive comments.
+  adoption-critical. Must preserve directive comments. The comment-retention
+  foundation it depends on **already shipped** with doc-comment metadata:
+  `Result.Comments` holds every comment with position (the parser stream stays
+  comment-free), so `fmt` no longer has to solve comment retention — it reduces to
+  layout + expression delegation. Design notes worked out up front:
+  - **Two-layer split.** functy's layout layer owns *statement structure* —
+    indentation, braces, blank-line runs, and the statement/declaration-level
+    comments from `Result.Comments`. Each *expression span* is reformatted by
+    **`hclwrite.Format`** and spliced back as an opaque unit.
+  - **Why `hclwrite`, not the AST.** `hclsyntax.ParseExpression` (what the runtime
+    uses) **discards** comments, so reprinting from its AST would lose any comment
+    *inside* an expression. `hclwrite` is token-based and preserves them — so `fmt`
+    must route expression spans through `hclwrite`, not the AST. Verified: it also
+    does **not** rewrite `#` ↔ `//` (either marker is preserved verbatim), so
+    directive comments and author marker choice survive; `fmt` should likewise not
+    normalize markers.
+  - **Span ownership (no double-emit).** A comment falling *within* an expression
+    span is owned by `hclwrite`; it must be **excluded** from the `Result.Comments`
+    merge so the statement layer does not emit it a second time. Rule: comment
+    inside any expression span → hclwrite's; comment elsewhere → the layout layer's.
+  - **Continuation-line re-indent.** `hclwrite.Format` formats a fragment as if at
+    column 0 (verified: it strips a continuation line's leading indent), so when a
+    multi-line expression span is spliced at a statement's indent, `fmt` must
+    re-indent the continuation lines itself.
+  - **Blank-line runs** are the one thing not in `Result.Comments`; `fmt` derives
+    them from token/source positions to preserve intentional grouping.
+  - **Idempotency:** `fmt(fmt(x)) == fmt(x)`, guarded by a golden-file corpus.
 - **LSP / editor support** — diagnostics, hovers (using doc-comment metadata),
-  go-to-definition, completion.
+  go-to-definition, completion. Editor-agnostic; the VSCode extension below is its
+  first client (and can ship static features ahead of the server).
+- **VSCode extension for `.cty` — nearer-term.** A full-featured extension is the
+  highest-leverage editor investment (the target audience overlaps the
+  HCL/Terraform crowd, who live in VSCode) and, importantly, **stages cleanly**: the
+  static half needs no language server and can ship first.
+  - **Static, ship-first (no server):** a TextMate grammar with **embedded HCL** for
+    expression/type regions (so operators, templates, and function calls highlight
+    with the same rules as HCL elsewhere — mirroring how the parser hands expressions
+    to `hclsyntax`); a language configuration (`//` and `#` line comments, bracket
+    matching / auto-close, indentation); `.cty` file association and an icon;
+    snippets for `func` / `if` / `for` / `switch` / `test`; and commands that shell
+    out to the existing CLI — **Run** (`functy run`), **Check** (`functy check`), and
+    **Format** wired to `functy fmt` as the document formatter / format-on-save (gated
+    on that item shipping).
+  - **Test Explorer integration** — surface `test "…"` blocks in VSCode's native
+    Testing UI (run / re-run individual tests), driving `functy test --run <name>`
+    under the hood. This is the concrete consumer of the shipped test runner and of
+    the deferred **`--json` output** nicety (see *Inline tests* below) — machine-
+    readable results are what make per-test pass/fail/skip reporting in the UI clean;
+    worth prioritizing that flag alongside the extension.
+  - **LSP-backed, later:** once the language server (above) exists, the extension
+    becomes its client, upgrading diagnostics, hovers (doc-comment metadata),
+    go-to-definition, and completion from "none / grammar-only" to full semantic
+    support without changing the static layer.
+
+  Recorded as **nearer-term** precisely because the static + CLI-command layer
+  delivers most of the day-to-day value (highlighting, run/check/format, test
+  running) with no server to build, deferring the LSP work rather than blocking on
+  it.
 - **Inline tests** — *shipped*: co-located `test "…" { … }` blocks (`Result.Tests`),
   a core runner (`(*Result).RunTests` / `RunTestsMatching` → `TestOutcome`), the
   `functy test` CLI verb (quiet/`-v` output with timings, `--run` name filter), and a
@@ -331,4 +467,27 @@ links the library directly and supplies its own richer context). Planned additio
   `Result.Directives`. The remaining gap is per-function directives — attached to a
   function's preceding comment block — exposed as `FuncDecl.Directives`. This shares the
   same comment-to-declaration attachment machinery as the doc-comment metadata above and
-  is expected to land alongside it.
+  is expected to land alongside it. The *Annotations* section proposes an evaluated,
+  host-validated `@name` alternative to these comment-based directives.
+- **User-defined rich-object types ("classes") — highly speculative, blue-sky, not
+  near-term.** A `class` construct that **compiles to a cty capsule / rich-object type**
+  authored in functy, letting a `.cty` file define new value types that behave like the
+  host's built-in rich objects (eg `bus`, `url`, `bytes`). The hard constraint is that
+  **cty values have no methods**: a value carries data, and behavior is reachable only
+  through the *fixed set* of Go interfaces the rich-object machinery dispatches on —
+  `Stringable` (`ToString`), `Lengthable` (`Length`), a callable interface, and the
+  get / set / index / iterate interfaces the `generic` ops use. So a functy "class"
+  could **not** expose arbitrary user-named methods (`x.foo()` — cty has no such
+  value-method call syntax anyway); it could only *implement that closed interface set*,
+  each implementation being a functy function bound to the instance's state (an instance
+  being a capsule wrapping that state). This leans on two other items here: *First-class
+  function values / closures* (Functions) — a "method" is a closure over the instance —
+  and the rich-object dispatch functy deliberately delegates to
+  [`rich-cty-types`](https://github.com/tsarna/rich-cty-types) (see *Standard library*,
+  out-of-scope), which would be the natural runtime for the generated interface
+  implementations. Open questions (and why it stays blue-sky): how a class registers its
+  type at compile time so annotations / other files can name it; how instances are
+  constructed and (given cty immutability) whether "mutating" methods simply return new
+  values; and whether the payoff justifies the machinery versus authoring such capsule
+  types in Go as today. Recorded as a direction, explicitly **not planned any time
+  soon**.
