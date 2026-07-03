@@ -8,6 +8,8 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-03
+
 ### Added
 
 - **Doc-comment metadata + comment retention.** A contiguous leading `//` / `#`
