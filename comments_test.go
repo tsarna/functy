@@ -166,3 +166,81 @@ func docOf(fn *FuncDecl) string {
 	}
 	return fn.Doc
 }
+
+func TestParamDocTrailing(t *testing.T) {
+	src := "func add(\n" +
+		"    a: number,  // the first addend\n" +
+		"    b: number,  // the second addend\n" +
+		") -> number { return a + b }\n"
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected: %s", diags.Error())
+	}
+	fn := findFunc(res, "add")
+	if fn == nil {
+		t.Fatal("func add not found")
+	}
+	if fn.Params[0].Doc != "the first addend" {
+		t.Errorf("param a Doc = %q", fn.Params[0].Doc)
+	}
+	if fn.Params[1].Doc != "the second addend" {
+		t.Errorf("param b Doc = %q", fn.Params[1].Doc)
+	}
+}
+
+func TestParamDocLeadingBlock(t *testing.T) {
+	src := "func f(\n" +
+		"    // The retry policy.\n" +
+		"    // One of none|linear|exponential.\n" +
+		"    policy: string = \"linear\",\n" +
+		") { return policy }\n"
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected: %s", diags.Error())
+	}
+	fn := findFunc(res, "f")
+	if fn == nil {
+		t.Fatal("func f not found")
+	}
+	if got, want := fn.Params[0].Doc, "The retry policy.\nOne of none|linear|exponential."; got != want {
+		t.Fatalf("policy Doc = %q, want %q", got, want)
+	}
+}
+
+func TestParamDocLeadingWinsOverTrailing(t *testing.T) {
+	src := "func f(\n" +
+		"    // detailed\n" +
+		"    x: number,  // short\n" +
+		") { return x }\n"
+	res, _ := NewParser().Parse([]byte(src), "test")
+	fn := findFunc(res, "f")
+	if fn == nil || fn.Params[0].Doc != "detailed" {
+		t.Fatalf("x Doc = %q, want %q", fn.Params[0].Doc, "detailed")
+	}
+}
+
+func TestParamDocSingleLineNoMisattribution(t *testing.T) {
+	// On a single-line list neither parameter starts its own line, so a trailing
+	// comment attaches to none of them.
+	src := "func f(a: number, b: number) { return a } // not a param doc\n"
+	res, _ := NewParser().Parse([]byte(src), "test")
+	fn := findFunc(res, "f")
+	if fn == nil {
+		t.Fatal("func f not found")
+	}
+	if fn.Params[0].Doc != "" || fn.Params[1].Doc != "" {
+		t.Fatalf("params should have no doc, got a=%q b=%q", fn.Params[0].Doc, fn.Params[1].Doc)
+	}
+}
+
+func TestParamDocReachesCtyDescription(t *testing.T) {
+	// A required parameter's Doc flows to the compiled cty function.Parameter.
+	ctx := buildContextWithDoc(t, "func f(\n    a: number,  // the addend\n) { return a }\n")
+	params := ctx.Functions["f"].Params()
+	if len(params) != 1 {
+		t.Fatalf("expected 1 required param, got %d", len(params))
+	}
+	if params[0].Description != "the addend" {
+		t.Fatalf("param Description = %q, want %q", params[0].Description, "the addend")
+	}
+}

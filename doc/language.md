@@ -63,6 +63,27 @@ Rules:
 A host uses `Doc` for generated documentation and editor hovers — and, more
 generally, anywhere it wants a function's description available at runtime.
 
+#### Parameter docs
+
+Individual parameters can be documented too (surfaced on `Param.Doc`, and — for
+required parameters — on the compiled function's cty parameter description). In a
+multi-line parameter list, use a **trailing** comment on the parameter's line, or
+a **leading** `//` / `#` block directly above it for a longer description (the
+leading block wins if both are present):
+
+```functy
+func request(
+    url: string,       // the endpoint to call
+    // Seconds to wait before giving up.
+    // Applies to the whole request, not per-redirect.
+    timeout: number = 30,
+) -> http_response { … }
+```
+
+Parameter docs are a feature of the multi-line layout: a parameter only takes a
+trailing comment when it starts its own line, so a single-line list
+(`func f(a, b) // …`) attributes nothing.
+
 ### Statement termination
 
 functy uses Go-style implicit termination:

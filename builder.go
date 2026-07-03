@@ -56,7 +56,10 @@ func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 
 	params := make([]function.Parameter, len(required))
 	for i, p := range required {
-		params[i] = function.Parameter{Name: p.Name, Type: cty.DynamicPseudoType, AllowNull: true}
+		// Optional/variadic params collapse into VarParam below, so cty can only
+		// carry descriptions for the required ones; FuncDecl.Params is the full
+		// source of truth (e.g. for help()).
+		params[i] = function.Parameter{Name: p.Name, Type: cty.DynamicPseudoType, AllowNull: true, Description: p.Doc}
 	}
 
 	spec := &function.Spec{Params: params, Description: fn.Doc}

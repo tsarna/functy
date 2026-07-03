@@ -40,9 +40,10 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
   so no injection risk. **Still open — richer `help(name)`:**
   the `help` name is reserved for a function that assembles a *complete* human-readable
   help string — calling convention (signature, required vs. optional, variadic), the
-  return type, and **per-parameter docs** — built on top of `doc` plus parameter
-  introspection (needs per-parameter docs; see *Doc-comment metadata*). `doc` is the
-  primitive; `help` is the formatted composition over it.
+  return type, and per-parameter docs. The pieces now exist: `Param.Doc` (shipped, see
+  *Doc-comment metadata*) plus signature introspection on `FuncDecl.Params`. `doc` is
+  the primitive; `help` is the formatted composition over it — the remaining work is the
+  rendering/format, not the data.
 
 Explicitly **out of scope**: `tostring` / `length` with `Stringable` / `Lengthable`
 dispatch. They must *dispatch behavior* on a rich object's capsule (call its
@@ -76,23 +77,26 @@ them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
 
 ## Functions
 
-- **Doc-comment metadata** — *shipped (function/decl level)*. A contiguous leading
-  `//` / `#` (or `///`) comment block directly above a declaration is captured as its
-  description: `FuncDecl.Doc` and `Decl.Doc` (top-level var/const). Directive lines are
-  excluded from the prose; block comments do not form docs (see
-  `doc/language.md#doc-comments`). Built on the comment-retention foundation
-  (`Result.Comments` — every comment retained with position, captured in `lexAll`; the
-  parser stream stays comment-free). Powers generated docs and LSP hovers.
-  **Future integration point (not current):** a host that lets a functy function
-  *back* a callable surface — an MCP tool/prompt, an HTTP handler — could pull that
-  surface's description from the function's `Doc`. No host wires this up today;
-  Vinculum's MCP/HTTP handlers map to **action expressions**, not functy functions
-  (an expression may *call* a function, but there is no plumbing from a function's
-  `Doc` to a tool/handler description), so this needs a function-backed handler
-  surface first. **Still open:** **per-parameter docs** — `Param.DefRange` + the
-  comment table make trailing-comment-per-param (or a structured `// @param name …`
-  convention) attachment straightforward; deferred as a distinct heuristic. See also
-  *Annotations* for an evaluated (`@name`) alternative to comment-based metadata.
+- **Doc-comment metadata** — *shipped (function, declaration, and parameter level)*. A
+  contiguous leading `//` / `#` (or `///`) comment block directly above a declaration is
+  captured as its description: `FuncDecl.Doc` and `Decl.Doc` (top-level var/const).
+  **Per-parameter docs** also ship on `Param.Doc` — a trailing comment on the
+  parameter's line, or a leading block above it (leading wins), confined to the
+  multi-line parameter layout; required parameters' docs also flow to the compiled cty
+  `function.Parameter.Description`. Directive lines are excluded from the prose; block
+  comments do not form docs (see `doc/language.md#doc-comments`). Built on the
+  comment-retention foundation (`Result.Comments` — every comment retained with
+  position, captured in `lexAll`; the parser stream stays comment-free). Powers
+  generated docs, LSP hovers, and the future `help()`. **Future integration point (not
+  current):** a host that lets a functy function *back* a callable surface — an MCP
+  tool/prompt, an HTTP handler — could pull that surface's description from the
+  function's `Doc`. No host wires this up today; Vinculum's MCP/HTTP handlers map to
+  **action expressions**, not functy functions (an expression may *call* a function, but
+  there is no plumbing from a function's `Doc` to a tool/handler description), so this
+  needs a function-backed handler surface first. A structured `// @param name …`
+  alternative (for single-line lists) was considered and left out — position-based
+  attachment avoids name repetition and drift. See also *Annotations* for an evaluated
+  (`@name`) alternative to comment-based metadata.
 - **Function visibility (exported vs. internal helpers).** Today every top-level
   `func` is registered globally. A convention or keyword (Go-style lowercase, an
   `export` / `pub` keyword, or `_`-prefix) would let a file define local helpers

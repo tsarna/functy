@@ -35,7 +35,11 @@ func (t *TestDecl) srcRange() hcl.Range { return t.DefRange }
 // variadic parameter, Type is the *element* type: `*rest: T` collects the extra
 // arguments into a list(T), while an untyped `*rest` collects them into a tuple.
 type Param struct {
-	Name     string
+	Name string
+	// Doc is the parameter's documentation: a trailing comment on its line
+	// (`a: T, // desc`) or a leading `//` / `#` block directly above it (which
+	// wins if both are present); "" when there is none. See attachDocComments.
+	Doc      string
 	Type     TypeConstraint // nil when unannotated (dynamic)
 	Default  hcl.Expression // non-nil for an optional parameter
 	Variadic bool           // true for the trailing *rest parameter

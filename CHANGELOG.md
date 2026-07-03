@@ -28,8 +28,11 @@ tagged. Until then, everything lives under **Unreleased**.
   undocumented), or the description. Not part of `Stdlib()` because it needs the
   late-binding context handle. See
   [doc/stdlib.md](doc/stdlib.md#docfuncevalctxfn--context-aware).
-
-### Changed
+- **Per-parameter docs — `Param.Doc`.** A parameter can be documented with a
+  trailing comment on its line (`a: T, // desc`) or a leading `//` / `#` block above
+  it (leading wins if both), confined to the multi-line parameter layout. Required
+  parameters' docs also flow to the compiled cty `function.Parameter.Description`.
+  Feeds the future `help()`. See [doc/language.md](doc/language.md#parameter-docs).
 
 - **Function declarations may span multiple lines.** Newlines inside the parameter
   list (after `(`, between parameters — including comment lines — and before `)`,

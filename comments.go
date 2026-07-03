@@ -61,6 +61,15 @@ func leadingDirectives(comments []Comment, tokens []token) []Directive {
 func attachDocComments(src []byte, r *Result, comments []Comment) {
 	for _, fn := range r.Funcs {
 		fn.Doc = docComment(src, fn.DefRange, comments)
+		for i := range fn.Params {
+			// A leading block above the parameter wins (it supports multi-line
+			// descriptions); otherwise a trailing comment on the parameter's line.
+			if lead := docComment(src, fn.Params[i].DefRange, comments); lead != "" {
+				fn.Params[i].Doc = lead
+			} else {
+				fn.Params[i].Doc = trailingParamDoc(src, fn.Params, i, comments)
+			}
+		}
 	}
 	for i := range r.Consts {
 		r.Consts[i].Doc = docComment(src, r.Consts[i].DefRange, comments)
@@ -68,6 +77,33 @@ func attachDocComments(src []byte, r *Result, comments []Comment) {
 	for i := range r.Vars {
 		r.Vars[i].Doc = docComment(src, r.Vars[i].DefRange, comments)
 	}
+}
+
+// trailingParamDoc returns the cleaned text of a comment trailing parameter
+// params[i] on its own line (`a: T, // desc`), or "" if there is none. The
+// parameter must both start its own line (preceded only by whitespace) and be the
+// last parameter starting on that line. This confines trailing docs to the
+// multi-line layout (one parameter per line): a single-line list (`f(a, b) // x`)
+// misattributes nothing, and a comment on the closing-`)` line attaches to no
+// parameter.
+func trailingParamDoc(src []byte, params []Param, i int, comments []Comment) string {
+	start := params[i].DefRange.Start
+	if !precededOnlyByWhitespace(src, start.Byte) {
+		return "" // parameter shares its line's start with other tokens
+	}
+	if i+1 < len(params) && params[i+1].DefRange.Start.Line == start.Line {
+		return "" // another parameter follows on the same line
+	}
+	for _, c := range comments {
+		if !c.Line || c.Range.Start.Line != start.Line {
+			continue
+		}
+		if precededOnlyByWhitespace(src, c.Range.Start.Byte) {
+			continue // a whole-line comment, not a trailing one
+		}
+		return cleanDocLine(c.Text)
+	}
+	return ""
 }
 
 // docComment returns the rendered documentation for a declaration whose
