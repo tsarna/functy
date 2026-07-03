@@ -32,7 +32,13 @@ tagged. Until then, everything lives under **Unreleased**.
   trailing comment on its line (`a: T, // desc`) or a leading `//` / `#` block above
   it (leading wins if both), confined to the multi-line parameter layout. Required
   parameters' docs also flow to the compiled cty `function.Parameter.Description`.
-  Feeds the future `help()`. See [doc/language.md](doc/language.md#parameter-docs).
+  Feeds `help()` (below). See [doc/language.md](doc/language.md#parameter-docs).
+- **`help(name)` reflection builtin — `functy.HelpFunc(funcs, evalCtxFn)`.** Returns
+  a human-readable help summary — signature (names, types, defaults, variadic, return
+  type), description, and per-parameter docs — for a function by name, or `null` if
+  unknown. functy functions render from their declaration (accurate); non-functy
+  functions fall back to best-effort cty metadata. See
+  [doc/stdlib.md](doc/stdlib.md#helpfuncfuncs-evalctxfn--context-aware).
 
 - **Function declarations may span multiple lines.** Newlines inside the parameter
   list (after `(`, between parameters — including comment lines — and before `)`,

@@ -194,8 +194,43 @@ ctx.Functions["doc"] = functy.DocFunc(evalCtxFn)
 
 The argument is a plain string (no laziness / `customdecode`): `doc` needs the
 *merged* context, which `evalCtxFn` already provides, not the call-site expression.
-A richer `help(name)` — assembling a function's full calling convention and
-per-argument docs — is left for later; `doc` is the primitive it will build on.
+
+## `HelpFunc(funcs, evalCtxFn)` — context-aware
+
+### `help(name) -> string`
+
+Returns a human-readable **help summary** for a function: its signature (calling
+convention), description, and per-parameter docs. `null` if there is no such
+function (a known function always has at least a signature, so `help` never
+returns `""`).
+
+```functy
+help("add")
+# => add(a: number, b: number = 0) -> number
+#
+#    Adds two numbers.
+#
+#    Parameters:
+#      a  the first addend
+#      b  the second addend
+```
+
+`functy.HelpFunc(funcs, evalCtxFn)` takes the functy declarations (`Result.Funcs`)
+**and** the late-binding closure. functy functions are rendered from their
+declaration — accurate names, types, defaults, variadic, return type, and
+`Param.Doc` — because functy's optional/variadic parameters collapse into a single
+`VarParam` in the cty calling convention, so the declaration is authoritative. A
+non-functy function falls back to a best-effort rendering from its cty metadata
+(parameter names/types and descriptions). A host wires it under `help`:
+
+```go
+ctx.Functions["help"] = functy.HelpFunc(result.Funcs, evalCtxFn)
+```
+
+> **Limitation.** A non-functy Go builtin that emulates optional or defaulted
+> arguments through its `VarParam` cannot be shown with its intended signature —
+> that structure is not recoverable from cty — so the fallback shows the raw
+> required-plus-variadic shape.
 
 ## Notes
 

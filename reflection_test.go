@@ -70,3 +70,63 @@ func TestDocFuncUnknownAndUndocumented(t *testing.T) {
 		t.Fatalf("doc(\"bare\") = %#v, want empty string", got)
 	}
 }
+
+func TestHelpFuncFunctyFunction(t *testing.T) {
+	src := "// Adds two numbers.\n" +
+		"func add(\n" +
+		"    a: number,      // the first addend\n" +
+		"    b: number = 0,  // the second addend\n" +
+		") -> number { return a + b }\n"
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("parse: %s", diags.Error())
+	}
+	help := HelpFunc(res.Funcs, nil)
+
+	got, err := help.Call([]cty.Value{cty.StringVal("add")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	want := "add(a: number, b: number = 0) -> number\n\n" +
+		"Adds two numbers.\n\n" +
+		"Parameters:\n" +
+		"  a  the first addend\n" +
+		"  b  the second addend"
+	if got.AsString() != want {
+		t.Fatalf("help(\"add\") =\n%q\nwant\n%q", got.AsString(), want)
+	}
+}
+
+func TestHelpFuncCtyFallback(t *testing.T) {
+	greet := function.New(&function.Spec{
+		Description: "A host greeting.",
+		Params: []function.Parameter{
+			{Name: "who", Type: cty.String, Description: "who to greet"},
+		},
+		Type: function.StaticReturnType(cty.String),
+		Impl: func([]cty.Value, cty.Type) (cty.Value, error) { return cty.StringVal(""), nil },
+	})
+	ctx := &hcl.EvalContext{Functions: map[string]function.Function{"greet": greet}}
+	help := HelpFunc(nil, func() *hcl.EvalContext { return ctx })
+
+	got, err := help.Call([]cty.Value{cty.StringVal("greet")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	want := "greet(who: string)\n\nA host greeting.\n\nParameters:\n  who  who to greet"
+	if got.AsString() != want {
+		t.Fatalf("help(\"greet\") =\n%q\nwant\n%q", got.AsString(), want)
+	}
+}
+
+func TestHelpFuncUnknown(t *testing.T) {
+	ctx := &hcl.EvalContext{Functions: map[string]function.Function{}}
+	help := HelpFunc(nil, func() *hcl.EvalContext { return ctx })
+	got, err := help.Call([]cty.Value{cty.StringVal("nope")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	if !got.IsNull() {
+		t.Fatalf("help(\"nope\") = %#v, want null", got)
+	}
+}

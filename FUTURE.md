@@ -37,13 +37,41 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
   `evalCtxFn` already yields, not the call-site expression). Tri-state: `null` (no such
   function), `""` (exists but undocumented), or the description — so a mistyped name is
   distinguishable from an undocumented one without `doc` throwing. Read-only reflection,
-  so no injection risk. **Still open — richer `help(name)`:**
-  the `help` name is reserved for a function that assembles a *complete* human-readable
-  help string — calling convention (signature, required vs. optional, variadic), the
-  return type, and per-parameter docs. The pieces now exist: `Param.Doc` (shipped, see
-  *Doc-comment metadata*) plus signature introspection on `FuncDecl.Params`. `doc` is
-  the primitive; `help` is the formatted composition over it — the remaining work is the
-  rendering/format, not the data.
+  so no injection risk.
+- **`help(name)` — function help reflection** — *shipped* as
+  `functy.HelpFunc(funcs, evalCtxFn)`. Assembles a complete human-readable summary: the
+  signature (calling convention — names, types, defaults, variadic, return type),
+  description, and per-parameter docs; `null` for an unknown function. functy functions
+  render from their `FuncDecl` (authoritative, since optional/variadic collapse into a
+  single cty `VarParam`); non-functy functions fall back to a best-effort rendering from
+  their cty metadata. Known limitation (no clean fix): a Go builtin that emulates
+  optional/defaulted args through its `VarParam` can't be shown with its intended
+  signature — that structure isn't recoverable from cty. Possible extensions:
+  - **Host-registered argument docs for Go builtins** (addresses the limitation
+    above). Let a host supply proper signature/parameter metadata for its
+    `VarParam`-based builtins — a small registry (name → parameter names, optionality,
+    per-arg docs) that `HelpFunc` consults *before* falling back to raw cty
+    introspection. It restores accurate help for functions whose real shape cty has
+    erased, without functy needing to understand each builtin. Open: the registration
+    shape (a plain struct vs. reusing `FuncDecl`), and whether it also feeds `doc()`.
+  - A value form when/if functions become values, and a no-argument `help()` that lists
+    all functions.
+- **Reflection over global variables** (not urgent) — extend `doc()` / `help()` (or a
+  sibling builtin) to *variables*, not just functions, with two sources mirroring the
+  function story:
+  - **functy-defined** top-level `var` / `const` already carry `Decl.Doc` (from
+    doc-comment metadata) — the data exists; it just needs a lookup path, the reflection
+    builtin consulting a name → `Decl` view alongside the function table.
+  - **host-defined** globals — `env`, `sys`, ambient providers, `http_status`, … — are
+    plain cty values in the eval context's `Variables`, and **a cty value carries no
+    description** (unlike `function.Spec.Description`), so their docs must come from a
+    **host-registered** table (name → doc) — the same registry shape proposed above for
+    Go builtins' argument docs, so the two could share one mechanism.
+
+  Open: name-collision handling (HCL keeps `Functions` and `Variables` in separate
+  namespaces, but `doc("x")` takes a single string — check both, or add a namespacing
+  convention); whether to document **nested attributes** of rich-object globals
+  (`sys.os`, `env.HOME`) rather than only the top-level object; and the registration API.
 
 Explicitly **out of scope**: `tostring` / `length` with `Stringable` / `Lengthable`
 dispatch. They must *dispatch behavior* on a rich object's capsule (call its

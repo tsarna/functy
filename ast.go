@@ -39,11 +39,12 @@ type Param struct {
 	// Doc is the parameter's documentation: a trailing comment on its line
 	// (`a: T, // desc`) or a leading `//` / `#` block directly above it (which
 	// wins if both are present); "" when there is none. See attachDocComments.
-	Doc      string
-	Type     TypeConstraint // nil when unannotated (dynamic)
-	Default  hcl.Expression // non-nil for an optional parameter
-	Variadic bool           // true for the trailing *rest parameter
-	DefRange hcl.Range
+	Doc        string
+	Type       TypeConstraint // nil when unannotated (dynamic)
+	Default    hcl.Expression // non-nil for an optional parameter
+	DefaultSrc string         // source text of the default expression, for rendering (help())
+	Variadic   bool           // true for the trailing *rest parameter
+	DefRange   hcl.Range
 }
 
 // Statement is implemented by every functy statement node.

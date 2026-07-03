@@ -370,6 +370,11 @@ func (p *parser) parseParams() []Param {
 			}
 			p.advance()
 			prm.Default = p.parseExprStop(stopArg, "default value")
+			if prm.Default != nil {
+				if r := prm.Default.Range(); r.Start.Byte >= 0 && r.End.Byte <= len(p.src) && r.Start.Byte <= r.End.Byte {
+					prm.DefaultSrc = strings.TrimSpace(string(p.src[r.Start.Byte:r.End.Byte]))
+				}
+			}
 		}
 
 		// Ordering validation.
