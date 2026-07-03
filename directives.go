@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
 // Directive is a collected directive comment, following Go's convention: a line
@@ -19,28 +18,6 @@ type Directive struct {
 	Name      string
 	Args      string
 	Range     hcl.Range
-}
-
-// collectLeadingDirectives returns the directive comments in a source's leading
-// comment block — every directive comment before the first non-comment token. A
-// dedicated lex pass is used because lex() strips comments; the scan stops at the
-// first real token.
-func collectLeadingDirectives(src []byte, filename string) []Directive {
-	raw, _ := hclsyntax.LexConfig(src, filename, hcl.InitialPos)
-	var out []Directive
-	for _, t := range raw {
-		switch t.Type {
-		case hclsyntax.TokenComment:
-			if d, ok := parseDirectiveComment(t.Bytes, t.Range); ok {
-				out = append(out, d)
-			}
-		case hclsyntax.TokenNewline:
-			// blank lines are allowed within the leading block
-		default:
-			return out // first real token ends the leading block
-		}
-	}
-	return out
 }
 
 // parseDirectiveComment parses a single comment token as a directive. It returns

@@ -150,6 +150,12 @@ ambient values into one eval context. `functy.ParseSources` collects `.cty`
 sources from file paths, directories, or an `embed.FS`; `Parser.ParseAll`
 parses several sources into one `Result`.
 
+A leading `//` / `#` comment block above a declaration is captured as its
+documentation — `FuncDecl.Doc` and `Decl.Doc` — so a host can surface it (generated
+docs, editor hovers, or anywhere it wants a function's description at runtime); every
+comment is also retained with position in `Result.Comments`. See
+[doc/language.md](doc/language.md#doc-comments).
+
 When a call returns an error, an uncaught functy `throw`/`assert` surfaces as a
 `*functy.ThrownError`; `errors.As(err, &te)` recovers it, and `te.Diagnostics()`
 (or `functy.ErrorDiagnostics(value)`) yields `hcl.Diagnostics` you can hand to

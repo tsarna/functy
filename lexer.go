@@ -2,6 +2,7 @@ package functy
 
 import (
 	"bytes"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -29,27 +30,38 @@ var keywords = map[string]bool{
 	"true": true, "false": true, "null": true,
 }
 
-// lex tokenizes functy source. It runs the HCL native-syntax lexer (which
+// lexAll tokenizes functy source. It runs the HCL native-syntax lexer (which
 // correctly handles strings, ${}/%{} templates, heredocs, and comments) and
-// then adapts the stream for functy:
+// then adapts the stream for functy, returning both the adapted statement token
+// stream and a side table of every comment (retained with its position for
+// tooling — doc-comment metadata, a future formatter — since the statement
+// stream itself is comment-free). The adaptations:
 //
-//   - block comments are dropped;
+//   - block comments are dropped from the token stream;
 //   - line comments are replaced by a newline token, since the comment consumes
 //     the line's terminating newline;
+//   - every comment (of either kind) is recorded in the returned comment slice;
 //   - the spurious "invalid character" diagnostic HCL emits for ';' is dropped,
 //     because functy uses ';' as an explicit statement terminator (HCL still
 //     produces a TokenSemicolon for it).
 //
 // All other lexer diagnostics are returned to the caller.
-func lex(src []byte, filename string) ([]token, hcl.Diagnostics) {
+func lexAll(src []byte, filename string) ([]token, []Comment, hcl.Diagnostics) {
 	raw, diags := hclsyntax.LexConfig(src, filename, hcl.InitialPos)
 	diags = dropSemicolonDiags(diags)
 
 	out := make([]token, 0, len(raw))
+	var comments []Comment
 	for _, t := range raw {
 		switch t.Type {
 		case hclsyntax.TokenComment:
-			if isLineComment(t.Bytes) && bytes.HasSuffix(t.Bytes, []byte("\n")) {
+			line := isLineComment(t.Bytes)
+			comments = append(comments, Comment{
+				Text:  strings.TrimRight(string(t.Bytes), "\r\n"),
+				Line:  line,
+				Range: t.Range,
+			})
+			if line && bytes.HasSuffix(t.Bytes, []byte("\n")) {
 				// A line comment ends the line; preserve that as a newline so
 				// statement termination still happens.
 				out = append(out, token{
@@ -58,12 +70,21 @@ func lex(src []byte, filename string) ([]token, hcl.Diagnostics) {
 					Range: t.Range,
 				})
 			}
-			// Block comments (and an EOF-terminated line comment) are dropped.
+			// Block comments (and an EOF-terminated line comment) are dropped
+			// from the token stream but still recorded above.
 		default:
 			out = append(out, token{Type: t.Type, Bytes: t.Bytes, Range: t.Range})
 		}
 	}
-	return out, diags
+	return out, comments, diags
+}
+
+// lex tokenizes functy source, returning only the adapted statement token stream
+// (discarding the comment side table). It is a thin wrapper over lexAll for
+// callers that do not need comments.
+func lex(src []byte, filename string) ([]token, hcl.Diagnostics) {
+	tokens, _, diags := lexAll(src, filename)
+	return tokens, diags
 }
 
 // isLineComment reports whether a comment token is a // or # line comment

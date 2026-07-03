@@ -8,6 +8,19 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Added
+
+- **Doc-comment metadata + comment retention.** A contiguous leading `//` / `#`
+  (or `///`) comment block directly above a declaration is now captured as its
+  documentation: `FuncDecl.Doc` (functions) and `Decl.Doc` (top-level `var` /
+  `const`). Directive lines are excluded from the prose; block comments do not form
+  docs. This is built on a new comment-retention foundation — `Result.Comments`
+  holds **every** comment with its source position (the statement parser stream
+  stays comment-free), captured in a single lex pass. A host can use `Doc` for
+  generated docs, editor hovers, or anywhere it wants a function's description
+  available at runtime. Foundation for a future `functy fmt`. See
+  [doc/language.md](doc/language.md#doc-comments).
+
 ## [0.4.0] - 2026-07-01
 
 ### Added

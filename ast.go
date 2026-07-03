@@ -6,7 +6,10 @@ import (
 
 // FuncDecl is a top-level function declaration.
 type FuncDecl struct {
-	Name     string
+	Name string
+	// Doc is the rendered leading doc-comment block (`//` or `#` lines directly
+	// above the declaration, directive lines excluded); "" when there is none.
+	Doc      string
 	Params   []Param
 	RetType  TypeConstraint // nil when no return type is annotated (dynamic)
 	Body     []Statement

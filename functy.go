@@ -137,6 +137,7 @@ type lexedSource struct {
 	filename string
 	src      []byte
 	tokens   []token
+	comments []Comment
 }
 
 // parseSources is the shared core of Parse/ParseAll. It lexes every source,
@@ -149,9 +150,9 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 
 	lexed := make([]lexedSource, 0, len(sources))
 	for _, s := range sources {
-		tokens, ldiags := lex(s.Bytes, s.Filename)
+		tokens, comments, ldiags := lexAll(s.Bytes, s.Filename)
 		diags = diags.Extend(ldiags)
-		lexed = append(lexed, lexedSource{filename: s.Filename, src: s.Bytes, tokens: tokens})
+		lexed = append(lexed, lexedSource{filename: s.Filename, src: s.Bytes, tokens: tokens, comments: comments})
 	}
 
 	// Collect aliases from every source first, then resolve them into a per-parse
@@ -176,8 +177,9 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	for _, ls := range lexed {
 		// Directives are collected per file (file-scope), drive that file's strict
 		// typing, and are passed through to the host via Result.Directives.
-		dirs := collectLeadingDirectives(ls.src, ls.filename)
+		dirs := leadingDirectives(ls.comments, ls.tokens)
 		merged.Directives = append(merged.Directives, dirs...)
+		merged.Comments = append(merged.Comments, ls.comments...)
 		fParam, fRet, fDecl, idiags := interpretFunctyDirectives(dirs)
 		diags = diags.Extend(idiags)
 
@@ -196,6 +198,7 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 		}
 		r := pr.parseFile()
 		diags = diags.Extend(pr.diags)
+		attachDocComments(ls.src, r, ls.comments)
 		merged.Funcs = append(merged.Funcs, r.Funcs...)
 		merged.Tests = append(merged.Tests, r.Tests...)
 		merged.Consts = append(merged.Consts, r.Consts...)
@@ -213,6 +216,12 @@ type Result struct {
 	Consts []Decl      // top-level const declarations (only when enabled)
 	Vars   []Decl      // top-level var declarations (only when enabled)
 	Types  []TypeAlias // top-level type aliases (project-scoped across all sources)
+
+	// Comments is every comment from every source parsed together, in source
+	// order, retained with position. Declaration doc comments are also surfaced on
+	// FuncDecl.Doc / Decl.Doc; this is the complete table for tooling that needs
+	// all comments (e.g. a formatter).
+	Comments []Comment
 
 	// Directives are the directive comments from each source's leading comment
 	// block (file-scope), across all sources. functy acts on its own `functy:`
@@ -234,7 +243,10 @@ type TypeAlias struct {
 // host can fold it into its own dependency-sorting and evaluation pass.
 // Expr.Variables() exposes the references needed for that sort.
 type Decl struct {
-	Name     string
+	Name string
+	// Doc is the rendered leading doc-comment block (`//` or `#` lines directly
+	// above the declaration, directive lines excluded); "" when there is none.
+	Doc      string
 	Type     TypeConstraint // from an optional `: T`; nil if unannotated
 	Expr     hcl.Expression // initializer, lazily evaluated (nil if none)
 	DefRange hcl.Range

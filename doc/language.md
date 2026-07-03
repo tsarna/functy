@@ -29,6 +29,40 @@ Compiling it produces cty `function.Function` values that can be added to an
 Both Go-style `//` and shell/HCL-style `#` introduce line comments; `/* */`
 introduces a block comment.
 
+Comments never affect evaluation. They are, however, **retained** (with position)
+and exposed to a host on `Result.Comments`, so tooling — doc-comment metadata
+(below), and a future formatter — can see them even though the parser itself does
+not.
+
+### Doc comments
+
+A **doc comment** is the run of whole-line `//` or `#` comments on consecutive
+lines **directly above** a declaration, with no blank line in between. It is
+surfaced to a host as the declaration's documentation — `FuncDecl.Doc` for a
+`func`, and `Decl.Doc` for a top-level `var` / `const`:
+
+```functy
+// Adds two numbers.
+// The second is optional.
+func add(a: number, b: number = 0) -> number {
+    return a + b
+}
+```
+
+Rules:
+
+- The block must be **immediately** above the declaration; a blank line ends it,
+  and a comment trailing code on the same line is not a doc comment.
+- Each line's marker (`//`, `///`, `#`, …) and one following space are stripped;
+  lines are joined with a newline.
+- **Block comments** (`/* */`) never form documentation.
+- **Directive lines** (`//<ns>:<name>`, see below) inside the block are excluded
+  from the prose but do not break it — prose above a directive is still collected.
+  (Because a directive requires the `//` form, a `#` block is never ambiguous.)
+
+A host uses `Doc` for generated documentation and editor hovers — and, more
+generally, anywhere it wants a function's description available at runtime.
+
 ### Statement termination
 
 functy uses Go-style implicit termination:
