@@ -125,6 +125,72 @@ them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
   alternative (for single-line lists) was considered and left out — position-based
   attachment avoids name repetition and drift. See also *Annotations* for an evaluated
   (`@name`) alternative to comment-based metadata.
+- **`extern` declarations — doc registration for host-provided functions.** A function
+  registered by a Go host (e.g. a cty function from `rich-cty-types`) has no functy
+  source, so `help()` / generated docs / LSP hovers have nothing to show for it. Let a
+  package ship an **`extern` declaration block** — normal functy declaration syntax with
+  the `extern` keyword and **no body** — carrying the full signature and the usual
+  doc-comment metadata (function doc, per-parameter docs, `@warn`/directive lines,
+  defaults, param types). The parser reuses the ordinary declaration path but routes
+  `extern` decls into a **separate map** (`Result.Externs`) — they are documentation
+  records, never compiled or callable. `help()` and doc generation consult that map
+  after the real function set.
+
+  ```functy
+  // Parse a CIDR block into a network object.
+  // @warn Panics on malformed input at call sites without try().
+  extern func cidr(
+      s,              // the CIDR string, e.g. "10.0.0.0/8"
+  )
+  ```
+
+  The point is **zero coupling in both directions**: the leaf package exports its extern
+  block as an opaque `var Externs = []byte(…)` (a raw-string literal) and never imports
+  functy; functy never
+  imports the leaf package; the glue that already knows about both (the consuming program,
+  or a `RegisterFunctyType`-style hook) calls `functy.RegisterExterns(pkg.Externs)`. This
+  beats the obvious alternative — a shared `functydoc` struct package both sides import —
+  which reintroduces a shared dependency and forces inventing a second doc format instead
+  of reusing functy's own source as the single source of truth. Recorded so the `[]byte`
+  choice isn't re-litigated.
+
+  Design points to settle when built:
+  - **`extern` keyword, not `;`-for-body.** The keyword lets the parser enforce the
+    invariant both ways (extern *with* a body is an error; a non-extern *without* one is
+    an error) and reads as a declaration rather than a "was this a typo?" empty function.
+  - **Cost, stated honestly.** No *runtime* cost unless `RegisterExterns` is called
+    (parsing is deferred to registration). Binary-size cost is at most the literal bytes,
+    and only if the linker doesn't dead-code-eliminate the unreferenced `var` — never a
+    parse. The trade-off of the bytes format: malformed extern blocks fail at
+    **registration time (runtime)**, not compile time.
+  - **Precedence + collisions.** A real function shadows an extern of the same name (or
+    warn); two packages registering the same extern name collide and are reported, mirroring
+    the host's existing transform/type collision detection.
+  - **Optional leading `ctx` — currently unspellable, and a reason extern is the right home.**
+    Some host functions (the rich-cty-types `get`/`set`/`count`/`call…` family) take an
+    **optional leading context**: `get([ctx,] thing, …)`. This is not a real cty parameter —
+    it is implemented as a `VarParam` first-argument sniff (a `contextAndThing`-style helper
+    that consumes `args[0]` iff it is a context capsule/object, else treats it as the first
+    real arg). So cty's `function.Parameter` list can neither express nor *reflect* it: an
+    optional param can only sit at the tail, never the head, and the ctx slot has been erased
+    into the varargs. functy has no way to spell it in a signature or render it in help today.
+    That reflection-blindness is precisely why an author-written **extern** is the right place
+    to declare it — the human states what the cty function's metadata cannot reveal. Proposed
+    spelling: reuse the already-registered **`ctx` open type** (`IsContextObject` /
+    `RegisterOpenType`) — a *leading* parameter typed `ctx` and marked optional is understood
+    as the `[ctx,]` convention and rendered bracketed by `help()`. This needs one independent
+    primitive: an **optional parameter without a default** (a bare `?` marker, e.g.
+    `ctx?: ctx`), since a context has no spellable default value the way trailing `= 0` params
+    do — useful on its own beyond ctx. `?` can be **limited to extern initially**: externs are
+    docs-only and never compiled, so the marker just feeds signature rendering and carries no
+    runtime semantics to pin down. Extending it to real functy functions (what an absent,
+    default-less optional arg *evaluates* to — `null`? a distinct "unset"?) is a separable,
+    later decision.
+  - **Optional lint payoff.** Because externs name real registered functions, a host (or
+    `functy check`) can cross-check them and flag *documented-but-unimplemented* and
+    *implemented-but-undocumented*. A leaf package can take a **build-time-only** dependency
+    on functy to run this validation over its own extern block in CI (optionally a
+    `--externs-only` mode) without pulling functy into its runtime graph.
 - **Function visibility (exported vs. internal helpers).** Today every top-level
   `func` is registered globally. A convention or keyword (Go-style lowercase, an
   `export` / `pub` keyword, or `_`-prefix) would let a file define local helpers
