@@ -8,6 +8,8 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-05
+
 ### Added
 
 - **Source formatter — `functy.Format` / `functy fmt`.** A canonical formatter for
