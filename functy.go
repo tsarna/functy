@@ -170,7 +170,7 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	merged := &Result{}
 	for _, a := range aliases {
 		if tc, ok := env.named[a.name]; ok {
-			merged.Types = append(merged.Types, TypeAlias{Name: a.name, Type: tc, DefRange: a.defRange})
+			merged.Types = append(merged.Types, TypeAlias{Name: a.name, Type: tc, TypeSrc: a.rhsSrc, DefRange: a.defRange})
 		}
 	}
 
@@ -236,6 +236,7 @@ type Result struct {
 type TypeAlias struct {
 	Name     string
 	Type     TypeConstraint
+	TypeSrc  string // source text of the aliased type (right-hand side), for rendering (fmt)
 	DefRange hcl.Range
 }
 
@@ -248,6 +249,7 @@ type Decl struct {
 	// above the declaration, directive lines excluded); "" when there is none.
 	Doc      string
 	Type     TypeConstraint // from an optional `: T`; nil if unannotated
+	TypeSrc  string         // source text of the type annotation, for rendering (fmt)
 	Expr     hcl.Expression // initializer, lazily evaluated (nil if none)
 	DefRange hcl.Range
 }

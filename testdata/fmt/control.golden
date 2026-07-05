@@ -1,0 +1,33 @@
+func classify(n) {
+    if n > 0 {
+        return "pos"
+    } else if n < 0 {
+        return "neg"
+    } else {
+        return "zero"
+    }
+    for i in [1, 2, 3] {
+        for k, v in { a = 1 } {
+            log(i, k, v)
+        }
+    }
+    outer: while n > 0 {
+        n = n-1
+        if n == 5 {
+            break outer
+        }
+    }
+    for var x = 0; x < 3; x = x + 1 {
+        log(x)
+    }
+    switch n {
+        case 1, 2:
+            log("low")
+            fallthrough
+        case 3:
+            log("three")
+        default:
+            log("other")
+    }
+    return n
+}

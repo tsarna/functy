@@ -219,7 +219,7 @@ func (p *parser) parseTopLevelDecl(result *Result, isConst bool) {
 	}
 	if p.cur().Type == hclsyntax.TokenColon {
 		p.advance()
-		decl.Type = p.parseType(false)
+		decl.Type, decl.TypeSrc = p.parseType(false)
 	} else if p.strict.declaredTypes.on() {
 		p.errf(decl.DefRange, "Missing "+strings.ToLower(kind)+" type",
 			fmt.Sprintf("%s %q must declare a type (%s); use `: any` for an explicitly dynamic declaration.",
@@ -263,7 +263,7 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 		p.advance()
 		p.advance()
 		p.skipNewlines()
-		fn.RetType = p.parseType(true)
+		fn.RetType, fn.RetTypeSrc = p.parseType(true)
 		p.skipNewlines()
 	} else if p.strict.returnType.on() {
 		p.errf(fn.DefRange, "Missing return type",
@@ -279,7 +279,7 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 	// A `-> null` (void) function may only return null; record that for the body.
 	prevVoid := p.voidReturn
 	_, p.voidReturn = fn.RetType.(nullConstraint)
-	fn.Body = p.parseBlockBody()
+	fn.Body, fn.BodyRange = p.parseBlockBody()
 	p.voidReturn = prevVoid
 	return fn
 }
@@ -316,11 +316,11 @@ func (p *parser) parseTestDecl() *TestDecl {
 		p.recoverToTopLevel()
 		return nil
 	}
-	body := p.parseBlockBody()
+	body, brange := p.parseBlockBody()
 	if !ok {
 		return nil // description error already reported; body consumed to avoid cascade
 	}
-	return &TestDecl{Name: name, Body: body, DefRange: hcl.RangeBetween(kw.Range, p.tokens[p.pos-1].Range)}
+	return &TestDecl{Name: name, Body: body, BodyRange: brange, DefRange: hcl.RangeBetween(kw.Range, p.tokens[p.pos-1].Range)}
 }
 
 func (p *parser) parseParams() []Param {
@@ -365,7 +365,7 @@ func (p *parser) parseParams() []Param {
 
 		if p.cur().Type == hclsyntax.TokenColon {
 			p.advance()
-			prm.Type = p.parseType(false)
+			prm.Type, prm.TypeSrc = p.parseType(false)
 		} else if p.strict.paramTypes.on() {
 			p.errf(prm.DefRange, "Missing parameter type",
 				fmt.Sprintf("Parameter %q must declare a type (%s); use `: any` for an explicitly dynamic parameter.",
@@ -436,15 +436,17 @@ func (p *parser) skipToParamBoundary() {
 // parseBlockBody parses a { ... } body. The current token must be the opening
 // brace. It returns the body statements and leaves the parser just past the
 // closing brace.
-func (p *parser) parseBlockBody() []Statement {
-	p.advance() // consume '{'
+func (p *parser) parseBlockBody() ([]Statement, hcl.Range) {
+	open := p.cur() // '{'
+	p.advance()     // consume '{'
 	stmts := p.parseStatements()
-	if p.cur().Type == hclsyntax.TokenCBrace {
+	closeTok := p.cur()
+	if closeTok.Type == hclsyntax.TokenCBrace {
 		p.advance()
 	} else {
-		p.errf(p.cur().Range, "Expected }", "Unterminated block; expected a closing brace.")
+		p.errf(closeTok.Range, "Expected }", "Unterminated block; expected a closing brace.")
 	}
-	return stmts
+	return stmts, hcl.RangeBetween(open.Range, closeTok.Range)
 }
 
 // checkShortDecl registers a declare-and-capture (`:=`) target in the scope's
@@ -695,7 +697,7 @@ func (p *parser) parseVarDecl(stop stopFunc) Statement {
 	vd := &VarDecl{Name: name.text, SrcRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
 	if p.cur().Type == hclsyntax.TokenColon {
 		p.advance()
-		vd.Type = p.parseType(false)
+		vd.Type, vd.TypeSrc = p.parseType(false)
 	} else if p.strict.declaredTypes.on() {
 		p.errf(vd.SrcRange, "Missing variable type",
 			fmt.Sprintf("Variable %q must declare a type (%s); use `: any` for an explicitly dynamic variable.",
@@ -769,9 +771,8 @@ func (p *parser) parseLoopControlLabel(kw string) string {
 }
 
 func (p *parser) parseBareBlock() Statement {
-	start := p.cur().Range
-	body := p.parseBlockBody()
-	return &Block{Body: body, SrcRange: start}
+	body, brange := p.parseBlockBody()
+	return &Block{Body: body, SrcRange: brange}
 }
 
 func (p *parser) parseThrow() Statement {
@@ -797,7 +798,7 @@ func (p *parser) parseTry() Statement {
 		p.errf(p.cur().Range, "Expected {", "try must be followed by a { ... } block.")
 		return tr
 	}
-	tr.Body = p.parseBlockBody()
+	tr.Body, tr.BodyRange = p.parseBlockBody()
 
 	// Zero or more catch clauses, tried in order at runtime. A catch-all (no type
 	// filter and no guard) must be last, since a later clause is unreachable.
@@ -823,7 +824,7 @@ func (p *parser) parseTry() Statement {
 			p.errf(p.cur().Range, "Expected {", "finally must be followed by a { ... } block.")
 			return tr
 		}
-		tr.Finally = p.parseBlockBody()
+		tr.Finally, tr.FinallyRange = p.parseBlockBody()
 	}
 
 	if len(tr.Catches) == 0 && tr.Finally == nil {
@@ -848,7 +849,7 @@ func (p *parser) parseCatchClause() (CatchClause, bool) {
 	// Optional type filter.
 	if p.cur().Type == hclsyntax.TokenColon {
 		p.advance()
-		c.Type = p.parseCatchType()
+		c.Type, c.TypeSrc = p.parseCatchType()
 	}
 	// Optional guard.
 	if p.cur().isKeyword("if") {
@@ -859,7 +860,7 @@ func (p *parser) parseCatchClause() (CatchClause, bool) {
 		p.errf(p.cur().Range, "Expected {", "catch must be followed by a { ... } block.")
 		return c, false
 	}
-	c.Body = p.parseBlockBody()
+	c.Body, c.BodyRange = p.parseBlockBody()
 	return c, true
 }
 
@@ -867,11 +868,11 @@ func (p *parser) parseCatchClause() (CatchClause, bool) {
 // it must also stop at the `if` guard keyword (a stopFunc sees only token types,
 // not text), so it scans the span directly and resolves it. Balanced brackets —
 // e.g. the braces of object({...}) — are at depth >= 1 and do not stop the scan.
-func (p *parser) parseCatchType() TypeConstraint {
+func (p *parser) parseCatchType() (TypeConstraint, string) {
 	start := p.cur()
 	if isTerminator(start.Type) || start.Type == hclsyntax.TokenOBrace || p.atEOF() {
 		p.errf(start.Range, "Expected type", "Expected a type annotation after ':' here.")
-		return nil
+		return nil, ""
 	}
 	depth := 0
 	i := p.pos
@@ -895,7 +896,8 @@ func (p *parser) parseCatchType() TypeConstraint {
 	}
 	endByte := p.tokens[i].Range.Start.Byte
 	p.pos = i
-	return p.resolveTypeSpan(start.Range.Start.Byte, endByte, start.Range.Start)
+	tc := p.resolveTypeSpan(start.Range.Start.Byte, endByte, start.Range.Start)
+	return tc, strings.TrimSpace(string(p.src[start.Range.Start.Byte:endByte]))
 }
 
 func (p *parser) parseIf() Statement {
@@ -908,8 +910,8 @@ func (p *parser) parseIf() Statement {
 		p.errf(p.cur().Range, "Expected {", "An if condition must be followed by a { ... } block.")
 		return chain
 	}
-	body := p.parseBlockBody()
-	chain.Branches = append(chain.Branches, CondBranch{Condition: cond, Body: body, SrcRange: start})
+	body, brange := p.parseBlockBody()
+	chain.Branches = append(chain.Branches, CondBranch{Condition: cond, Body: body, BodyRange: brange, SrcRange: start})
 
 	for p.cur().isKeyword("else") {
 		p.advance() // else
@@ -921,15 +923,15 @@ func (p *parser) parseIf() Statement {
 				p.errf(p.cur().Range, "Expected {", "An else-if condition must be followed by a { ... } block.")
 				return chain
 			}
-			ebody := p.parseBlockBody()
-			chain.Branches = append(chain.Branches, CondBranch{Condition: econd, Body: ebody, SrcRange: elifStart})
+			ebody, ebrange := p.parseBlockBody()
+			chain.Branches = append(chain.Branches, CondBranch{Condition: econd, Body: ebody, BodyRange: ebrange, SrcRange: elifStart})
 			continue
 		}
 		if p.cur().Type != hclsyntax.TokenOBrace {
 			p.errf(p.cur().Range, "Expected {", "else must be followed by a { ... } block or by if.")
 			return chain
 		}
-		chain.Else = p.parseBlockBody()
+		chain.Else, chain.ElseRange = p.parseBlockBody()
 		break
 	}
 	return chain
@@ -944,9 +946,9 @@ func (p *parser) parseWhile() Statement {
 		return &For{Kind: ForCond, Cond: cond, SrcRange: start}
 	}
 	label := p.enterLoop()
-	body := p.parseBlockBody()
+	body, brange := p.parseBlockBody()
 	p.exitLoop()
-	return &For{Kind: ForCond, Cond: cond, Body: body, SrcRange: start, Label: label}
+	return &For{Kind: ForCond, Cond: cond, Body: body, BodyRange: brange, SrcRange: start, Label: label, While: true}
 }
 
 func (p *parser) parseFor() Statement {
@@ -956,9 +958,9 @@ func (p *parser) parseFor() Statement {
 	// Infinite loop: `for { ... }`.
 	if p.cur().Type == hclsyntax.TokenOBrace {
 		label := p.enterLoop()
-		body := p.parseBlockBody()
+		body, brange := p.parseBlockBody()
 		p.exitLoop()
-		return &For{Kind: ForCond, Body: body, SrcRange: start, Label: label}
+		return &For{Kind: ForCond, Body: body, BodyRange: brange, SrcRange: start, Label: label}
 	}
 
 	switch p.classifyForHeader() {
@@ -1014,9 +1016,9 @@ func (p *parser) parseForCond(start hcl.Range) Statement {
 		return &For{Kind: ForCond, Cond: cond, SrcRange: start}
 	}
 	label := p.enterLoop()
-	body := p.parseBlockBody()
+	body, brange := p.parseBlockBody()
 	p.exitLoop()
-	return &For{Kind: ForCond, Cond: cond, Body: body, SrcRange: start, Label: label}
+	return &For{Kind: ForCond, Cond: cond, Body: body, BodyRange: brange, SrcRange: start, Label: label}
 }
 
 func (p *parser) parseForClause(start hcl.Range) Statement {
@@ -1042,7 +1044,7 @@ func (p *parser) parseForClause(start hcl.Range) Statement {
 		return loop
 	}
 	loop.Label = p.enterLoop()
-	loop.Body = p.parseBlockBody()
+	loop.Body, loop.BodyRange = p.parseBlockBody()
 	p.exitLoop()
 	return loop
 }
@@ -1079,7 +1081,7 @@ func (p *parser) parseForRange(start hcl.Range) Statement {
 		return loop
 	}
 	loop.Label = p.enterLoop()
-	loop.Body = p.parseBlockBody()
+	loop.Body, loop.BodyRange = p.parseBlockBody()
 	p.exitLoop()
 	return loop
 }
@@ -1092,6 +1094,7 @@ func (p *parser) parseSwitch() Statement {
 	if p.cur().Type != hclsyntax.TokenOBrace {
 		sw.Subject = p.parseExprStop(stopCond, "switch subject")
 	}
+	obrace := p.cur().Range
 	if !p.expect(hclsyntax.TokenOBrace, "{") {
 		return sw
 	}
@@ -1141,6 +1144,7 @@ func (p *parser) parseSwitch() Statement {
 			p.advance()
 		}
 	}
+	sw.BodyRange = hcl.RangeBetween(obrace, p.cur().Range)
 	if p.cur().Type == hclsyntax.TokenCBrace {
 		p.advance()
 	}
@@ -1303,19 +1307,20 @@ func (p *parser) parseExprStop(stop stopFunc, what string) hcl.Expression {
 	return expr
 }
 
-// parseType parses and resolves a type annotation to a constraint (nil on error).
+// parseType parses and resolves a type annotation to a constraint (nil on error),
+// and also returns the annotation's source text (for rendering by fmt; "" on error).
 // allowNull permits the `null` void return type, which is invalid elsewhere.
-func (p *parser) parseType(allowNull bool) TypeConstraint {
+func (p *parser) parseType(allowNull bool) (TypeConstraint, string) {
 	if isTerminator(p.cur().Type) || p.atEOF() {
 		p.errf(p.cur().Range, "Expected type", "Expected a type annotation here.")
-		return nil
+		return nil, ""
 	}
 	sb, eb, sp := p.scanSpan(stopType)
 	if eb <= sb {
 		p.errf(p.cur().Range, "Expected type", "Expected a type annotation here.")
-		return nil
+		return nil, ""
 	}
-	return p.resolveTypeSpanAllowNull(sb, eb, sp, allowNull)
+	return p.resolveTypeSpanAllowNull(sb, eb, sp, allowNull), strings.TrimSpace(string(p.src[sb:eb]))
 }
 
 // resolveTypeSpan parses the given source byte span as a type annotation and

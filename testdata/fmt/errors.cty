@@ -1,0 +1,14 @@
+func risky(x) {
+    try {
+        var y=compute(x)
+        defer cleanup()
+        return y
+    } catch e:error if x>0 {
+        return e.message
+    } catch {
+        return "unknown"
+    } finally {
+        log("done")
+    }
+    throw error("unreachable")
+}

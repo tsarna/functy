@@ -9,11 +9,13 @@ type FuncDecl struct {
 	Name string
 	// Doc is the rendered leading doc-comment block (`//` or `#` lines directly
 	// above the declaration, directive lines excluded); "" when there is none.
-	Doc      string
-	Params   []Param
-	RetType  TypeConstraint // nil when no return type is annotated (dynamic)
-	Body     []Statement
-	DefRange hcl.Range
+	Doc        string
+	Params     []Param
+	RetType    TypeConstraint // nil when no return type is annotated (dynamic)
+	RetTypeSrc string         // source text of the return-type annotation, for rendering (fmt)
+	Body       []Statement
+	BodyRange  hcl.Range // the `{ ... }` body span, for rendering (fmt)
+	DefRange   hcl.Range
 }
 
 // TestDecl is a top-level `test "description" { … }` block. Its body is ordinary
@@ -21,9 +23,10 @@ type FuncDecl struct {
 // error (a failed assert, a throw, an eval error) unwinds out of it. Tests are not
 // registered in the callable function namespace.
 type TestDecl struct {
-	Name     string      // the test description (a string literal)
-	Body     []Statement // body statements, like a function body
-	DefRange hcl.Range   // spans `test` … closing `}`
+	Name      string      // the test description (a string literal)
+	Body      []Statement // body statements, like a function body
+	BodyRange hcl.Range   // the `{ ... }` body span, for rendering (fmt)
+	DefRange  hcl.Range   // spans `test` … closing `}`
 }
 
 func (t *TestDecl) srcRange() hcl.Range { return t.DefRange }
@@ -41,8 +44,9 @@ type Param struct {
 	// wins if both are present); "" when there is none. See attachDocComments.
 	Doc        string
 	Type       TypeConstraint // nil when unannotated (dynamic)
+	TypeSrc    string         // source text of the type annotation, for rendering (fmt)
 	Default    hcl.Expression // non-nil for an optional parameter
-	DefaultSrc string         // source text of the default expression, for rendering (help())
+	DefaultSrc string         // source text of the default expression, for rendering (help()/fmt)
 	Variadic   bool           // true for the trailing *rest parameter
 	DefRange   hcl.Range
 }
@@ -59,6 +63,7 @@ type Statement interface {
 type VarDecl struct {
 	Name     string
 	Type     TypeConstraint // nil when unannotated (dynamic)
+	TypeSrc  string         // source text of the type annotation, for rendering (fmt)
 	Init     hcl.Expression
 	SrcRange hcl.Range
 }
@@ -112,15 +117,17 @@ type Block struct {
 // IfChain is an if / else-if / else chain. Else is nil when there is no final
 // else clause.
 type IfChain struct {
-	Branches []CondBranch
-	Else     []Statement
-	SrcRange hcl.Range
+	Branches  []CondBranch
+	Else      []Statement
+	ElseRange hcl.Range // the `else { ... }` body span (zero when there is no else), for fmt
+	SrcRange  hcl.Range
 }
 
 // CondBranch is one condition-guarded branch of an if chain.
 type CondBranch struct {
 	Condition hcl.Expression
 	Body      []Statement
+	BodyRange hcl.Range // the `{ ... }` body span, for fmt
 	SrcRange  hcl.Range
 }
 
@@ -145,6 +152,10 @@ type For struct {
 	// target equals this label is consumed by this loop rather than an inner one.
 	Label string
 
+	// While is true when a ForCond loop was written with the `while` keyword rather
+	// than `for` (the two are synonyms); recorded so fmt can preserve the keyword.
+	While bool
+
 	// ForCond / ForClause:
 	Init Statement      // ForClause init clause (nil otherwise)
 	Cond hcl.Expression // condition (nil = always true)
@@ -155,17 +166,19 @@ type For struct {
 	ValName    string         // second range variable ("" if only one is given)
 	Collection hcl.Expression // collection being ranged over
 
-	Body     []Statement
-	SrcRange hcl.Range
+	Body      []Statement
+	BodyRange hcl.Range // the `{ ... }` body span, for fmt
+	SrcRange  hcl.Range
 }
 
 // Switch is a switch statement. Subject is nil for the expression-less form,
 // whose case values are boolean expressions evaluated like an if/else chain.
 // Clauses are in source order; at most one is the default.
 type Switch struct {
-	Subject  hcl.Expression
-	Clauses  []Clause
-	SrcRange hcl.Range
+	Subject   hcl.Expression
+	Clauses   []Clause
+	BodyRange hcl.Range // the `{ ... }` body span (open brace to close brace), for fmt
+	SrcRange  hcl.Range
 }
 
 // Clause is one case or default clause of a switch. For a case clause Values
@@ -197,10 +210,12 @@ type Defer struct {
 // wins) and always running a finally block. At least one of Catches/Finally is
 // present.
 type Try struct {
-	Body     []Statement
-	Catches  []CatchClause
-	Finally  []Statement
-	SrcRange hcl.Range
+	Body         []Statement
+	BodyRange    hcl.Range // the `try { ... }` body span, for fmt
+	Catches      []CatchClause
+	Finally      []Statement
+	FinallyRange hcl.Range // the `finally { ... }` body span (zero when absent), for fmt
+	SrcRange     hcl.Range
 }
 
 // CatchClause is one `catch [name] [: type] [if guard] { ... }` clause. It matches
@@ -209,11 +224,13 @@ type Try struct {
 // with both Type and Guard nil is the catch-all. The bound name receives the raw
 // error value (the filter is a gate, not a cast).
 type CatchClause struct {
-	Name     string         // "" when omitted
-	Type     TypeConstraint // nil = no type filter
-	Guard    hcl.Expression // nil = no guard
-	Body     []Statement
-	SrcRange hcl.Range
+	Name      string         // "" when omitted
+	Type      TypeConstraint // nil = no type filter
+	TypeSrc   string         // source text of the type filter, for rendering (fmt)
+	Guard     hcl.Expression // nil = no guard
+	Body      []Statement
+	BodyRange hcl.Range // the `{ ... }` body span, for fmt
+	SrcRange  hcl.Range
 }
 
 // Break exits an enclosing loop: the innermost one, or the loop named by Label.

@@ -8,6 +8,24 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Added
+
+- **Source formatter — `functy.Format` / `functy fmt`.** A canonical formatter for
+  `.cty` source: four-space indentation, normalized spacing (expressions via
+  `hclwrite`, matching `terraform fmt`), blank-line runs collapsed to one, and
+  comments — including doc comments — preserved. It reformats a file only when it
+  parses cleanly, so it never drops or reorders code, and it is idempotent. The
+  `functy fmt` CLI verb formats stdin→stdout, or files/directories with `-w`
+  (rewrite in place) or `-l` (list files that differ). `Format` is also a
+  `(*Parser)` method so a host whose parser registers named types can format its own
+  files. See [doc/cli.md](doc/cli.md#fmt).
+
+### Fixed
+
+- **Parser: a malformed parameter list no longer loops forever.** `func f( {` (an
+  unclosed `(` before the body brace) previously hung the parser; it now reports an
+  "unterminated parameter list" error and recovers.
+
 ## [0.5.0] - 2026-07-03
 
 ### Added

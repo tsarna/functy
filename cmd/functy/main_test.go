@@ -281,3 +281,59 @@ func TestRunMissingEntry(t *testing.T) {
 		t.Fatalf("expected error for missing main")
 	}
 }
+
+func TestFmtStdin(t *testing.T) {
+	c := rootCmd()
+	var out, errb bytes.Buffer
+	c.SetOut(&out)
+	c.SetErr(&errb)
+	c.SetIn(strings.NewReader("func  f(a,b){return a+b}\n"))
+	c.SetArgs([]string{"fmt", "-"})
+	if err := c.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v (stderr: %s)", err, errb.String())
+	}
+	want := "func f(a, b) {\n    return a + b\n}\n"
+	if out.String() != want {
+		t.Fatalf("fmt stdin =\n%q\nwant\n%q", out.String(), want)
+	}
+}
+
+func TestFmtWriteAndList(t *testing.T) {
+	path := writeCty(t, "messy.cty", "func  g( a ){return a}\n")
+
+	// -l reports the file as differing.
+	out, _, err := execCLI(t, "fmt", "-l", path)
+	if err != nil {
+		t.Fatalf("fmt -l: %v", err)
+	}
+	if strings.TrimSpace(out) != path {
+		t.Fatalf("fmt -l = %q, want %q", out, path)
+	}
+
+	// -w rewrites it in place.
+	if _, _, err := execCLI(t, "fmt", "-w", path); err != nil {
+		t.Fatalf("fmt -w: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	want := "func g(a) {\n    return a\n}\n"
+	if string(got) != want {
+		t.Fatalf("after -w file =\n%q\nwant\n%q", got, want)
+	}
+
+	// -l now reports nothing (already formatted).
+	out, _, err = execCLI(t, "fmt", "-l", path)
+	if err != nil {
+		t.Fatalf("fmt -l (2): %v", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("fmt -l after -w = %q, want empty", out)
+	}
+}
+
+func TestFmtParseErrorFails(t *testing.T) {
+	path := writeCty(t, "broken.cty", "func f( {\n")
+	_, _, err := execCLI(t, "fmt", path)
+	if err == nil {
+		t.Fatal("expected fmt to fail on a file that does not parse")
+	}
+}

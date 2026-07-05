@@ -353,35 +353,25 @@ links the library directly and supplies its own richer context). Planned additio
   (its own functions and ambients) can layer that on top. Standalone it is necessarily
   limited — no app-specific functions or ambients — but still handy for exploring the
   stdlib, language semantics, and loaded functions.
-- **`functy fmt [FILE …]`** — canonical formatter. For a language targeting the
-  HCL/Terraform audience (who expect `terraform fmt` / `gofmt`), this is close to
-  adoption-critical. Must preserve directive comments. The comment-retention
-  foundation it depends on **already shipped** with doc-comment metadata:
-  `Result.Comments` holds every comment with position (the parser stream stays
-  comment-free), so `fmt` no longer has to solve comment retention — it reduces to
-  layout + expression delegation. Design notes worked out up front:
-  - **Two-layer split.** functy's layout layer owns *statement structure* —
-    indentation, braces, blank-line runs, and the statement/declaration-level
-    comments from `Result.Comments`. Each *expression span* is reformatted by
-    **`hclwrite.Format`** and spliced back as an opaque unit.
-  - **Why `hclwrite`, not the AST.** `hclsyntax.ParseExpression` (what the runtime
-    uses) **discards** comments, so reprinting from its AST would lose any comment
-    *inside* an expression. `hclwrite` is token-based and preserves them — so `fmt`
-    must route expression spans through `hclwrite`, not the AST. Verified: it also
-    does **not** rewrite `#` ↔ `//` (either marker is preserved verbatim), so
-    directive comments and author marker choice survive; `fmt` should likewise not
-    normalize markers.
-  - **Span ownership (no double-emit).** A comment falling *within* an expression
-    span is owned by `hclwrite`; it must be **excluded** from the `Result.Comments`
-    merge so the statement layer does not emit it a second time. Rule: comment
-    inside any expression span → hclwrite's; comment elsewhere → the layout layer's.
-  - **Continuation-line re-indent.** `hclwrite.Format` formats a fragment as if at
-    column 0 (verified: it strips a continuation line's leading indent), so when a
-    multi-line expression span is spliced at a statement's indent, `fmt` must
-    re-indent the continuation lines itself.
-  - **Blank-line runs** are the one thing not in `Result.Comments`; `fmt` derives
-    them from token/source positions to preserve intentional grouping.
-  - **Idempotency:** `fmt(fmt(x)) == fmt(x)`, guarded by a golden-file corpus.
+- **`functy fmt`** — canonical formatter — *shipped* (`functy.Format` /
+  `(*Parser).Format`, and the `functy fmt` CLI verb; see `doc/cli.md`). Built as the
+  designed two-layer split: functy's AST-driven layout layer owns statement structure
+  (four-space indentation, braces, blank-line runs collapsed to one, and
+  statement/declaration comments from `Result.Comments`), while each expression span is
+  reformatted by `hclwrite.Format` (which preserves interior comments and matches
+  `terraform fmt`) and spliced back with continuation-line re-indent; comments inside an
+  expression span are excluded from the cursor to avoid double-emit. Faithful
+  re-emission required capturing more source in the AST than expected — type-annotation
+  text (`TypeSrc` / `RetTypeSrc`, so aliases and named types round-trip) and every
+  block's brace range (nodes only ranged their headers) — plus a `While` flag to keep
+  the `while` keyword. Reformats only a cleanly-parsing file (never drops/reorders code)
+  and is idempotent, guarded by a golden corpus. **Known v1 limitations (candidates for
+  later):** parameter-list-internal comments and a comment trailing a `{` or sitting
+  between `}` and `else`/`catch` are relocated (to the body / to their own line) rather
+  than kept in place; `while` is preserved but the single-var `x := 0` shorthand
+  normalizes to `var x = 0`; block-comment interior lines are re-indented to the current
+  level; multi-line param lists are re-flowed to one line. None lose a comment — the
+  final flush guarantees every comment is emitted.
 - **LSP / editor support** — diagnostics, hovers (using doc-comment metadata),
   go-to-definition, completion. Editor-agnostic; the VSCode extension below is its
   first client (and can ship static features ahead of the server).

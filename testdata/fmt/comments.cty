@@ -1,0 +1,15 @@
+// leading file comment
+
+func documented(a) {
+
+    // a standalone comment
+    var x = a + 1
+
+
+    // after a blank gap
+    return x
+}
+
+
+# a hash comment before g
+func g() { return 1 }

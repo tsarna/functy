@@ -1,0 +1,15 @@
+// A basic file: functions, params, consts, aliases.
+
+type Small = number
+
+//   doc line one
+//   doc line two
+func add(a: number, b: Small = 0) -> number {
+    return a + b
+}
+const pi = 3.14159
+const tau = pi * 2
+
+func noargs() {
+    return "hi"  // trailing
+}

@@ -14,6 +14,7 @@ go install github.com/tsarna/functy/cmd/functy@latest
 functy run [--func NAME] [--output json|hcl|raw] FILE... [-- ARG...]
 functy check FILE...
 functy test FILE...
+functy fmt [-w] [-l] [FILE|DIR ...]
 ```
 
 ## run
@@ -136,7 +137,36 @@ sum = -3
   1 passed, 0 failed, 0 skipped (2 deselected by --run)
   ```
 
+## fmt
+
+Format `.cty` source into a canonical style. With no paths (or `-`) it reads
+stdin and writes the result to stdout:
+
+```sh
+functy fmt < messy.cty
+cat messy.cty | functy fmt -
+```
+
+Given files or directories (directories are walked for `.cty` files, skipping
+dot-directories), the default prints the formatted source to stdout; the flags
+change that:
+
+- **`-w`** — rewrite each file in place (only files whose formatting changes).
+- **`-l`** — list the files whose formatting differs; do not print or rewrite.
+
+```sh
+functy fmt -w examples/   # reformat every .cty under examples/
+functy fmt -l .           # which files are not canonically formatted?
+```
+
+The formatter reindents to four spaces, normalizes spacing (expressions via
+`hclwrite`, so they match `terraform fmt`), collapses runs of blank lines to one,
+and preserves comments and doc comments. It reformats a file only if it parses
+cleanly — a file with syntax (or, in the standalone CLI, unresolved-type) errors is
+reported and left untouched, so fmt never drops or reorders code. A host that
+registers named types can format its own files via `(*functy.Parser).Format`.
+
 ## Not yet implemented
 
-A REPL (`functy repl`), a formatter (`functy fmt`), and additional output and
-diagnostic options are planned but not part of this build.
+A REPL (`functy repl`) and additional output and diagnostic options are planned
+but not part of this build.

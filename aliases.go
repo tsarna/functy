@@ -2,6 +2,7 @@ package functy
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -11,6 +12,7 @@ import (
 type aliasDecl struct {
 	name     string
 	expr     hcl.Expression
+	rhsSrc   string // source text of the aliased type (right-hand side), for rendering (fmt)
 	defRange hcl.Range
 }
 
@@ -92,7 +94,12 @@ func parseAliasAt(tokens []token, i int, src []byte, filename string) (*aliasDec
 	if ediags.HasErrors() {
 		return nil, end, ediags
 	}
-	return &aliasDecl{name: string(nameTok.Bytes), expr: expr, defRange: nameTok.Range}, end, nil
+	return &aliasDecl{
+		name:     string(nameTok.Bytes),
+		expr:     expr,
+		rhsSrc:   strings.TrimSpace(string(src[sb:eb])),
+		defRange: nameTok.Range,
+	}, end, nil
 }
 
 // scanTypeSpanEnd returns the index of the token that ends a type annotation
