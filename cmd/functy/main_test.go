@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -257,6 +258,118 @@ func TestCLITestBadRunPattern(t *testing.T) {
 	_, _, err := execCLI(t, "test", "--run", "[", path)
 	if err == nil {
 		t.Fatal("expected an error for an invalid --run pattern")
+	}
+}
+
+func TestCLITestJSONReport(t *testing.T) {
+	// --json emits a single self-contained report covering every test (pass, fail,
+	// skip) regardless of -v, with a summary and a non-zero exit on failure.
+	src := `func add(a: number, b: number) -> number { return a + b }
+test "sums" { assert(add(2, 3) == 5) }
+test "positivity" {
+    var n = -3
+    assert(n > 0, "must be positive")
+}
+test "wip" { skip("todo") }`
+	path := writeCty(t, "t.cty", src)
+	out, _, err := execCLI(t, "test", "--json", path)
+	if err == nil {
+		t.Fatalf("expected a non-zero exit for a failing test; out:\n%s", out)
+	}
+
+	var rep struct {
+		Tests []struct {
+			Name       string  `json:"name"`
+			Status     string  `json:"status"`
+			DurationMs float64 `json:"duration_ms"`
+			SkipReason string  `json:"skip_reason"`
+			Location   *struct {
+				File string `json:"file"`
+				Line int    `json:"line"`
+			} `json:"location"`
+			Failure *struct {
+				Message  string `json:"message"`
+				Detail   string `json:"detail"`
+				Location *struct {
+					Line   int `json:"line"`
+					Column int `json:"column"`
+				} `json:"location"`
+			} `json:"failure"`
+		} `json:"tests"`
+		Summary struct {
+			Passed, Failed, Skipped, Deselected int
+		} `json:"summary"`
+	}
+	if uerr := json.Unmarshal([]byte(out), &rep); uerr != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", uerr, out)
+	}
+
+	if rep.Summary.Passed != 1 || rep.Summary.Failed != 1 || rep.Summary.Skipped != 1 || rep.Summary.Deselected != 0 {
+		t.Fatalf("unexpected summary: %+v", rep.Summary)
+	}
+	if len(rep.Tests) != 3 {
+		t.Fatalf("expected 3 test entries, got %d", len(rep.Tests))
+	}
+
+	byName := map[string]int{}
+	for i, tc := range rep.Tests {
+		byName[tc.Name] = i
+	}
+	sums := rep.Tests[byName["sums"]]
+	if sums.Status != "passed" || sums.Failure != nil {
+		t.Fatalf("sums should be a clean pass: %+v", sums)
+	}
+	if sums.Location == nil || sums.Location.File != path {
+		t.Fatalf("sums missing its source location: %+v", sums.Location)
+	}
+
+	pos := rep.Tests[byName["positivity"]]
+	if pos.Status != "failed" || pos.Failure == nil {
+		t.Fatalf("positivity should be a failure: %+v", pos)
+	}
+	if pos.Failure.Message != "must be positive" || pos.Failure.Detail != "n = -3" {
+		t.Fatalf("failure message/detail wrong: %+v", pos.Failure)
+	}
+	if pos.Failure.Location == nil {
+		t.Fatalf("failure should carry a source range to underline: %+v", pos.Failure)
+	}
+
+	wip := rep.Tests[byName["wip"]]
+	if wip.Status != "skipped" || wip.SkipReason != "todo" {
+		t.Fatalf("wip should be skipped with a reason: %+v", wip)
+	}
+}
+
+func TestCLITestJSONCompileFailureIsValid(t *testing.T) {
+	// Even a compilation failure emits a well-formed (empty) report so consumers can
+	// always parse stdout, and still exits non-zero.
+	path := writeCty(t, "t.cty", `test "broken" { this is not valid `)
+	out, _, err := execCLI(t, "test", "--json", path)
+	if err == nil {
+		t.Fatal("expected a non-zero exit for a compile failure")
+	}
+	var rep struct {
+		Tests   []any `json:"tests"`
+		Summary struct{ Passed, Failed, Skipped int } `json:"summary"`
+	}
+	if uerr := json.Unmarshal([]byte(out), &rep); uerr != nil {
+		t.Fatalf("compile-failure output is not valid JSON: %v\n%s", uerr, out)
+	}
+	if len(rep.Tests) != 0 {
+		t.Fatalf("expected no test entries on compile failure, got %d", len(rep.Tests))
+	}
+}
+
+func TestCLITestJSONAllPassExitsZero(t *testing.T) {
+	src := `test "a" { assert(true) }
+test "b" { assert(1 + 1 == 2) }`
+	path := writeCty(t, "t.cty", src)
+	out, _, err := execCLI(t, "test", "--json", path)
+	if err != nil {
+		t.Fatalf("all-pass run should exit 0: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, `"passed": 2`) {
+		t.Fatalf("expected 2 passed in summary; got:\n%s", out)
 	}
 }
 

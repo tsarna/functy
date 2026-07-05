@@ -767,7 +767,8 @@ test "add is commutative" {
 - **Running.** A host runs tests with `(*Result).RunTests(evalCtxFn)` (or
   `RunTestsMatching` with a name filter), which returns a `TestOutcome` per test (with
   `Passed`/`Failed`/`Skipped`, a `Duration`, and a `Diagnostics()` for rendering
-  failures). The `functy` CLI exposes this as [`functy test`](cli.md#test).
+  failures). The `functy` CLI exposes this as [`functy test`](cli.md#test), including a
+  `--json` report for CI and editor tooling.
 
 ## Grammar
 

@@ -394,10 +394,9 @@ links the library directly and supplies its own richer context). Planned additio
     on that item shipping).
   - **Test Explorer integration** — surface `test "…"` blocks in VSCode's native
     Testing UI (run / re-run individual tests), driving `functy test --run <name>`
-    under the hood. This is the concrete consumer of the shipped test runner and of
-    the deferred **`--json` output** nicety (see *Inline tests* below) — machine-
-    readable results are what make per-test pass/fail/skip reporting in the UI clean;
-    worth prioritizing that flag alongside the extension.
+    under the hood. This is the concrete consumer of the shipped test runner and its
+    **`--json` output** (see *Inline tests* below) — machine-readable results are what
+    make per-test pass/fail/skip reporting in the UI clean.
   - **LSP-backed, later:** once the language server (above) exists, the extension
     becomes its client, upgrading diagnostics, hovers (doc-comment metadata),
     go-to-definition, and completion from "none / grammar-only" to full semantic
@@ -409,14 +408,15 @@ links the library directly and supplies its own richer context). Planned additio
   it.
 - **Inline tests** — *shipped*: co-located `test "…" { … }` blocks (`Result.Tests`),
   a core runner (`(*Result).RunTests` / `RunTestsMatching` → `TestOutcome`), the
-  `functy test` CLI verb (quiet/`-v` output with timings, `--run` name filter), and a
-  test-only `skip("reason")` builtin — all built on the assert/error-diagnostics
-  substrate (a failing test reports *where* and *why*). See `doc/language.md#tests`.
-  Per-test setup/teardown is already expressible (leading statements + `defer`).
-  Remaining niceties: soft / non-fatal assertions or a `t`-style test context (today a
-  test stops at its first failure, like Go/pytest); shared `beforeEach`-style setup
-  (fresh mutable fixtures per test); no-argument file discovery (`functy test` over
-  `*.cty` in the working dir); and machine-readable `--json` output for CI.
+  `functy test` CLI verb (quiet/`-v` output with timings, `--run` name filter,
+  machine-readable `--json` report for CI and editor tooling), and a test-only
+  `skip("reason")` builtin — all built on the assert/error-diagnostics substrate (a
+  failing test reports *where* and *why*). See `doc/language.md#tests`. Per-test
+  setup/teardown is already expressible (leading statements + `defer`). Remaining
+  niceties: soft / non-fatal assertions or a `t`-style test context (today a test
+  stops at its first failure, like Go/pytest); shared `beforeEach`-style setup (fresh
+  mutable fixtures per test); and no-argument file discovery (`functy test` over
+  `*.cty` in the working dir).
 - **Add-on package "functy-readiness" convention.** Sibling cty add-on packages
   (`bytes-cty-type`, `url-cty-funcs`, `rich-cty-types`, `time-cty-funcs`, …) should let
   a program that links *both* functy and the package register the package's type(s) in

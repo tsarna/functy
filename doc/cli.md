@@ -137,6 +137,51 @@ sum = -3
   1 passed, 0 failed, 0 skipped (2 deselected by --run)
   ```
 
+- **`--json`** emits a single machine-readable JSON report instead of the
+  human-readable output — for CI and editor tooling (e.g. a Test Explorer). The exit
+  status is unchanged. The report is one object with a `tests` array (every test that
+  ran, regardless of `-v`) and a `summary`:
+
+  ```console
+  $ functy test --json examples/math.cty
+  {
+    "tests": [
+      {
+        "name": "add sums positives",
+        "status": "passed",
+        "duration_ms": 0.049,
+        "location": { "file": "examples/math.cty", "line": 4, "column": 1, "end_line": 6, "end_column": 2 }
+      },
+      {
+        "name": "add handles negatives",
+        "status": "failed",
+        "duration_ms": 0.055,
+        "location": { "file": "examples/math.cty", "line": 8, "column": 1, "end_line": 10, "end_column": 2 },
+        "failure": {
+          "message": "sum should be positive",
+          "detail": "sum = -3",
+          "location": { "file": "examples/math.cty", "line": 9, "column": 12, "end_line": 9, "end_column": 21 }
+        }
+      },
+      {
+        "name": "work in progress",
+        "status": "skipped",
+        "duration_ms": 0.002,
+        "location": { "file": "examples/math.cty", "line": 12, "column": 1, "end_line": 12, "end_column": 40 },
+        "skip_reason": "not implemented yet"
+      }
+    ],
+    "summary": { "passed": 1, "failed": 1, "skipped": 1, "deselected": 0 }
+  }
+  ```
+
+  Each test entry carries a `status` (`"passed"`, `"failed"`, or `"skipped"`), a
+  `duration_ms`, and the test block's `location`. A failed test adds a `failure` with
+  the assert/throw `message`, its operand `detail` (when present), and the `location`
+  to underline; a skipped test adds its `skip_reason` (when given). Ranges are
+  1-based. A compilation failure still emits a well-formed report (with an empty
+  `tests` array) and exits non-zero, so consumers can always parse stdout.
+
 ## fmt
 
 Format `.cty` source into a canonical style. With no paths (or `-`) it reads
