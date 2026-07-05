@@ -340,6 +340,14 @@ func (p *parser) parseParams() []Param {
 			p.errf(p.cur().Range, "Unterminated parameter list", "Expected ) to close the parameter list.")
 			break
 		}
+		// Reaching the body brace means the list was never closed; error and stop
+		// (rather than loop forever re-reporting a missing parameter name). The `{`
+		// is left for the caller to consume as the function body.
+		if p.cur().Type == hclsyntax.TokenOBrace {
+			p.errf(p.cur().Range, "Unterminated parameter list",
+				"Expected ) to close the parameter list before the function body.")
+			break
+		}
 
 		var prm Param
 		start := p.cur().Range
