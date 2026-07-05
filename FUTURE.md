@@ -7,6 +7,10 @@ new fields, which is precisely why those are extensible structs rather than bare
 maps. Implemented features are documented in `doc/`; nothing in this file is a
 commitment, only a record of intent and rationale.
 
+An item marked ***shipped*** is kept only for the work that still remains on it (a
+one-line status pointing to `doc/` for the rest) — so the file stays a map of what is
+left to do, not a changelog of what is done.
+
 ## Standard library
 
 functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `typekind`,
@@ -14,46 +18,27 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
 `can`) — dependency-free builtins that make HCL expressions more capable (see
 `doc/stdlib.md`). Remaining additions to that library:
 
-- **`assert` diagnostic enrichment** — the `assert(cond, message?)` builtin is shipped,
-  including **variables-only operand capture** (a failed assertion attaches `detail` +
-  `operands` for the variables the condition references — side-effect-free) and
-  **host-side rendering** of an uncaught error as an `hcl.Diagnostic` with source
-  context (`functy.ErrorDiagnostics` / `(*ThrownError).Diagnostics()`, used by the
-  `functy run` CLI — see `doc/stdlib.md`). Still open: **full sub-expression
-  decomposition** — reporting `len(xs) = 2`, not just `xs`, by re-evaluating operand
-  sub-expressions; opt-in because it re-runs any function calls in the condition.
+- **`assert` sub-expression decomposition** — `assert(cond, message?)` ships with
+  variables-only operand capture and host-side diagnostic rendering (see
+  `doc/stdlib.md`). **Remaining:** reporting `len(xs) = 2`, not just `xs`, by
+  re-evaluating operand sub-expressions — opt-in, since it re-runs any function calls
+  in the condition.
 - **`eval`** — evaluate a lazy / by-expression parameter; ships with the lazy
   `expr`-parameter story (see *Functions* below), since the two are the same feature
   from the author's side.
-- **`doc(name)` — function-doc reflection** — *shipped* as `functy.DocFunc(evalCtxFn)`.
-  Returns a function's description by string name (`doc("add")`) — necessarily by
-  **string**, because an HCL expression cannot reference a function as a *value*, only
-  **call** one (the same first-class-function limitation that motivates *First-class
-  function values / closures*; a value-taking overload could follow if functions ever
-  become values). Mechanism: `FuncDecl.Doc` is wired into each compiled function's cty
-  `function.Spec.Description` (visible to any cty tooling), and `doc` looks the name up
-  in the merged context's flat `Functions` map — reached via the `evalCtxFn`
-  late-binding closure, **not** `customdecode` (`doc` wants the merged context, which
-  `evalCtxFn` already yields, not the call-site expression). Tri-state: `null` (no such
-  function), `""` (exists but undocumented), or the description — so a mistyped name is
-  distinguishable from an undocumented one without `doc` throwing. Read-only reflection,
-  so no injection risk.
-- **`help(name)` — function help reflection** — *shipped* as
-  `functy.HelpFunc(funcs, evalCtxFn)`. Assembles a complete human-readable summary: the
-  signature (calling convention — names, types, defaults, variadic, return type),
-  description, and per-parameter docs; `null` for an unknown function. functy functions
-  render from their `FuncDecl` (authoritative, since optional/variadic collapse into a
-  single cty `VarParam`); non-functy functions fall back to a best-effort rendering from
-  their cty metadata. Known limitation (no clean fix): a Go builtin that emulates
-  optional/defaulted args through its `VarParam` can't be shown with its intended
+- **`doc(name)` — function-doc reflection** — *shipped* (`functy.DocFunc`). Possible
+  later extension: a value-taking overload (`doc(add)`) if functions ever become
+  first-class values (see *First-class function values / closures*).
+- **`help(name)` — function help reflection** — *shipped* (`functy.HelpFunc`) for both
+  functy and non-functy functions. Known limitation: a Go builtin that emulates
+  optional/defaulted args through a `VarParam` can't be shown with its intended
   signature — that structure isn't recoverable from cty. Possible extensions:
   - **Host-registered argument docs for Go builtins** (addresses the limitation
     above). Let a host supply proper signature/parameter metadata for its
     `VarParam`-based builtins — a small registry (name → parameter names, optionality,
     per-arg docs) that `HelpFunc` consults *before* falling back to raw cty
-    introspection. It restores accurate help for functions whose real shape cty has
-    erased, without functy needing to understand each builtin. Open: the registration
-    shape (a plain struct vs. reusing `FuncDecl`), and whether it also feeds `doc()`.
+    introspection. Open: the registration shape (a plain struct vs. reusing `FuncDecl`),
+    and whether it also feeds `doc()`.
   - A value form when/if functions become values, and a no-argument `help()` that lists
     all functions.
 - **Reflection over global variables** (not urgent) — extend `doc()` / `help()` (or a
@@ -84,47 +69,23 @@ them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
 
 - **Pure-expression-statement warning.** Warn when an expression statement is
   obviously side-effect-free (no function call) and its value is discarded.
-- **`assert(cond, message?)` diagnostic enrichment.** The `assert` builtin ships (a
-  **function**, not a statement, in `Stdlib()` — see `doc/stdlib.md`): using HCL's
-  `customdecode.ExpressionClosureType` — the same mechanism `try()` / `can()` / `error()`
-  use — it receives `cond` *unevaluated* as an `hcl.Expression`, giving it `cond`'s exact
-  source range (`.Range()`), which the raised (catchable) `error` carries. It also
-  captures **operand values** — the variables the condition references, attached to the
-  error as `detail` + `operands` (via `expr.Variables()`, so side-effect-free). An
-  **uncaught** error also renders with source context: `functy.ErrorDiagnostics` /
-  `(*ThrownError).Diagnostics()` turn the carried value (message + range + `detail`)
-  into an `hcl.Diagnostic` whose `Subject` the standard diagnostic writer highlights in
-  the source line, used by the `functy run` CLI. (This renders from the error *value*,
-  not from a live `Expression`/`EvalContext` — the value-carried range/detail is the
-  only form available uniformly, since a cross-call recovered throw has no single
-  boundary expression.) A further step is showing **sub-expression** values
-  (`len(xs) = 2`, not just `xs`) by walking the AST — opt-in, since it re-evaluates
-  operand sub-expressions and thus re-runs any function calls in the condition. A
-  dedicated `assert` *statement* was considered and rejected: the function gets the same
-  source location and introspection, so the statement would add only marginal value.
+- **`assert(cond, message?)` sub-expression values.** The `assert` builtin ships (a
+  **function**, not a statement, in `Stdlib()` — see `doc/stdlib.md` and *Standard
+  library* above for the sub-expression-decomposition item). A dedicated `assert`
+  *statement* was considered and rejected: the function gets the same source location
+  and introspection, so a statement would add only marginal value.
 
 ## Functions
 
-- **Doc-comment metadata** — *shipped (function, declaration, and parameter level)*. A
-  contiguous leading `//` / `#` (or `///`) comment block directly above a declaration is
-  captured as its description: `FuncDecl.Doc` and `Decl.Doc` (top-level var/const).
-  **Per-parameter docs** also ship on `Param.Doc` — a trailing comment on the
-  parameter's line, or a leading block above it (leading wins), confined to the
-  multi-line parameter layout; required parameters' docs also flow to the compiled cty
-  `function.Parameter.Description`. Directive lines are excluded from the prose; block
-  comments do not form docs (see `doc/language.md#doc-comments`). Built on the
-  comment-retention foundation (`Result.Comments` — every comment retained with
-  position, captured in `lexAll`; the parser stream stays comment-free). Powers
-  generated docs, LSP hovers, and the future `help()`. **Future integration point (not
-  current):** a host that lets a functy function *back* a callable surface — an MCP
-  tool/prompt, an HTTP handler — could pull that surface's description from the
-  function's `Doc`. No host wires this up today; Vinculum's MCP/HTTP handlers map to
-  **action expressions**, not functy functions (an expression may *call* a function, but
-  there is no plumbing from a function's `Doc` to a tool/handler description), so this
-  needs a function-backed handler surface first. A structured `// @param name …`
-  alternative (for single-line lists) was considered and left out — position-based
-  attachment avoids name repetition and drift. See also *Annotations* for an evaluated
-  (`@name`) alternative to comment-based metadata.
+- **Doc-comment metadata → function-backed handler surfaces.** Doc-comment capture
+  ships at function, declaration, and parameter level (`FuncDecl.Doc`, `Decl.Doc`,
+  `Param.Doc`; see `doc/language.md#doc-comments`). **Future integration point:** a host
+  that lets a functy function *back* a callable surface — an MCP tool/prompt, an HTTP
+  handler — could pull that surface's description from the function's `Doc`. No host
+  wires this up today; Vinculum's MCP/HTTP handlers map to **action expressions**, not
+  functy functions (there is no plumbing from a function's `Doc` to a tool/handler
+  description), so this needs a function-backed handler surface first. See also
+  *Annotations* for an evaluated (`@name`) alternative to comment-based metadata.
 - **`extern` declarations — doc registration for host-provided functions.** A function
   registered by a Go host (e.g. a cty function from `rich-cty-types`) has no functy
   source, so `help()` / generated docs / LSP hovers have nothing to show for it. Let a
@@ -354,28 +315,9 @@ links the library directly and supplies its own richer context). Planned additio
   limited — no app-specific functions or ambients — but still handy for exploring the
   stdlib, language semantics, and loaded functions.
 - **`functy fmt`** — canonical formatter — *shipped* (`functy.Format` /
-  `(*Parser).Format`, and the `functy fmt` CLI verb; see `doc/cli.md`). Built as the
-  designed two-layer split: functy's AST-driven layout layer owns statement structure
-  (four-space indentation, braces, blank-line runs collapsed to one, and
-  statement/declaration comments from `Result.Comments`), while each expression span is
-  reformatted by `hclwrite.Format` (which preserves interior comments and matches
-  `terraform fmt`) and spliced back with continuation-line re-indent; comments inside an
-  expression span are excluded from the cursor to avoid double-emit. Faithful
-  re-emission required capturing more source in the AST than expected — type-annotation
-  text (`TypeSrc` / `RetTypeSrc`, so aliases and named types round-trip) and every
-  block's brace range (nodes only ranged their headers) — plus a `While` flag to keep
-  the `while` keyword, a `Short` flag to keep the `x := 0` shorthand, and per-parameter
-  full ranges + the paren span so a multi-line parameter list is preserved (one per line,
-  with its leading/trailing comments) rather than re-flowed. Reformats only a
-  cleanly-parsing file (never drops/reorders code) and is idempotent, guarded by a golden
-  corpus. Comment placement is faithful: standalone, trailing (including on a `{` or a
-  parameter/`case` line), and dangling comments all stay put; a comment inside an
-  expression is owned by `hclwrite`. The one residual rough edge — a comment wedged
-  *between* `}` and `else`/`catch` — cannot occur in valid source (those keywords must be
-  same-line; on a new line `else` mis-parses to an identifier + bare block), so it only
-  shows for already-broken input, where fmt still preserves it. Remaining niceties, all
-  cosmetic: block-comment interiors and the multi-line-vs-inline parameter choice follow
-  the source rather than being canonicalized.
+  `(*Parser).Format`, and the `functy fmt` CLI verb; see `doc/cli.md`). Remaining
+  niceties, all cosmetic: block-comment interiors and the multi-line-vs-inline parameter
+  choice follow the source rather than being canonicalized.
 - **LSP / editor support** — diagnostics, hovers (using doc-comment metadata),
   go-to-definition, completion. Editor-agnostic; the VSCode extension below is its
   first client (and can ship static features ahead of the server).
@@ -406,17 +348,14 @@ links the library directly and supplies its own richer context). Planned additio
   delivers most of the day-to-day value (highlighting, run/check/format, test
   running) with no server to build, deferring the LSP work rather than blocking on
   it.
-- **Inline tests** — *shipped*: co-located `test "…" { … }` blocks (`Result.Tests`),
-  a core runner (`(*Result).RunTests` / `RunTestsMatching` → `TestOutcome`), the
-  `functy test` CLI verb (quiet/`-v` output with timings, `--run` name filter,
-  machine-readable `--json` report for CI and editor tooling), and a test-only
-  `skip("reason")` builtin — all built on the assert/error-diagnostics substrate (a
-  failing test reports *where* and *why*). See `doc/language.md#tests`. Per-test
-  setup/teardown is already expressible (leading statements + `defer`). Remaining
-  niceties: soft / non-fatal assertions or a `t`-style test context (today a test
-  stops at its first failure, like Go/pytest); shared `beforeEach`-style setup (fresh
-  mutable fixtures per test); and no-argument file discovery (`functy test` over
-  `*.cty` in the working dir).
+- **Inline tests** — *shipped*: co-located `test "…" { … }` blocks, the core runner
+  (`(*Result).RunTests` / `RunTestsMatching`), the `functy test` CLI verb (quiet/`-v`,
+  `--run` name filter, machine-readable `--json` report), and a test-only
+  `skip("reason")` builtin (see `doc/language.md#tests`). Per-test setup/teardown is
+  already expressible (leading statements + `defer`). Remaining niceties: soft /
+  non-fatal assertions or a `t`-style test context (today a test stops at its first
+  failure, like Go/pytest); shared `beforeEach`-style setup (fresh mutable fixtures per
+  test); and no-argument file discovery (`functy test` over `*.cty` in the working dir).
 - **Add-on package "functy-readiness" convention.** Sibling cty add-on packages
   (`bytes-cty-type`, `url-cty-funcs`, `rich-cty-types`, `time-cty-funcs`, …) should let
   a program that links *both* functy and the package register the package's type(s) in
