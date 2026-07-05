@@ -13,8 +13,11 @@ tagged. Until then, everything lives under **Unreleased**.
 - **Source formatter — `functy.Format` / `functy fmt`.** A canonical formatter for
   `.cty` source: four-space indentation, normalized spacing (expressions via
   `hclwrite`, matching `terraform fmt`), blank-line runs collapsed to one, and
-  comments — including doc comments — preserved. It reformats a file only when it
-  parses cleanly, so it never drops or reorders code, and it is idempotent. The
+  comments — including doc comments and per-parameter comments — kept in place
+  (standalone, trailing, and dangling). A multi-line parameter list is preserved one
+  per line (an inline list stays inline); `while` and the `x := 0` shorthand are kept
+  as written. It reformats a file only when it parses cleanly, so it never drops or
+  reorders code, and it is idempotent. The
   `functy fmt` CLI verb formats stdin→stdout, or files/directories with `-w`
   (rewrite in place) or `-l` (list files that differ). `Format` is also a
   `(*Parser)` method so a host whose parser registers named types can format its own

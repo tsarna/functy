@@ -364,14 +364,18 @@ links the library directly and supplies its own richer context). Planned additio
   re-emission required capturing more source in the AST than expected — type-annotation
   text (`TypeSrc` / `RetTypeSrc`, so aliases and named types round-trip) and every
   block's brace range (nodes only ranged their headers) — plus a `While` flag to keep
-  the `while` keyword. Reformats only a cleanly-parsing file (never drops/reorders code)
-  and is idempotent, guarded by a golden corpus. **Known v1 limitations (candidates for
-  later):** parameter-list-internal comments and a comment trailing a `{` or sitting
-  between `}` and `else`/`catch` are relocated (to the body / to their own line) rather
-  than kept in place; `while` is preserved but the single-var `x := 0` shorthand
-  normalizes to `var x = 0`; block-comment interior lines are re-indented to the current
-  level; multi-line param lists are re-flowed to one line. None lose a comment — the
-  final flush guarantees every comment is emitted.
+  the `while` keyword, a `Short` flag to keep the `x := 0` shorthand, and per-parameter
+  full ranges + the paren span so a multi-line parameter list is preserved (one per line,
+  with its leading/trailing comments) rather than re-flowed. Reformats only a
+  cleanly-parsing file (never drops/reorders code) and is idempotent, guarded by a golden
+  corpus. Comment placement is faithful: standalone, trailing (including on a `{` or a
+  parameter/`case` line), and dangling comments all stay put; a comment inside an
+  expression is owned by `hclwrite`. The one residual rough edge — a comment wedged
+  *between* `}` and `else`/`catch` — cannot occur in valid source (those keywords must be
+  same-line; on a new line `else` mis-parses to an identifier + bare block), so it only
+  shows for already-broken input, where fmt still preserves it. Remaining niceties, all
+  cosmetic: block-comment interiors and the multi-line-vs-inline parameter choice follow
+  the source rather than being canonicalized.
 - **LSP / editor support** — diagnostics, hovers (using doc-comment metadata),
   go-to-definition, completion. Editor-agnostic; the VSCode extension below is its
   first client (and can ship static features ahead of the server).

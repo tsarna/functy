@@ -1,0 +1,15 @@
+// A function with documented, multi-line parameters.
+func request(
+    url: string,  // the endpoint to call
+    // Seconds to wait before giving up.
+    // Applies to the whole request.
+    timeout: number = 30,
+    *headers: string,
+) -> string {
+    return url
+}
+
+// Inline parameters stay on one line.
+func add(a: number, b: number) -> number {
+    return a + b
+}

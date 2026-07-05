@@ -248,11 +248,14 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 	}
 	fn := &FuncDecl{Name: name.text, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
 
+	oparen := p.cur().Range
 	if !p.expect(hclsyntax.TokenOParen, "(") {
 		p.recoverToTopLevel()
 		return nil
 	}
-	fn.Params = p.parseParams()
+	var cparen hcl.Range
+	fn.Params, cparen = p.parseParams()
+	fn.ParenRange = hcl.RangeBetween(oparen, cparen)
 
 	// The rest of the signature may continue on later lines: newlines before the
 	// return-type arrow, its type, and the body brace are insignificant.
@@ -323,8 +326,9 @@ func (p *parser) parseTestDecl() *TestDecl {
 	return &TestDecl{Name: name, Body: body, BodyRange: brange, DefRange: hcl.RangeBetween(kw.Range, p.tokens[p.pos-1].Range)}
 }
 
-func (p *parser) parseParams() []Param {
+func (p *parser) parseParams() ([]Param, hcl.Range) {
 	var params []Param
+	var closeParen hcl.Range
 	sawOptional := false
 	sawVariadic := false
 
@@ -333,11 +337,13 @@ func (p *parser) parseParams() []Param {
 		// comma, and before `)` are insignificant.
 		p.skipNewlines()
 		if p.cur().Type == hclsyntax.TokenCParen {
+			closeParen = p.cur().Range
 			p.advance()
 			break
 		}
 		if p.atEOF() {
 			p.errf(p.cur().Range, "Unterminated parameter list", "Expected ) to close the parameter list.")
+			closeParen = p.cur().Range
 			break
 		}
 		// Reaching the body brace means the list was never closed; error and stop
@@ -346,6 +352,7 @@ func (p *parser) parseParams() []Param {
 		if p.cur().Type == hclsyntax.TokenOBrace {
 			p.errf(p.cur().Range, "Unterminated parameter list",
 				"Expected ) to close the parameter list before the function body.")
+			closeParen = p.cur().Range
 			break
 		}
 
@@ -385,6 +392,8 @@ func (p *parser) parseParams() []Param {
 			}
 		}
 
+		prm.FullRange = hcl.RangeBetween(start, p.tokens[p.pos-1].Range)
+
 		// Ordering validation.
 		if sawVariadic {
 			p.errf(prm.DefRange, "Parameter after variadic", "The variadic (*rest) parameter must be last.")
@@ -408,13 +417,14 @@ func (p *parser) parseParams() []Param {
 			continue
 		}
 		if p.cur().Type == hclsyntax.TokenCParen {
+			closeParen = p.cur().Range
 			p.advance()
 			break
 		}
 		p.errf(p.cur().Range, "Expected , or )", "Parameters are separated by commas and the list ends with ).")
 		p.skipToParamBoundary()
 	}
-	return params
+	return params, closeParen
 }
 
 func (p *parser) skipToParamBoundary() {
@@ -675,7 +685,7 @@ func (p *parser) parseShortVarDecl(name token, stop stopFunc) Statement {
 	p.advance() // name
 	p.advance() // ':'
 	p.advance() // '='
-	vd := &VarDecl{Name: string(name.Bytes), SrcRange: name.Range}
+	vd := &VarDecl{Name: string(name.Bytes), SrcRange: name.Range, Short: true}
 	if p.strict.declaredTypes.on() {
 		p.errf(vd.SrcRange, "Missing variable type",
 			fmt.Sprintf("Variable %q must declare a type (%s); the `:=` shorthand is untyped, "+

@@ -11,6 +11,7 @@ type FuncDecl struct {
 	// above the declaration, directive lines excluded); "" when there is none.
 	Doc        string
 	Params     []Param
+	ParenRange hcl.Range      // the (…) parameter-list span, for fmt
 	RetType    TypeConstraint // nil when no return type is annotated (dynamic)
 	RetTypeSrc string         // source text of the return-type annotation, for rendering (fmt)
 	Body       []Statement
@@ -49,6 +50,7 @@ type Param struct {
 	DefaultSrc string         // source text of the default expression, for rendering (help()/fmt)
 	Variadic   bool           // true for the trailing *rest parameter
 	DefRange   hcl.Range
+	FullRange  hcl.Range // spans the whole parameter (name … type/default), for fmt
 }
 
 // Statement is implemented by every functy statement node.
@@ -65,6 +67,7 @@ type VarDecl struct {
 	Type     TypeConstraint // nil when unannotated (dynamic)
 	TypeSrc  string         // source text of the type annotation, for rendering (fmt)
 	Init     hcl.Expression
+	Short    bool // declared with the `:=` shorthand (always untyped); preserved for fmt
 	SrcRange hcl.Range
 }
 

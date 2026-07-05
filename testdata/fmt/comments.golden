@@ -1,10 +1,16 @@
 // leading file comment
 
-func documented(a) {
+func documented(a) {  // trailing the brace
     // a standalone comment
     var x = a + 1
 
     // after a blank gap
+    if x > 0 {  // guard
+        return x
+    }
+    /* a block comment
+       with aligned
+       interior lines */
     return x
 }
 

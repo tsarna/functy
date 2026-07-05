@@ -68,6 +68,20 @@ func (f *formatter) line(content string, end hcl.Pos) {
 
 func (f *formatter) blank() { f.out.WriteByte('\n') }
 
+// openBlock writes a block header line ending in `{` (head is the text before it,
+// "" for a bare block), appending any comment trailing the brace on its own line,
+// then suppresses the next blank-line gap and increases indent.
+func (f *formatter) openBlock(head string, brace hcl.Range) {
+	line := "{"
+	if head != "" {
+		line = head + " {"
+	}
+	braceEnd := hcl.Pos{Line: brace.Start.Line, Byte: brace.Start.Byte + 1}
+	f.writeLine(line + f.trailing(braceEnd))
+	f.suppressGap = true
+	f.indent++
+}
+
 // finish returns the accumulated output with exactly one trailing newline.
 func (f *formatter) finish() string {
 	s := strings.TrimRight(f.out.String(), "\n")
@@ -108,9 +122,17 @@ func (f *formatter) flushBefore(before int) {
 }
 
 func (f *formatter) writeComment(c Comment) {
-	for _, ln := range strings.Split(c.Text, "\n") {
-		f.writeLine(strings.TrimRight(ln, " \t"))
+	if !strings.Contains(c.Text, "\n") {
+		f.writeLine(strings.TrimRight(c.Text, " \t"))
+		return
 	}
+	// A multi-line block comment: indent its first line, but emit the interior
+	// lines as authored (preserving any internal alignment) rather than forcing
+	// them to the current indent.
+	first, rest, _ := strings.Cut(c.Text, "\n")
+	f.writeLine(strings.TrimRight(first, " \t"))
+	f.out.WriteString(strings.TrimRight(rest, " \t\n"))
+	f.out.WriteByte('\n')
 }
 
 // trailing consumes and returns a trailing comment (prefixed with two spaces) that
@@ -211,43 +233,79 @@ func declEnd(d Decl) hcl.Pos {
 }
 
 func (f *formatter) funcDecl(fn *FuncDecl) {
-	head := "func " + fn.Name + "(" + f.params(fn.Params) + ")"
+	ret := ""
 	if fn.RetTypeSrc != "" {
-		head += " -> " + fn.RetTypeSrc
+		ret = " -> " + fn.RetTypeSrc
 	}
-	f.writeLine(head + " {")
-	f.suppressGap = true
-	f.indent++
+	if f.multilineParams(fn) {
+		f.writeLine("func " + fn.Name + "(")
+		f.suppressGap = true
+		f.indent++
+		for i := range fn.Params {
+			p := fn.Params[i]
+			f.flushBefore(p.DefRange.Start.Byte) // a leading comment block above the param
+			f.writeLine(f.paramString(p) + "," + f.trailing(p.FullRange.End))
+			f.lastLine = p.FullRange.End.Line
+		}
+		f.flushBefore(fn.ParenRange.End.Byte) // dangling comments before `)`
+		f.suppressGap = false
+		f.indent--
+		f.openBlock(")"+ret, fn.BodyRange)
+	} else {
+		f.openBlock("func "+fn.Name+"("+f.params(fn.Params)+")"+ret, fn.BodyRange)
+	}
 	f.emitSeq(fn.Body, fn.BodyRange.End.Byte)
 	f.indent--
 	f.writeLine("}" + f.trailing(fn.BodyRange.End))
 }
 
+// multilineParams reports whether the parameter list should be rendered one per
+// line: when the author wrote it across multiple source lines, or a comment sits
+// inside the parentheses (which only reads sensibly in the multi-line layout).
+func (f *formatter) multilineParams(fn *FuncDecl) bool {
+	if len(fn.Params) == 0 {
+		return false
+	}
+	if fn.Params[len(fn.Params)-1].FullRange.End.Line > fn.Params[0].DefRange.Start.Line {
+		return true
+	}
+	lo, hi := fn.ParenRange.Start.Byte, fn.ParenRange.End.Byte
+	for _, c := range f.comments {
+		if c.Range.Start.Byte > lo && c.Range.Start.Byte < hi {
+			return true
+		}
+	}
+	return false
+}
+
+// paramString renders one parameter: [*]name[: T][ = default].
+func (f *formatter) paramString(p Param) string {
+	var b strings.Builder
+	if p.Variadic {
+		b.WriteByte('*')
+	}
+	b.WriteString(p.Name)
+	if p.TypeSrc != "" {
+		b.WriteString(": ")
+		b.WriteString(p.TypeSrc)
+	}
+	if p.Default != nil {
+		b.WriteString(" = ")
+		b.WriteString(p.DefaultSrc)
+	}
+	return b.String()
+}
+
 func (f *formatter) params(params []Param) string {
 	parts := make([]string, len(params))
 	for i, p := range params {
-		var b strings.Builder
-		if p.Variadic {
-			b.WriteByte('*')
-		}
-		b.WriteString(p.Name)
-		if p.TypeSrc != "" {
-			b.WriteString(": ")
-			b.WriteString(p.TypeSrc)
-		}
-		if p.Default != nil {
-			b.WriteString(" = ")
-			b.WriteString(p.DefaultSrc)
-		}
-		parts[i] = b.String()
+		parts[i] = f.paramString(p)
 	}
 	return strings.Join(parts, ", ")
 }
 
 func (f *formatter) testDecl(td *TestDecl) {
-	f.writeLine("test " + strconv.Quote(td.Name) + " {")
-	f.suppressGap = true
-	f.indent++
+	f.openBlock("test "+strconv.Quote(td.Name), td.BodyRange)
 	f.emitSeq(td.Body, td.BodyRange.End.Byte)
 	f.indent--
 	f.writeLine("}" + f.trailing(td.BodyRange.End))
@@ -342,6 +400,10 @@ func labeled(kw, label string) string {
 }
 
 func (f *formatter) varDecl(n *VarDecl) {
+	if n.Short {
+		f.line(n.Name+" := "+f.expr(n.Init), n.Init.Range().End)
+		return
+	}
 	var b strings.Builder
 	b.WriteString("var ")
 	b.WriteString(n.Name)
@@ -359,9 +421,7 @@ func (f *formatter) varDecl(n *VarDecl) {
 }
 
 func (f *formatter) block(n *Block) {
-	f.writeLine("{")
-	f.suppressGap = true
-	f.indent++
+	f.openBlock("", n.SrcRange)
 	f.emitSeq(n.Body, n.SrcRange.End.Byte)
 	f.indent--
 	f.writeLine("}" + f.trailing(n.SrcRange.End))
@@ -369,20 +429,16 @@ func (f *formatter) block(n *Block) {
 
 func (f *formatter) ifChain(n *IfChain) {
 	for i, br := range n.Branches {
-		head := "if " + f.expr(br.Condition) + " {"
+		head := "if " + f.expr(br.Condition)
 		if i > 0 {
-			head = "} else if " + f.expr(br.Condition) + " {"
+			head = "} else if " + f.expr(br.Condition)
 		}
-		f.writeLine(head)
-		f.suppressGap = true
-		f.indent++
+		f.openBlock(head, br.BodyRange)
 		f.emitSeq(br.Body, br.BodyRange.End.Byte)
 		f.indent--
 	}
 	if n.ElseRange.End.Byte > 0 {
-		f.writeLine("} else {")
-		f.suppressGap = true
-		f.indent++
+		f.openBlock("} else", n.ElseRange)
 		f.emitSeq(n.Else, n.ElseRange.End.Byte)
 		f.indent--
 		f.writeLine("}" + f.trailing(n.ElseRange.End))
@@ -393,9 +449,7 @@ func (f *formatter) ifChain(n *IfChain) {
 }
 
 func (f *formatter) forStmt(n *For) {
-	f.writeLine(f.forHeader(n) + " {")
-	f.suppressGap = true
-	f.indent++
+	f.openBlock(f.forHeader(n), n.BodyRange)
 	f.emitSeq(n.Body, n.BodyRange.End.Byte)
 	f.indent--
 	f.writeLine("}" + f.trailing(n.BodyRange.End))
@@ -444,6 +498,9 @@ func (f *formatter) forHeader(n *For) string {
 func (f *formatter) inlineStmt(s Statement) string {
 	switch n := s.(type) {
 	case *VarDecl:
+		if n.Short {
+			return n.Name + " := " + f.expr(n.Init)
+		}
 		out := "var " + n.Name
 		if n.TypeSrc != "" {
 			out += ": " + n.TypeSrc
@@ -471,21 +528,20 @@ func (f *formatter) switchStmt(n *Switch) {
 	if n.Subject != nil {
 		head += " " + f.expr(n.Subject)
 	}
-	f.writeLine(head + " {")
-	f.suppressGap = true
-	f.indent++
+	f.openBlock(head, n.BodyRange)
 	for i, cl := range n.Clauses {
 		start := cl.SrcRange.Start
 		f.flushBefore(start.Byte)
 		f.gapBefore(start.Line)
 		if cl.IsDefault {
-			f.writeLine("default:")
+			f.writeLine("default:" + f.trailing(cl.SrcRange.End))
 		} else {
 			vals := make([]string, len(cl.Values))
 			for j, v := range cl.Values {
 				vals[j] = f.expr(v)
 			}
-			f.writeLine("case " + strings.Join(vals, ", ") + ":")
+			labelEnd := cl.Values[len(cl.Values)-1].Range().End
+			f.writeLine("case " + strings.Join(vals, ", ") + ":" + f.trailing(labelEnd))
 		}
 		f.suppressGap = true
 		f.indent++
@@ -515,9 +571,7 @@ func clauseEndLine(n *Switch, i int) int {
 }
 
 func (f *formatter) try(n *Try) {
-	f.writeLine("try {")
-	f.suppressGap = true
-	f.indent++
+	f.openBlock("try", n.BodyRange)
 	f.emitSeq(n.Body, n.BodyRange.End.Byte)
 	f.indent--
 	for _, c := range n.Catches {
@@ -531,16 +585,12 @@ func (f *formatter) try(n *Try) {
 		if c.Guard != nil {
 			head += " if " + f.expr(c.Guard)
 		}
-		f.writeLine(head + " {")
-		f.suppressGap = true
-		f.indent++
+		f.openBlock(head, c.BodyRange)
 		f.emitSeq(c.Body, c.BodyRange.End.Byte)
 		f.indent--
 	}
 	if n.FinallyRange.End.Byte > 0 {
-		f.writeLine("} finally {")
-		f.suppressGap = true
-		f.indent++
+		f.openBlock("} finally", n.FinallyRange)
 		f.emitSeq(n.Finally, n.FinallyRange.End.Byte)
 		f.indent--
 		f.writeLine("}" + f.trailing(n.FinallyRange.End))

@@ -17,7 +17,7 @@ func classify(n) {
             break outer
         }
     }
-    for var x = 0; x < 3; x = x + 1 {
+    for x := 0; x < 3; x = x + 1 {
         log(x)
     }
     switch n {
