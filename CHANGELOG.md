@@ -8,6 +8,18 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-07
+
+### Added
+
+- **Release pipeline for the `functy` CLI.** A GoReleaser configuration
+  cross-compiles the `cmd/functy` binary for linux/darwin/windows on
+  amd64/arm64, and a tag-triggered GitHub Actions workflow publishes the
+  archives and checksums on each `v*` tag. The GitHub Release body is the
+  matching section of this changelog.
+- **`functy version` command and `--version` flag.** Report the build's
+  version, commit, and date, injected at release time via `-ldflags`.
+
 ## [0.7.0] - 2026-07-06
 
 ### Added
