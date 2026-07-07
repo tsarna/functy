@@ -58,34 +58,13 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
   convention); whether to document **nested attributes** of rich-object globals
   (`sys.os`, `env.HOME`) rather than only the top-level object; and the registration API.
 
-Explicitly **out of scope**: `tostring` / `length` with `Stringable` / `Lengthable`
-dispatch. They must *dispatch behavior* on a rich object's capsule (call its
-`ToString` / `Length` methods), which only matters for rich-object users, who already
-depend on [`rich-cty-types`](https://github.com/tsarna/rich-cty-types) (which provides
-them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
-(`typeof` / `typekind`, a cheap read of the capsule's name) — not for method dispatch.
-
 ## Language — expressions & sugar
 
 - **Pure-expression-statement warning.** Warn when an expression statement is
   obviously side-effect-free (no function call) and its value is discarded.
-- **`assert(cond, message?)` sub-expression values.** The `assert` builtin ships (a
-  **function**, not a statement, in `Stdlib()` — see `doc/stdlib.md` and *Standard
-  library* above for the sub-expression-decomposition item). A dedicated `assert`
-  *statement* was considered and rejected: the function gets the same source location
-  and introspection, so a statement would add only marginal value.
 
 ## Functions
 
-- **Doc-comment metadata → function-backed handler surfaces.** Doc-comment capture
-  ships at function, declaration, and parameter level (`FuncDecl.Doc`, `Decl.Doc`,
-  `Param.Doc`; see `doc/language.md#doc-comments`). **Future integration point:** a host
-  that lets a functy function *back* a callable surface — an MCP tool/prompt, an HTTP
-  handler — could pull that surface's description from the function's `Doc`. No host
-  wires this up today; Vinculum's MCP/HTTP handlers map to **action expressions**, not
-  functy functions (there is no plumbing from a function's `Doc` to a tool/handler
-  description), so this needs a function-backed handler surface first. See also
-  *Annotations* for an evaluated (`@name`) alternative to comment-based metadata.
 - **`extern` declarations — doc registration for host-provided functions.** A function
   registered by a Go host (e.g. a cty function from `rich-cty-types`) has no functy
   source, so `help()` / generated docs / LSP hovers have nothing to show for it. Let a
@@ -375,13 +354,8 @@ The standalone `functy` binary already provides `run` and `check`. It exists for
 development, testing, and experimentation — not for production use (a host application
 links the library directly and supplies its own richer context). Planned additions:
 
-- **`functy repl` / `functy run -i [FILE …]`** — interactive REPL — *shipped* (the
-  `repl` package plus the `repl` CLI verb and `run -i`). Loads all given files, runs the
-  entry function if present (a missing **default** `main` is silently skipped; an
-  explicitly named `--func` that is absent is still an error), allows zero files
-  interactively, and reuses the same HCL expression engine used everywhere — so a host
-  with a richer context (its own functions and ambients) layers that on top via the
-  `repl.Host` interface, exactly as Vinculum's `serve -i` does. Remaining niceties, all
+- **`functy repl` / `functy run -i [FILE …]`** — interactive REPL — *shipped*
+  Remaining niceties, all
   optional: a public statement-eval API (today the REPL evaluates expressions, not
   `var`/`for`/`if` statements) and per-session execution limits once the *Execution
   limits* item lands.
@@ -440,14 +414,7 @@ links the library directly and supplies its own richer context). Planned additio
     `rich-cty-types` adding `IsContextObject` wrapping `GetContextFromValue`) — for
     non-destructive open registration (`RegisterOpenType`), currently leaf-only.
 
-  The host picks identity vs. open per type. Rejected alternatives: a **string** form
-  (`"object({ _capsule = … })"`) is circular (the capsule type is a Go value, not
-  nameable in a type-expr string until itself registered), needs a parse/error step, and
-  discards compile-time checking — the `cty.Type` value already *is* the canonical
-  artifact; a **shared registration struct/interface** would force a shared dependency
-  (the very thing being avoided). If host wiring boilerplate ever warrants it, functy
-  could ship opt-in `functy/contrib/<thing>` adapters that import both sides — keeping
-  that dependency direction out of functy core.
+  The host picks identity vs. open per type. 
 - **Terraform / OpenTofu provider binding (speculative — low priority).** A third
   embedding target, distinct from a host like Vinculum: expose functy-authored functions
   to Terraform as provider-defined functions, callable as `provider::functy::<name>(...)`.
