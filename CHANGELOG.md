@@ -8,6 +8,36 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-06
+
+### Added
+
+- **Interactive REPL — `functy repl` / `functy run -i`, and the `repl` package.**
+  A read-eval-print loop over the HCL expression engine: each line is parsed as a
+  single expression and evaluated against a live context, with results echoed
+  HCL-style and numbered into a `_` / `_N` history, session bindings
+  (`NAME = EXPR`), `:`-meta-commands (`:help`, `:set`/`:unset`/`:vars`, `:quit`),
+  multi-line continuation, value formatting, and tab-completion (including dotted
+  attribute paths). The new `repl` package exposes the engine as a reusable
+  library: it is parameterized over a small `Host` interface
+  (`EvalContext`/`CompletionContext`/`Reserved`) plus an `Options` struct (banner,
+  history path, extra meta-commands, lifecycle hooks), and depends only on
+  readline/HCL/cty — logging and tracing stay host concerns — so a richer host can
+  layer its own context and commands on top. `NewStaticHost` drives it over a fixed
+  context; the CLI uses it over the baseline. `functy repl [FILE...]` (equivalently
+  `functy run -i`) loads all files into one context, runs the entry function if
+  present, then starts the REPL: a missing default `main` is silently skipped (an
+  explicitly named `--func` that is absent is still an error), and zero files are
+  allowed interactively — non-interactive `run` still requires at least one.
+- **`functy test --json` — machine-readable test report.** A single self-contained
+  JSON report (a `tests` array plus a summary) as an alternative to the
+  human-readable output, for CI and editor tooling (e.g. a VSCode Test Explorer).
+  Each entry carries status, duration, and the test block's source location; a
+  failure adds the assert/throw message, operand detail, and the range to
+  underline; a skip adds its reason. A compile failure still emits a well-formed
+  empty report and exits non-zero, so consumers can always parse stdout. Exit
+  status is unchanged.
+
 ## [0.6.0] - 2026-07-05
 
 ### Added
