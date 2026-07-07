@@ -375,16 +375,16 @@ The standalone `functy` binary already provides `run` and `check`. It exists for
 development, testing, and experimentation — not for production use (a host application
 links the library directly and supplies its own richer context). Planned additions:
 
-- **`functy run -i [FILE …]`** (equivalently `functy repl`) — load all given files,
-  **run the entry function if present, then start an interactive REPL** over the loaded
-  context. Modeled on Python's `python -i script.py`: the entry function (`main` by
-  default, or `--func NAME`) is executed first *if it exists*; a missing **default**
-  `main` is **silently skipped** — so you need not declare `main` just to explore code
-  in a REPL — whereas an explicitly named `--func` that is absent is still an error. The
-  REPL is the same HCL expression engine used everywhere; a host with a richer context
-  (its own functions and ambients) can layer that on top. Standalone it is necessarily
-  limited — no app-specific functions or ambients — but still handy for exploring the
-  stdlib, language semantics, and loaded functions.
+- **`functy repl` / `functy run -i [FILE …]`** — interactive REPL — *shipped* (the
+  `repl` package plus the `repl` CLI verb and `run -i`). Loads all given files, runs the
+  entry function if present (a missing **default** `main` is silently skipped; an
+  explicitly named `--func` that is absent is still an error), allows zero files
+  interactively, and reuses the same HCL expression engine used everywhere — so a host
+  with a richer context (its own functions and ambients) layers that on top via the
+  `repl.Host` interface, exactly as Vinculum's `serve -i` does. Remaining niceties, all
+  optional: a public statement-eval API (today the REPL evaluates expressions, not
+  `var`/`for`/`if` statements) and per-session execution limits once the *Execution
+  limits* item lands.
 - **`functy fmt`** — canonical formatter — *shipped* (`functy.Format` /
   `(*Parser).Format`, and the `functy fmt` CLI verb; see `doc/cli.md`). Remaining
   niceties, all cosmetic: block-comment interiors and the multi-line-vs-inline parameter
