@@ -290,9 +290,80 @@ them). functy recognizes the `_capsule` / `_ctx` marker only to *name* a type
 ## Safety & execution
 
 - **Execution limits (step / time budget).** functy permits unbounded `for` / `while`
-  over a tree-walking interpreter; a host-configurable max-steps and/or wall-clock
-  budget (via the builder or a run option) provides runaway-loop protection. Strong
-  enough that it may warrant near-term, not deferred, treatment.
+  over a tree-walking interpreter, so a single `.cty` file can wedge the process. The
+  design below is **cooperative, not preemptive** — functy can only
+  checkpoint at its *own* interpreter boundaries, so a single long-running host or
+  cty-stdlib call (a huge `range()`, a catastrophic regex) runs to completion regardless
+  of the budget (see *limitations* below). Recorded so "why not just kill it mid-call"
+  is settled: functy has no visibility inside a foreign `cty.Function`.
+
+  Two tiers, the first shippable on its own:
+
+  - **Tier 1 — per-frame loop guard (self-contained; ship first).** A step / iteration
+    counter on `interp` (constructed per invocation in `BuildFunction`'s `Impl`, so each
+    call gets its own), incremented at every loop backedge in `execForCond` /
+    `execForClause` / `execForRange` — and optionally per statement in `execBlock` for a
+    finer bound. The ceiling is a `Parser` setter (e.g. `MaxSteps(n)` / `MaxLoopIterations(n)`,
+    mirroring `RequireParamTypes`), captured **immutably at compile time** into the `Impl`
+    closure — so it rides the existing option plumbing and is **trivially concurrency-safe**:
+    no shared mutable state, each invocation counts in isolation. This catches the
+    motivating case — a single function's unbounded `for` / `while` — with zero cross-call
+    machinery. It does **not** catch recursion / mutual recursion (each nested call is a
+    fresh `interp` whose counter starts at zero) nor aggregate work spread across many
+    small calls. That is Tier 2.
+
+  - **Tier 2 — evaluation-wide budget (shared; the harder half).** A shared
+    `budget{ steps, maxSteps, deadline }` reachable by **every** `interp` participating in
+    one logical top-level evaluation — needed to bound recursion (a per-frame counter never
+    sees the depth) and total aggregate work, and to carry a wall-clock `deadline`.
+    Checkpoints add **function entry** (top of the `Impl` closure) to the loop backedges,
+    so deep / mutual recursion and call-count blowups are caught before Go's own stack
+    overflow turns them into an ungraceful panic.
+
+    The delivery problem, stated honestly so the obvious reflex is pre-empted: go-cty's
+    `function.Spec.Impl` is `func(args []cty.Value, retType cty.Type) (cty.Value, error)`
+    — **no `context.Context`** — and each functy `Impl` rebuilds its `parentCtx` from the
+    host's `evalCtxFn()` rather than inheriting the caller's scope context, so **there is
+    no existing channel** to thread a per-evaluation budget from an outer functy frame into
+    an inner one. "Just add a `context.Context` argument" is not available: cty's function
+    type doesn't have one, and forking cty's signature defeats the reuse-cty premise (same
+    reasoning as the named-arguments rejection under *Functions*). Two candidate channels:
+    - **(a) reserved capsule in the eval context.** The host (or a functy `Run` helper)
+      installs the budget as a `$`-prefixed capsule value in the `EvalContext` that
+      `evalCtxFn()` returns; each `interp` pulls it out at construction and, if present,
+      shares it (absent → unbounded, as today). Works **only** if `evalCtxFn()` yields the
+      same budget-bearing context for every nested call of that evaluation, and requires
+      the host to hand out **distinct** contexts per concurrent evaluation (which it already
+      must, for any request-scoped data). This matches functy's "host owns the eval context"
+      philosophy: functy defines the capsule type and the decrement/check; the host owns
+      the budget's lifecycle and concurrency scoping.
+    - **(b) a functy-owned run entry** that establishes both the budget and the context that
+      carries it — a larger public surface; deferred in favor of (a).
+
+  - **Error semantics.** Breaching a limit raises a sentinel `LimitError`, modeled on
+    `SkipError` (errors.go): recovered from diagnostics at the function boundary the way
+    `skipFromDiags` recovers a skip, and — crucially — **not** matched by `try` / `catch`
+    or `val, err =`. Otherwise `try { while true {} }` would fire the guard, unwind into
+    the catch, and loop again, swallowing the very protection. A breach therefore
+    **terminates the whole evaluation**, uncatchable, straight out through every enclosing
+    frame. Open: whether defers still run afterward — a small fixed grace (Go's
+    panic-still-runs-defers) versus skipping them to bound post-breach cost; lean toward
+    **skipping**, since a defer can itself loop.
+
+  - **Config surface.** Tier 1 via `Parser` setters, captured at compile (no runtime
+    state). Tier 2's wall-clock deadline and shared step budget via the per-evaluation
+    channel above, since that counter is mutable and per-run. `0` / unset means **unbounded**
+    (opt-in — existing embeddings are unchanged). Vinculum, as a long-lived server, would
+    ship a non-zero default that config can override; the standalone CLI / REPL a generous
+    default so interactive exploration isn't clipped.
+
+  - **Limitations (in scope to *state*, out of scope to *solve* here).** No preemption
+    inside a host or cty-stdlib call — functy checkpoints only at its own backedges, so
+    bounding a runaway `range()` / regex is the host's job (a `context`-aware stdlib or an
+    OS-level watchdog). No **memory** limit (an ever-growing list/map is not a step/time
+    budget) — a separate mechanism, not planned. Composes with the *Sandbox / pure mode*
+    item below: a `pure`, no-side-effect function run under a budget is the safe-to-run-
+    untrusted target the two features jointly enable.
 - **Sandbox / pure mode + memoization.** The host already controls which functions
   populate the eval context, so a "no side effects" mode is largely free; a `pure`
   marker on a function could additionally enable **memoization / caching** of its
