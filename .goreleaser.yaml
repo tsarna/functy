@@ -1,0 +1,50 @@
+# GoReleaser configuration — https://goreleaser.com
+# Cross-compiles the CLI, builds archives + checksums, and cuts a GitHub
+# Release on tag push. The library is consumed via `go get` and needs no
+# release step; the same vX.Y.Z tag serves both.
+version: 2
+
+project_name: functy
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: functy
+    main: ./cmd/functy
+    binary: functy
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .CommitDate }}
+
+archives:
+  - id: functy
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+# The release body comes from CHANGELOG.md via --release-notes (see the release
+# workflow), so GoReleaser's own changelog generation is disabled.
+changelog:
+  disable: true
+
+release:
+  prerelease: auto

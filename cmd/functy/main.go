@@ -23,9 +23,10 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "functy",
 		Short:         "Run and check functy (.cty) source files",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.AddCommand(runCmd(), replCmd(), checkCmd(), testCmd(), fmtCmd())
+	root.AddCommand(runCmd(), replCmd(), checkCmd(), testCmd(), fmtCmd(), versionCmd())
 	return root
 }
