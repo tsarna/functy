@@ -8,6 +8,20 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-07
+
+### Fixed
+
+- **Release workflow populates the GitHub Release body.** The 0.7.1 pipeline
+  left the release body empty because GoReleaser's `--release-notes` is ignored
+  when changelog generation is disabled. The workflow now sets the body from the
+  changelog section via `gh release edit` after GoReleaser publishes.
+
+### Changed
+
+- Bumped `goreleaser-action` to v7 (runs on Node 24, clearing the Node 20
+  deprecation warning).
+
 ## [0.7.1] - 2026-07-07
 
 ### Added

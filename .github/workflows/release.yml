@@ -38,7 +38,7 @@ jobs:
           echo "----- release notes -----"
           cat "$RUNNER_TEMP/release-notes.md"
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
