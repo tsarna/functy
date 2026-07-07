@@ -13,14 +13,22 @@ import (
 
 func runCmd() *cobra.Command {
 	var funcName, output string
+	var interactive bool
 	c := &cobra.Command{
-		Use:   "run [--func NAME] [--output json|hcl|raw] FILE... [-- ARG...]",
+		Use:   "run [--func NAME] [--output json|hcl|raw] [-i] FILE... [-- ARG...]",
 		Short: "Load source files and call an entry function",
 		Long: "Load the given .cty files into one eval context and invoke an entry " +
 			"function (main by default). Positional arguments before -- are source " +
 			"files; arguments after -- are evaluated as HCL expressions and passed to " +
-			"the entry function.",
+			"the entry function.\n\n" +
+			"With -i/--interactive, run drops into an interactive REPL after the " +
+			"entry function (equivalent to `functy repl`): a missing default main is " +
+			"silently skipped, and zero source files are allowed.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if interactive {
+				return runInteractive(cmd, args, funcName, cmd.Flags().Changed("func"), output)
+			}
+
 			files, callArgs := splitFilesAndArgs(args, cmd.ArgsLenAtDash())
 			if len(files) == 0 {
 				return errors.New("no source files given")
@@ -58,6 +66,7 @@ func runCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&funcName, "func", "main", "entry function to call")
 	c.Flags().StringVar(&output, "output", "json", "output format: json, hcl, or raw")
+	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "after running the entry function, start an interactive REPL (allows zero files; skips a missing default main)")
 	return c
 }
 
