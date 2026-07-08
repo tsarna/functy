@@ -8,15 +8,13 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
-### Added
+## [0.8.0] - 2026-07-07
 
-- **`help()` / `doc()` in the standalone CLI & REPL.** The reflection builtins are
-  now wired into the `run` / `repl` / `run -i` context, so a `.cty` author (and the
-  interactive REPL) can introspect available functions without a host: `help(name)`
-  renders a function's signature and per-parameter docs, `doc(name)` its
-  description, and — new — `help()` with no argument returns the sorted names of
-  every available function. `help` and `doc` are reserved names in the CLI. See
-  `doc/stdlib.md` and `doc/cli.md#repl`.
+A developer-experience release focused on editor tooling and the interactive
+REPL: machine-readable diagnostics from `check` and `run`, zero-argument test
+discovery, and function introspection (`help`/`doc`) in the standalone CLI.
+
+### Added
 
 - **`functy check --json`.** The `check` command gains a `--json` flag that
   emits diagnostics as a machine-readable report to stdout —
@@ -26,11 +24,6 @@ tagged. Until then, everything lives under **Unreleased**.
   and the exit status is unchanged, so editor tooling (the VSCode extension's
   Problems panel) can map diagnostics to precise ranges without scraping text.
   See `doc/cli.md#check`.
-- **`functy test` no-argument discovery.** Run with no `FILE` arguments, `test`
-  now discovers `.cty` files in the current directory (recursively, skipping
-  dot-directories) — equivalent to `functy test .` — instead of erroring. Makes
-  the terminal loop and a VSCode Test Explorer "run all" cheaper. See
-  `doc/cli.md#test`.
 - **`functy run --json`.** `run` gains the same `--json` diagnostics report
   (identical shape to `check --json`), covering compile, argument, and runtime
   (`throw` / failed `assert`) errors. The report goes to **stderr** — `run`'s
@@ -38,6 +31,18 @@ tagged. Until then, everything lives under **Unreleased**.
   return value, both left untouched by `--json` — so editor **Run** commands can
   surface runtime failures at precise ranges without disturbing program output.
   See `doc/cli.md#run`.
+- **`functy test` no-argument discovery.** Run with no `FILE` arguments, `test`
+  now discovers `.cty` files in the current directory (recursively, skipping
+  dot-directories) — equivalent to `functy test .` — instead of erroring. Makes
+  the terminal loop and a VSCode Test Explorer "run all" cheaper. See
+  `doc/cli.md#test`.
+- **`help()` / `doc()` in the standalone CLI & REPL.** The reflection builtins are
+  now wired into the `run` / `repl` / `run -i` context, so a `.cty` author (and the
+  interactive REPL) can introspect available functions without a host: `help(name)`
+  renders a function's signature and per-parameter docs, `doc(name)` its
+  description, and — new — `help()` with no argument returns the sorted names of
+  every available function. `help` and `doc` are reserved names in the CLI. See
+  `doc/stdlib.md` and `doc/cli.md#repl`.
 
 ## [0.7.3] - 2026-07-07
 
