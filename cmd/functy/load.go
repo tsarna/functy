@@ -31,13 +31,22 @@ func loadProgram(paths []string, baseline map[string]function.Function) (*functy
 	}
 
 	var ctx *hcl.EvalContext
+	evalCtxFn := func() *hcl.EvalContext { return ctx }
+
 	res, pdiags := functy.NewParser().
 		AllowTopLevelConst(true).
 		AllowTopLevelVar(true).
 		ParseAll(sources)
 	diags = diags.Extend(pdiags)
 
-	funcs, cdiags := res.Compile(func() *hcl.EvalContext { return ctx })
+	// Reflection builtins need the parsed declarations and the assembled context,
+	// so they join the baseline (and its reserved-name set) here rather than in the
+	// static baselineFunctions. help() renders functy functions from res.Funcs and
+	// falls back to cty metadata for host functions; doc() reads descriptions.
+	baseline["doc"] = functy.DocFunc(evalCtxFn)
+	baseline["help"] = functy.HelpFunc(res.Funcs, evalCtxFn)
+
+	funcs, cdiags := res.Compile(evalCtxFn)
 	diags = diags.Extend(cdiags)
 
 	all := make(map[string]function.Function, len(baseline)+len(funcs))

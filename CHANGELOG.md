@@ -10,6 +10,14 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **`help()` / `doc()` in the standalone CLI & REPL.** The reflection builtins are
+  now wired into the `run` / `repl` / `run -i` context, so a `.cty` author (and the
+  interactive REPL) can introspect available functions without a host: `help(name)`
+  renders a function's signature and per-parameter docs, `doc(name)` its
+  description, and — new — `help()` with no argument returns the sorted names of
+  every available function. `help` and `doc` are reserved names in the CLI. See
+  `doc/stdlib.md` and `doc/cli.md#repl`.
+
 - **`functy check --json`.** The `check` command gains a `--json` flag that
   emits diagnostics as a machine-readable report to stdout —
   `{ diagnostics: [ { severity, summary, detail?, location? } ] }`, each

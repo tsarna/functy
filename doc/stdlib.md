@@ -215,6 +215,21 @@ help("add")
 #      b  the second addend
 ```
 
+### `help() -> string`
+
+Called with **no argument**, `help()` returns the sorted, newline-separated names
+of every available function — a directory to explore with `help(name)`. The names
+are drawn from the assembled eval context, so the list spans host- and
+functy-defined functions alike:
+
+```functy
+help()
+# => abs
+#    add
+#    ...
+#    upper
+```
+
 `functy.HelpFunc(funcs, evalCtxFn)` takes the functy declarations (`Result.Funcs`)
 **and** the late-binding closure. functy functions are rendered from their
 declaration — accurate names, types, defaults, variadic, return type, and

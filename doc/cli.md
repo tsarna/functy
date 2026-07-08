@@ -11,9 +11,10 @@ go install github.com/tsarna/functy/cmd/functy@latest
 ```
 
 ```text
-functy run [--func NAME] [--output json|hcl|raw] FILE... [-- ARG...]
-functy check FILE...
-functy test [FILE...]
+functy run [--func NAME] [--output json|hcl|raw] [--json] FILE... [-- ARG...]
+functy repl [--func NAME] [FILE...] [-- ARG...]
+functy check [--json] FILE...
+functy test [--run PATTERN] [-v] [--json] [FILE...]
 functy fmt [-w] [-l] [FILE|DIR ...]
 ```
 
@@ -88,12 +89,17 @@ Because there is no way to update global variables, they are functionally equiva
 
 The run context provides a subset of the cty standard library (string,
 collection, number, and encoding functions such as `upper`, `merge`, `keys`,
-`length`, `jsonencode`, `jsondecode`, …) plus two conveniences:
+`length`, `jsonencode`, `jsondecode`, …), functy's own stdlib (`typeof`, `cond`,
+`switch`, `try`, …), plus a few conveniences:
 
 - `print(...)` — write arguments to stdout (strings unquoted, others as JSON).
-- `println(...)` — like `print`, with a trailing newline.
-
-Both return `null`.
+  Returns `null`.
+- `println(...)` — like `print`, with a trailing newline. Returns `null`.
+- `help(name)` / `help()` — a function's signature and docs by name, or the sorted
+  names of all available functions when called with no argument (see
+  [stdlib.md](stdlib.md#helpfuncfuncs-evalctxfn--context-aware)). Handy in the REPL.
+- `doc(name)` — a function's one-line description by name (`null` if no such
+  function).
 
 ## check
 
@@ -261,7 +267,11 @@ cleanly — a file with syntax (or, in the standalone CLI, unresolved-type) erro
 reported and left untouched, so fmt never drops or reorders code. A host that
 registers named types can format its own files via `(*functy.Parser).Format`.
 
-## Not yet implemented
+## repl
 
-A REPL (`functy repl`) and additional output and diagnostic options are planned
-but not part of this build.
+Start an interactive REPL over the loaded context: `functy repl [FILE...]` (or
+`functy run -i [FILE...]`). Files are optional — with none, the REPL still exposes
+the baseline context. Given files, it loads them into one eval context, runs the
+entry function if present, then drops into the prompt. `:help` lists the REPL's
+meta-commands; the `help()` / `doc()` [baseline functions](#baseline-functions)
+introspect the available functions from inside the session.

@@ -130,3 +130,24 @@ func TestHelpFuncUnknown(t *testing.T) {
 		t.Fatalf("help(\"nope\") = %#v, want null", got)
 	}
 }
+
+func TestHelpFuncNoArgListsFunctions(t *testing.T) {
+	// help() with no argument returns the sorted, newline-separated names of every
+	// function in the assembled context (host- and functy-defined alike).
+	stub := function.New(&function.Spec{
+		Type: function.StaticReturnType(cty.String),
+		Impl: func([]cty.Value, cty.Type) (cty.Value, error) { return cty.StringVal(""), nil },
+	})
+	ctx := &hcl.EvalContext{Functions: map[string]function.Function{
+		"upper": stub, "add": stub, "cond": stub,
+	}}
+	help := HelpFunc(nil, func() *hcl.EvalContext { return ctx })
+
+	got, err := help.Call(nil)
+	if err != nil {
+		t.Fatalf("help() call: %s", err)
+	}
+	if got.AsString() != "add\ncond\nupper" {
+		t.Fatalf("help() = %q, want sorted names", got.AsString())
+	}
+}

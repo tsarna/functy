@@ -39,8 +39,7 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
     per-arg docs) that `HelpFunc` consults *before* falling back to raw cty
     introspection. Open: the registration shape (a plain struct vs. reusing `FuncDecl`),
     and whether it also feeds `doc()`.
-  - A value form when/if functions become values, and a no-argument `help()` that lists
-    all functions.
+  - A value form when/if functions become values.
 - **Reflection over global variables** (not urgent) — extend `doc()` / `help()` (or a
   sibling builtin) to *variables*, not just functions, with two sources mirroring the
   function story:

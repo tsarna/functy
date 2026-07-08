@@ -2,6 +2,7 @@ package functy
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -64,6 +65,11 @@ func DocFunc(evalCtxFn func() *hcl.EvalContext) function.Function {
 // of a function — its signature (calling convention), description, and per-parameter
 // docs — as a single string, or null if there is no such function.
 //
+// Called with no argument, help() instead returns the sorted, newline-separated
+// names of every available function (a directory to explore with help(name)),
+// drawn from the assembled eval context so it spans host- and functy-defined
+// functions alike.
+//
 // funcs (typically Result.Funcs) supplies the functy declarations, which help
 // renders from directly: functy's optional and variadic parameters collapse into a
 // single VarParam in the cty calling convention, so the declaration is the only
@@ -84,12 +90,14 @@ func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 		byName[fn.Name] = fn
 	}
 	return function.New(&function.Spec{
-		Description: `Return a human-readable help summary for a function by name: help("f"). Includes its signature, description, and per-parameter docs; null if there is no such function.`,
-		Params: []function.Parameter{
-			{Name: "name", Type: cty.String},
-		},
-		Type: function.StaticReturnType(cty.String),
+		Description: `Return a human-readable help summary for a function by name: help("f"). Includes its signature, description, and per-parameter docs; null if there is no such function. Called with no argument, help() lists the names of all available functions.`,
+		Params:      []function.Parameter{},
+		VarParam:    &function.Parameter{Name: "name", Type: cty.String},
+		Type:        function.StaticReturnType(cty.String),
 		Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+			if len(args) == 0 {
+				return cty.StringVal(renderFuncList(byName, evalCtxFn)), nil
+			}
 			if !args[0].IsKnown() {
 				return cty.UnknownVal(cty.String), nil
 			}
@@ -110,6 +118,32 @@ func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 			return cty.NullVal(cty.String), nil // no such function
 		},
 	})
+}
+
+// renderFuncList returns the sorted, newline-separated names of every available
+// function, for the no-argument help() form. It prefers the assembled eval context
+// (which holds host- and functy-defined functions in one flat map) and falls back
+// to the functy declarations when no context is available.
+func renderFuncList(byName map[string]*FuncDecl, evalCtxFn func() *hcl.EvalContext) string {
+	names := make(map[string]struct{})
+	if evalCtxFn != nil {
+		if ctx := evalCtxFn(); ctx != nil {
+			for n := range ctx.Functions {
+				names[n] = struct{}{}
+			}
+		}
+	}
+	if len(names) == 0 {
+		for n := range byName {
+			names[n] = struct{}{}
+		}
+	}
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+	return strings.Join(sorted, "\n")
 }
 
 // paramDoc is one entry of a rendered "Parameters:" section.

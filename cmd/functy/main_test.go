@@ -132,6 +132,48 @@ func TestCheckInvalid(t *testing.T) {
 	}
 }
 
+func TestRunHelpAndDocWired(t *testing.T) {
+	// The standalone CLI wires the reflection builtins into the run context:
+	// help(name) renders a functy function's signature, help() lists all functions,
+	// and doc(name) returns a host function's description.
+	src := `// Add two numbers.
+func add(a: number, b: number) -> number { return a + b }
+func main() -> string { return help("add") }`
+	path := writeCty(t, "lib.cty", src)
+	out, _, err := execCLI(t, "run", "--output", "raw", path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "add(a: number, b: number) -> number") || !strings.Contains(out, "Add two numbers.") {
+		t.Fatalf("help(\"add\") did not render the signature/doc; got:\n%s", out)
+	}
+
+	listPath := writeCty(t, "list.cty", `func main() -> string { return help() }`)
+	out, _, err = execCLI(t, "run", "--output", "raw", listPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// The listing includes the reflection builtins themselves and the cty stdlib.
+	for _, want := range []string{"help", "doc", "upper"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("help() listing missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunHelpIsReservedName(t *testing.T) {
+	// Wiring help/doc into the baseline makes them reserved: a user function may
+	// not shadow them.
+	path := writeCty(t, "clash.cty", "func help() -> number { return 1 }\nfunc main() -> number { return 1 }")
+	_, errOut, err := execCLI(t, "run", path)
+	if err == nil {
+		t.Fatalf("expected a reserved-name error")
+	}
+	if !strings.Contains(errOut, "reserved") {
+		t.Fatalf("expected a reserved-name diagnostic; got:\n%s", errOut)
+	}
+}
+
 func TestCheckJSONValid(t *testing.T) {
 	// A clean file emits a well-formed report with an empty diagnostics array and
 	// exits zero; the human-readable "ok" is suppressed.
