@@ -17,18 +17,22 @@ func testCmd() *cobra.Command {
 	var run string
 	var verbose, jsonOut bool
 	c := &cobra.Command{
-		Use:   "test [--run PATTERN] [-v] [--json] FILE...",
+		Use:   "test [--run PATTERN] [-v] [--json] [FILE...]",
 		Short: "Run the test blocks defined in the source files",
 		Long: "Load the given .cty files and run every test \"...\" { ... } block they " +
 			"define. A test passes if its body runs to completion, is skipped if it calls " +
 			"skip(...), and fails if any other error (a failed assert, a throw, an " +
 			"evaluation error) unwinds out of it. Exits non-zero if any test fails.\n\n" +
+			"With no FILE arguments, discovers .cty files in the current directory " +
+			"(recursively, skipping dot-directories) — equivalent to `functy test .`.\n\n" +
 			"With --json, emit a single machine-readable JSON report (one entry per test " +
 			"plus a summary) instead of the human-readable output, for CI and editor " +
 			"tooling. Exit status is unchanged.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return errors.New("no source files given")
+				// No paths given: discover .cty files in the working directory tree,
+				// the same recursive walk a directory argument gets.
+				args = []string{"."}
 			}
 
 			var filter func(string) bool

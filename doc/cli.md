@@ -13,7 +13,7 @@ go install github.com/tsarna/functy/cmd/functy@latest
 ```text
 functy run [--func NAME] [--output json|hcl|raw] FILE... [-- ARG...]
 functy check FILE...
-functy test FILE...
+functy test [FILE...]
 functy fmt [-w] [-l] [FILE|DIR ...]
 ```
 
@@ -147,6 +147,9 @@ error — a failed `assert`, a `throw`, or an evaluation error — unwinds out o
 failure is printed with source context (the failing line and, for a failed `assert`,
 the operand values); the command exits non-zero only if a test **fails** (a skip is not
 a failure).
+
+With no `FILE` arguments, `test` discovers `.cty` files in the current directory
+(recursively, skipping dot-directories) — equivalent to `functy test .`.
 
 By default the output is **quiet** — only failures are printed, followed by a summary:
 

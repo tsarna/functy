@@ -18,6 +18,11 @@ tagged. Until then, everything lives under **Unreleased**.
   and the exit status is unchanged, so editor tooling (the VSCode extension's
   Problems panel) can map diagnostics to precise ranges without scraping text.
   See `doc/cli.md#check`.
+- **`functy test` no-argument discovery.** Run with no `FILE` arguments, `test`
+  now discovers `.cty` files in the current directory (recursively, skipping
+  dot-directories) — equivalent to `functy test .` — instead of erroring. Makes
+  the terminal loop and a VSCode Test Explorer "run all" cheaper. See
+  `doc/cli.md#test`.
 - **`functy run --json`.** `run` gains the same `--json` diagnostics report
   (identical shape to `check --json`), covering compile, argument, and runtime
   (`throw` / failed `assert`) errors. The report goes to **stderr** — `run`'s

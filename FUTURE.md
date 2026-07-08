@@ -395,12 +395,12 @@ links the library directly and supplies its own richer context). Planned additio
   it.
 - **Inline tests** — *shipped*: co-located `test "…" { … }` blocks, the core runner
   (`(*Result).RunTests` / `RunTestsMatching`), the `functy test` CLI verb (quiet/`-v`,
-  `--run` name filter, machine-readable `--json` report), and a test-only
-  `skip("reason")` builtin (see `doc/language.md#tests`). Per-test setup/teardown is
-  already expressible (leading statements + `defer`). Remaining niceties: soft /
-  non-fatal assertions or a `t`-style test context (today a test stops at its first
-  failure, like Go/pytest); shared `beforeEach`-style setup (fresh mutable fixtures per
-  test); and no-argument file discovery (`functy test` over `*.cty` in the working dir).
+  `--run` name filter, machine-readable `--json` report, and no-argument discovery of
+  `.cty` files in the working directory) and a test-only `skip("reason")` builtin (see
+  `doc/language.md#tests`). Per-test setup/teardown is already expressible (leading
+  statements + `defer`). Remaining niceties: soft / non-fatal assertions or a `t`-style
+  test context (today a test stops at its first failure, like Go/pytest); and shared
+  `beforeEach`-style setup (fresh mutable fixtures per test).
 - **Add-on package "functy-readiness" convention.** Sibling cty add-on packages
   (`bytes-cty-type`, `url-cty-funcs`, `rich-cty-types`, `time-cty-funcs`, …) should let
   a program that links *both* functy and the package register the package's type(s) in

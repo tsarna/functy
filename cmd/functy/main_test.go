@@ -495,6 +495,26 @@ test "wip" { skip("todo") }`
 	}
 }
 
+func TestCLITestNoArgsDiscoversCwd(t *testing.T) {
+	// With no path arguments, `functy test` discovers .cty files in the working
+	// directory tree (equivalent to `functy test .`).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "m.cty"),
+		[]byte(`test "discovered" { assert(true) }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	out, _, err := execCLI(t, "test", "-v")
+	if err != nil {
+		t.Fatalf("unexpected error: %v (out: %s)", err, out)
+	}
+	for _, want := range []string{"ok   discovered", "1 passed, 0 failed, 0 skipped"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
 func TestCLITestJSONCompileFailureIsValid(t *testing.T) {
 	// Even a compilation failure emits a well-formed (empty) report so consumers can
 	// always parse stdout, and still exits non-zero.
