@@ -13,9 +13,9 @@ import (
 
 func runCmd() *cobra.Command {
 	var funcName, output string
-	var interactive bool
+	var interactive, jsonOut bool
 	c := &cobra.Command{
-		Use:   "run [--func NAME] [--output json|hcl|raw] [-i] FILE... [-- ARG...]",
+		Use:   "run [--func NAME] [--output json|hcl|raw] [--json] [-i] FILE... [-- ARG...]",
 		Short: "Load source files and call an entry function",
 		Long: "Load the given .cty files into one eval context and invoke an entry " +
 			"function (main by default). Positional arguments before -- are source " +
@@ -23,7 +23,12 @@ func runCmd() *cobra.Command {
 			"the entry function.\n\n" +
 			"With -i/--interactive, run drops into an interactive REPL after the " +
 			"entry function (equivalent to `functy repl`): a missing default main is " +
-			"silently skipped, and zero source files are allowed.",
+			"silently skipped, and zero source files are allowed.\n\n" +
+			"With --json, any diagnostics (compile, argument, or runtime errors) are " +
+			"emitted to stderr as a machine-readable report instead of the " +
+			"human-readable text, for editor tooling. The entry function's result and " +
+			"the program's own output still go to stdout (unchanged by --json); " +
+			"--output controls only the result value's format. Exit status is unchanged.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if interactive {
 				return runInteractive(cmd, args, funcName, cmd.Flags().Changed("func"), output)
@@ -37,29 +42,26 @@ func runCmd() *cobra.Command {
 			baseline := baselineFunctions(cmd.OutOrStdout())
 			_, ctx, fileMap, diags := loadProgram(files, baseline)
 			if diags.HasErrors() {
-				writeDiags(cmd.ErrOrStderr(), fileMap, diags)
-				return errors.New("compilation failed")
+				return emitRunError(cmd, jsonOut, fileMap, diags, "compilation failed")
 			}
 
 			fn, ok := ctx.Functions[funcName]
 			if !ok {
-				return fmt.Errorf("entry function %q not found", funcName)
+				return emitRunPlainError(cmd, jsonOut, fmt.Errorf("entry function %q not found", funcName))
 			}
 
 			argVals, adiags := evalArgs(callArgs, ctx)
 			if adiags.HasErrors() {
-				writeDiags(cmd.ErrOrStderr(), fileMap, adiags)
-				return errors.New("invalid arguments")
+				return emitRunError(cmd, jsonOut, fileMap, adiags, "invalid arguments")
 			}
 
 			result, err := fn.Call(argVals)
 			if err != nil {
 				var te *functy.ThrownError
 				if errors.As(err, &te) {
-					writeDiags(cmd.ErrOrStderr(), fileMap, te.Diagnostics())
-					return errors.New("execution failed")
+					return emitRunError(cmd, jsonOut, fileMap, te.Diagnostics(), "execution failed")
 				}
-				return fmt.Errorf("calling %q: %w", funcName, err)
+				return emitRunPlainError(cmd, jsonOut, fmt.Errorf("calling %q: %w", funcName, err))
 			}
 			return printResult(cmd.OutOrStdout(), result, output)
 		},
@@ -67,7 +69,39 @@ func runCmd() *cobra.Command {
 	c.Flags().StringVar(&funcName, "func", "main", "entry function to call")
 	c.Flags().StringVar(&output, "output", "json", "output format: json, hcl, or raw")
 	c.Flags().BoolVarP(&interactive, "interactive", "i", false, "after running the entry function, start an interactive REPL (allows zero files; skips a missing default main)")
+	c.Flags().BoolVar(&jsonOut, "json", false, "emit diagnostics to stderr as a machine-readable JSON report instead of human-readable text (ignored with -i)")
 	return c
+}
+
+// emitRunError reports a run failure either as human-readable diagnostics (text to
+// stderr) or, when jsonOut, as the machine-readable diagnostics report (also to
+// stderr, so the entry function's result and the program's own output on stdout
+// are never corrupted). The JSON path returns errSilent so main does not append a
+// second "functy: ..." line to the report; the text path returns the descriptive
+// sentinel that main prints. Either way the exit status is non-zero.
+func emitRunError(cmd *cobra.Command, jsonOut bool, fileMap map[string]*hcl.File, diags hcl.Diagnostics, sentinel string) error {
+	if jsonOut {
+		writeDiagsJSON(cmd.ErrOrStderr(), diags)
+		return errSilent
+	}
+	writeDiags(cmd.ErrOrStderr(), fileMap, diags)
+	return errors.New(sentinel)
+}
+
+// emitRunPlainError reports a CLI-level failure that carries no source location (a
+// missing entry function, a non-thrown call error). When jsonOut it renders as a
+// one-line JSON diagnostic on stderr and returns errSilent; otherwise it returns
+// the error unchanged for main to print, preserving run's original text output for
+// these cases.
+func emitRunPlainError(cmd *cobra.Command, jsonOut bool, err error) error {
+	if !jsonOut {
+		return err
+	}
+	writeDiagsJSON(cmd.ErrOrStderr(), hcl.Diagnostics{{
+		Severity: hcl.DiagError,
+		Summary:  err.Error(),
+	}})
+	return errSilent
 }
 
 // splitFilesAndArgs divides positionals into source files and call arguments at

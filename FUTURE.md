@@ -379,14 +379,6 @@ links the library directly and supplies its own richer context). Planned additio
     out to the existing CLI — **Run** (`functy run`), **Check** (`functy check`), and
     **Format** wired to `functy fmt` as the document formatter / format-on-save (gated
     on that item shipping).
-  - **`functy check --json` — machine-readable diagnostics.** *shipped* (see
-    `doc/cli.md#check`). The `--json` flag emits `{ diagnostics: [ { severity, summary,
-    detail?, location? } ] }` to stdout, each `location` a 1-based
-    `file`/`line`/`column`/`end_line`/`end_column` range, so the extension maps
-    diagnostics to precise `vscode.Diagnostic` ranges without scraping the text writer.
-    The shared serializer (`writeDiagsJSON` in `cmd/functy/output.go`) reuses the
-    `jsonRange`/`rangeToJSON` helpers from `cmd/functy/test.go`. **Remaining:** apply the
-    same `--json` treatment to `run`'s eval/parse diagnostics.
   - **Test Explorer integration** — surface `test "…"` blocks in VSCode's native
     Testing UI (run / re-run individual tests), driving `functy test --run <name>`
     under the hood. This is the concrete consumer of the shipped test runner and its

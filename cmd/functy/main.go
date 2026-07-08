@@ -6,15 +6,23 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 )
 
+// errSilent marks a failure whose diagnostics have already been reported (e.g. as
+// a --json diagnostics report), so main exits non-zero without printing a second
+// "functy: ..." line that would corrupt the machine-readable output.
+var errSilent = errors.New("already reported")
+
 func main() {
 	if err := rootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "functy:", err)
+		if !errors.Is(err, errSilent) {
+			fmt.Fprintln(os.Stderr, "functy:", err)
+		}
 		os.Exit(1)
 	}
 }

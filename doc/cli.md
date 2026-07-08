@@ -44,6 +44,28 @@ hello alice
 - **Output.** The return value is printed — JSON by default; `--output` selects
   `json`, `hcl`, or `raw`. A `null` return prints nothing. `raw` prints a string
   result unquoted and falls back to JSON for other types.
+- **`--json` (diagnostics).** Emits any diagnostics — a compile error, a bad
+  argument, or a runtime `throw` / failed `assert` — to **stderr** as a
+  machine-readable report instead of the human-readable text, for editor tooling.
+  Unlike `check --json`, the report goes to stderr because `run`'s **stdout** is
+  reserved for the program's own output (`print` / `println`) and the return
+  value, which `--json` leaves untouched (`--output` still controls the value's
+  format). On failure stderr is a single well-formed object and the exit status is
+  non-zero; on success stderr is empty. The report shape matches `check --json`:
+
+  ```console
+  $ functy run --json broken.cty -- -3
+  {
+    "diagnostics": [
+      {
+        "severity": "error",
+        "summary": "must be positive",
+        "detail": "n = -3",
+        "location": { "file": "broken.cty", "line": 3, "column": 12, "end_line": 3, "end_column": 21 }
+      }
+    ]
+  }
+  ```
 
 ### Top-level constants
 

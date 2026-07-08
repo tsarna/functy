@@ -18,6 +18,13 @@ tagged. Until then, everything lives under **Unreleased**.
   and the exit status is unchanged, so editor tooling (the VSCode extension's
   Problems panel) can map diagnostics to precise ranges without scraping text.
   See `doc/cli.md#check`.
+- **`functy run --json`.** `run` gains the same `--json` diagnostics report
+  (identical shape to `check --json`), covering compile, argument, and runtime
+  (`throw` / failed `assert`) errors. The report goes to **stderr** — `run`'s
+  stdout is reserved for the program's own `print`/`println` output and the
+  return value, both left untouched by `--json` — so editor **Run** commands can
+  surface runtime failures at precise ranges without disturbing program output.
+  See `doc/cli.md#run`.
 
 ## [0.7.3] - 2026-07-07
 

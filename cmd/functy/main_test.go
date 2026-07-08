@@ -219,6 +219,93 @@ func TestRunUncaughtAssertRendersDiagnostic(t *testing.T) {
 	}
 }
 
+func TestRunJSONCompileErrorOnStderr(t *testing.T) {
+	// A compile failure under --json emits a structural report on stderr (not the
+	// text writer), with severity, summary, and a 1-based location; stdout stays
+	// empty so a consumer never confuses program output with the report.
+	path := writeCty(t, "bad.cty", "func main() { break }")
+	out, errOut, err := execCLI(t, "run", "--json", path)
+	if err == nil {
+		t.Fatalf("expected a non-zero exit; stderr:\n%s", errOut)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("stdout should be empty on a compile error, got:\n%s", out)
+	}
+	var rep struct {
+		Diagnostics []struct {
+			Severity string `json:"severity"`
+			Summary  string `json:"summary"`
+			Location *struct {
+				Line int `json:"line"`
+			} `json:"location"`
+		} `json:"diagnostics"`
+	}
+	if uerr := json.Unmarshal([]byte(errOut), &rep); uerr != nil {
+		t.Fatalf("stderr is not valid JSON: %v\n%s", uerr, errOut)
+	}
+	if len(rep.Diagnostics) != 1 || rep.Diagnostics[0].Severity != "error" ||
+		!strings.Contains(rep.Diagnostics[0].Summary, "break") {
+		t.Fatalf("unexpected diagnostics: %+v", rep.Diagnostics)
+	}
+	if rep.Diagnostics[0].Location == nil {
+		t.Fatalf("expected a source location on the diagnostic")
+	}
+}
+
+func TestRunJSONThrownErrorKeepsStdoutClean(t *testing.T) {
+	// A runtime failure after the program has printed: the printed output stays on
+	// stdout, and the thrown assertion's diagnostic (message, operand detail,
+	// location) is emitted as pure JSON on stderr — no "functy: ..." line mixed in.
+	src := `func main(n: number) -> number {
+    println("side effect")
+    assert(n > 0, "must be positive")
+    return n
+}`
+	path := writeCty(t, "t.cty", src)
+	out, errOut, err := execCLI(t, "run", "--json", path, "--", "-3")
+	if err == nil {
+		t.Fatalf("expected a non-zero exit; out:\n%s", out)
+	}
+	if strings.TrimSpace(out) != "side effect" {
+		t.Fatalf("stdout should carry only the program output, got:\n%s", out)
+	}
+	var rep struct {
+		Diagnostics []struct {
+			Summary  string `json:"summary"`
+			Detail   string `json:"detail"`
+			Location *struct {
+				Line int `json:"line"`
+			} `json:"location"`
+		} `json:"diagnostics"`
+	}
+	if uerr := json.Unmarshal([]byte(errOut), &rep); uerr != nil {
+		t.Fatalf("stderr is not pure JSON: %v\n%s", uerr, errOut)
+	}
+	if len(rep.Diagnostics) != 1 {
+		t.Fatalf("expected one diagnostic, got %d:\n%s", len(rep.Diagnostics), errOut)
+	}
+	d := rep.Diagnostics[0]
+	if d.Summary != "must be positive" || d.Detail != "n = -3" || d.Location == nil || d.Location.Line != 3 {
+		t.Fatalf("unexpected diagnostic: %+v", d)
+	}
+}
+
+func TestRunJSONSuccessNoDiagnostics(t *testing.T) {
+	// On success --json changes nothing observable: the value is on stdout and
+	// stderr is empty (no diagnostics report).
+	path := writeCty(t, "m.cty", "func main() -> number { return 42 }")
+	out, errOut, err := execCLI(t, "run", "--json", path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(out) != "42" {
+		t.Fatalf("stdout = %q, want 42", out)
+	}
+	if strings.TrimSpace(errOut) != "" {
+		t.Fatalf("stderr should be empty on success, got:\n%s", errOut)
+	}
+}
+
 func TestCLITestPass(t *testing.T) {
 	// A passing run exits 0 and reports the summary; quiet (default) does not list
 	// the passing test itself.
