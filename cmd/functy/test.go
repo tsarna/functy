@@ -26,8 +26,9 @@ func testCmd() *cobra.Command {
 			"With no FILE arguments, discovers .cty files in the current directory " +
 			"(recursively, skipping dot-directories) — equivalent to `functy test .`.\n\n" +
 			"With --json, emit a single machine-readable JSON report (one entry per test " +
-			"plus a summary) instead of the human-readable output, for CI and editor " +
-			"tooling. Exit status is unchanged.",
+			"plus a summary) to stderr instead of the human-readable output, for CI and " +
+			"editor tooling. stdout is left for the tests' own print/println output. " +
+			"Exit status is unchanged.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				// No paths given: discover .cty files in the working directory tree,
@@ -44,14 +45,18 @@ func testCmd() *cobra.Command {
 				filter = re.MatchString
 			}
 
+			// Tests' own print/println go to stdout; the --json report goes to stderr
+			// (below), so a test that prints never corrupts the machine-readable report.
 			out := cmd.OutOrStdout()
+			report := cmd.ErrOrStderr()
 			res, ctx, fileMap, diags := loadProgram(args, baselineFunctions(out))
 			if diags.HasErrors() {
 				if jsonOut {
 					// A compile failure produces no test outcomes; still emit a
 					// well-formed report so consumers can parse it unconditionally.
-					writeTestJSON(out, nil, 0)
-					return errors.New("compilation failed")
+					// errSilent keeps main from appending a line to the stderr report.
+					writeTestJSON(report, nil, 0)
+					return errSilent
 				}
 				writeDiags(cmd.ErrOrStderr(), fileMap, diags)
 				return errors.New("compilation failed")
@@ -61,8 +66,8 @@ func testCmd() *cobra.Command {
 			deselected := len(res.Tests) - len(outcomes)
 
 			if jsonOut {
-				if writeTestJSON(out, outcomes, deselected) > 0 {
-					return errors.New("tests failed")
+				if writeTestJSON(report, outcomes, deselected) > 0 {
+					return errSilent
 				}
 				return nil
 			}

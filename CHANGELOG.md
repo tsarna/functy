@@ -8,6 +8,16 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Changed
+
+- **`check --json` and `test --json` now emit their report to stderr** (not
+  stdout), matching `run --json`. This makes the rule uniform across every verb —
+  the machine-readable JSON report goes to stderr; stdout is reserved for program
+  output. It also fixes a real bug: a `test` block calling `print` / `println`
+  wrote to stdout and corrupted the JSON report there. Editor tooling that consumed
+  `check`/`test --json` from stdout must read stderr instead. (The reports
+  introduced in 0.8.0 had not yet been consumed.)
+
 ## [0.8.0] - 2026-07-07
 
 A developer-experience release focused on editor tooling and the interactive

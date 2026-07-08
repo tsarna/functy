@@ -175,34 +175,37 @@ func TestRunHelpIsReservedName(t *testing.T) {
 }
 
 func TestCheckJSONValid(t *testing.T) {
-	// A clean file emits a well-formed report with an empty diagnostics array and
-	// exits zero; the human-readable "ok" is suppressed.
+	// A clean file emits a well-formed report (empty diagnostics array) to stderr and
+	// exits zero; stdout carries no "ok" or anything else in --json mode.
 	path := writeCty(t, "ok.cty", "func main() -> number { return 1 }")
-	out, _, err := execCLI(t, "check", "--json", path)
+	out, errOut, err := execCLI(t, "check", "--json", path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("--json stdout should be empty, got:\n%s", out)
 	}
 	var rep struct {
 		Diagnostics []any `json:"diagnostics"`
 	}
-	if uerr := json.Unmarshal([]byte(out), &rep); uerr != nil {
-		t.Fatalf("output is not valid JSON: %v\n%s", uerr, out)
+	if uerr := json.Unmarshal([]byte(errOut), &rep); uerr != nil {
+		t.Fatalf("stderr is not valid JSON: %v\n%s", uerr, errOut)
 	}
 	if len(rep.Diagnostics) != 0 {
 		t.Fatalf("expected no diagnostics for a valid file, got %d", len(rep.Diagnostics))
 	}
-	if strings.Contains(out, "ok") {
-		t.Fatalf("--json output should not contain the human-readable ok; got:\n%s", out)
-	}
 }
 
 func TestCheckJSONInvalid(t *testing.T) {
-	// An error diagnostic is rendered structurally to stdout (severity, summary,
+	// An error diagnostic is rendered structurally to stderr (severity, summary,
 	// detail, 1-based location) and the command still exits non-zero.
 	path := writeCty(t, "bad.cty", "func main() { break }")
-	out, _, err := execCLI(t, "check", "--json", path)
+	out, errOut, err := execCLI(t, "check", "--json", path)
 	if err == nil {
-		t.Fatalf("expected check to fail; out:\n%s", out)
+		t.Fatalf("expected check to fail; stderr:\n%s", errOut)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("--json stdout should be empty, got:\n%s", out)
 	}
 	var rep struct {
 		Diagnostics []struct {
@@ -218,11 +221,11 @@ func TestCheckJSONInvalid(t *testing.T) {
 			} `json:"location"`
 		} `json:"diagnostics"`
 	}
-	if uerr := json.Unmarshal([]byte(out), &rep); uerr != nil {
-		t.Fatalf("output is not valid JSON: %v\n%s", uerr, out)
+	if uerr := json.Unmarshal([]byte(errOut), &rep); uerr != nil {
+		t.Fatalf("stderr is not valid JSON: %v\n%s", uerr, errOut)
 	}
 	if len(rep.Diagnostics) != 1 {
-		t.Fatalf("expected exactly one diagnostic, got %d:\n%s", len(rep.Diagnostics), out)
+		t.Fatalf("expected exactly one diagnostic, got %d:\n%s", len(rep.Diagnostics), errOut)
 	}
 	d := rep.Diagnostics[0]
 	if d.Severity != "error" {
@@ -469,9 +472,10 @@ test "positivity" {
 }
 test "wip" { skip("todo") }`
 	path := writeCty(t, "t.cty", src)
-	out, _, err := execCLI(t, "test", "--json", path)
+	// The report is on stderr; stdout is reserved for the tests' own output.
+	_, out, err := execCLI(t, "test", "--json", path)
 	if err == nil {
-		t.Fatalf("expected a non-zero exit for a failing test; out:\n%s", out)
+		t.Fatalf("expected a non-zero exit for a failing test; report:\n%s", out)
 	}
 
 	var rep struct {
@@ -558,10 +562,10 @@ func TestCLITestNoArgsDiscoversCwd(t *testing.T) {
 }
 
 func TestCLITestJSONCompileFailureIsValid(t *testing.T) {
-	// Even a compilation failure emits a well-formed (empty) report so consumers can
-	// always parse stdout, and still exits non-zero.
+	// Even a compilation failure emits a well-formed (empty) report to stderr so
+	// consumers can always parse it, and still exits non-zero.
 	path := writeCty(t, "t.cty", `test "broken" { this is not valid `)
-	out, _, err := execCLI(t, "test", "--json", path)
+	_, out, err := execCLI(t, "test", "--json", path)
 	if err == nil {
 		t.Fatal("expected a non-zero exit for a compile failure")
 	}
@@ -570,7 +574,7 @@ func TestCLITestJSONCompileFailureIsValid(t *testing.T) {
 		Summary struct{ Passed, Failed, Skipped int } `json:"summary"`
 	}
 	if uerr := json.Unmarshal([]byte(out), &rep); uerr != nil {
-		t.Fatalf("compile-failure output is not valid JSON: %v\n%s", uerr, out)
+		t.Fatalf("compile-failure report is not valid JSON: %v\n%s", uerr, out)
 	}
 	if len(rep.Tests) != 0 {
 		t.Fatalf("expected no test entries on compile failure, got %d", len(rep.Tests))
@@ -581,12 +585,38 @@ func TestCLITestJSONAllPassExitsZero(t *testing.T) {
 	src := `test "a" { assert(true) }
 test "b" { assert(1 + 1 == 2) }`
 	path := writeCty(t, "t.cty", src)
-	out, _, err := execCLI(t, "test", "--json", path)
+	_, out, err := execCLI(t, "test", "--json", path)
 	if err != nil {
 		t.Fatalf("all-pass run should exit 0: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, `"passed": 2`) {
 		t.Fatalf("expected 2 passed in summary; got:\n%s", out)
+	}
+}
+
+func TestCLITestJSONPrintlnStaysOnStdout(t *testing.T) {
+	// The report goes to stderr, so a test that calls println() does not corrupt it:
+	// the printed line lands on stdout, and stderr parses as pure JSON.
+	src := `test "prints" {
+    println("hello from a test")
+    assert(true)
+}`
+	path := writeCty(t, "t.cty", src)
+	out, errOut, err := execCLI(t, "test", "--json", path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr:\n%s", err, errOut)
+	}
+	if strings.TrimSpace(out) != "hello from a test" {
+		t.Fatalf("test println should be on stdout, got:\n%s", out)
+	}
+	var rep struct {
+		Summary struct{ Passed int } `json:"summary"`
+	}
+	if uerr := json.Unmarshal([]byte(errOut), &rep); uerr != nil {
+		t.Fatalf("stderr is not pure JSON (println leaked in?): %v\n%s", uerr, errOut)
+	}
+	if rep.Summary.Passed != 1 {
+		t.Fatalf("expected 1 passed; got:\n%s", errOut)
 	}
 }
 

@@ -48,11 +48,11 @@ hello alice
 - **`--json` (diagnostics).** Emits any diagnostics — a compile error, a bad
   argument, or a runtime `throw` / failed `assert` — to **stderr** as a
   machine-readable report instead of the human-readable text, for editor tooling.
-  Unlike `check --json`, the report goes to stderr because `run`'s **stdout** is
-  reserved for the program's own output (`print` / `println`) and the return
-  value, which `--json` leaves untouched (`--output` still controls the value's
-  format). On failure stderr is a single well-formed object and the exit status is
-  non-zero; on success stderr is empty. The report shape matches `check --json`:
+  Every verb's `--json` report goes to stderr, so `run`'s **stdout** stays reserved
+  for the program's own output (`print` / `println`) and the return value, both
+  left untouched by `--json` (`--output` still controls the value's format). On
+  failure stderr is a single well-formed object and the exit status is non-zero; on
+  success stderr is empty. The report shape matches `check --json`:
 
   ```console
   $ functy run --json broken.cty -- -3
@@ -120,10 +120,11 @@ break may only be used inside a for or while loop.
 ```
 
 - **`--json`** emits a single machine-readable JSON report of the diagnostics to
-  stdout instead of the human-readable output — for editor tooling (e.g. the VSCode
-  extension's Problems panel). The exit status is unchanged. The report is one object
-  with a `diagnostics` array; a clean file yields an empty array, so a consumer can
-  always parse stdout:
+  **stderr** instead of the human-readable output — for editor tooling (e.g. the
+  VSCode extension's Problems panel). The exit status is unchanged. The report is one
+  object with a `diagnostics` array; a clean file yields an empty array, so a
+  consumer can always parse stderr. (Every verb's `--json` report goes to stderr, so
+  stdout is uniformly free for program output.)
 
   ```console
   $ functy check --json broken.cty
@@ -193,10 +194,12 @@ sum = -3
   1 passed, 0 failed, 0 skipped (2 deselected by --run)
   ```
 
-- **`--json`** emits a single machine-readable JSON report instead of the
-  human-readable output — for CI and editor tooling (e.g. a Test Explorer). The exit
-  status is unchanged. The report is one object with a `tests` array (every test that
-  ran, regardless of `-v`) and a `summary`:
+- **`--json`** emits a single machine-readable JSON report to **stderr** instead of
+  the human-readable output — for CI and editor tooling (e.g. a Test Explorer). The
+  exit status is unchanged. The report goes to stderr so that a test's own
+  `print` / `println` output (which stays on stdout) never corrupts it. The report is
+  one object with a `tests` array (every test that ran, regardless of `-v`) and a
+  `summary`:
 
   ```console
   $ functy test --json examples/math.cty
@@ -236,7 +239,7 @@ sum = -3
   the assert/throw `message`, its operand `detail` (when present), and the `location`
   to underline; a skipped test adds its `skip_reason` (when given). Ranges are
   1-based. A compilation failure still emits a well-formed report (with an empty
-  `tests` array) and exits non-zero, so consumers can always parse stdout.
+  `tests` array) and exits non-zero, so consumers can always parse stderr.
 
 ## fmt
 

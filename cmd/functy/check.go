@@ -16,7 +16,7 @@ func checkCmd() *cobra.Command {
 		Long: "Parse and type-check the given .cty files without running them. Diagnostics " +
 			"are printed with source context; the command exits non-zero if any are errors.\n\n" +
 			"With --json, emit a single machine-readable JSON report of the diagnostics " +
-			"(each with severity, summary, detail, and a 1-based source location) to stdout " +
+			"(each with severity, summary, detail, and a 1-based source location) to stderr " +
 			"instead of the human-readable output, for editor tooling. Exit status is " +
 			"unchanged.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -26,9 +26,12 @@ func checkCmd() *cobra.Command {
 			_, _, fileMap, diags := loadProgram(args, baselineFunctions(io.Discard))
 
 			if jsonOut {
-				writeDiagsJSON(cmd.OutOrStdout(), diags)
+				// The report goes to stderr (not stdout) for consistency with run/test
+				// --json, so a consumer parses one stream regardless of verb; errSilent
+				// keeps main from appending a "functy: ..." line that would corrupt it.
+				writeDiagsJSON(cmd.ErrOrStderr(), diags)
 				if diags.HasErrors() {
-					return errors.New("check failed")
+					return errSilent
 				}
 				return nil
 			}
