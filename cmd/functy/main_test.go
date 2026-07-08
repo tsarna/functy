@@ -132,6 +132,74 @@ func TestCheckInvalid(t *testing.T) {
 	}
 }
 
+func TestCheckJSONValid(t *testing.T) {
+	// A clean file emits a well-formed report with an empty diagnostics array and
+	// exits zero; the human-readable "ok" is suppressed.
+	path := writeCty(t, "ok.cty", "func main() -> number { return 1 }")
+	out, _, err := execCLI(t, "check", "--json", path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var rep struct {
+		Diagnostics []any `json:"diagnostics"`
+	}
+	if uerr := json.Unmarshal([]byte(out), &rep); uerr != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", uerr, out)
+	}
+	if len(rep.Diagnostics) != 0 {
+		t.Fatalf("expected no diagnostics for a valid file, got %d", len(rep.Diagnostics))
+	}
+	if strings.Contains(out, "ok") {
+		t.Fatalf("--json output should not contain the human-readable ok; got:\n%s", out)
+	}
+}
+
+func TestCheckJSONInvalid(t *testing.T) {
+	// An error diagnostic is rendered structurally to stdout (severity, summary,
+	// detail, 1-based location) and the command still exits non-zero.
+	path := writeCty(t, "bad.cty", "func main() { break }")
+	out, _, err := execCLI(t, "check", "--json", path)
+	if err == nil {
+		t.Fatalf("expected check to fail; out:\n%s", out)
+	}
+	var rep struct {
+		Diagnostics []struct {
+			Severity string `json:"severity"`
+			Summary  string `json:"summary"`
+			Detail   string `json:"detail"`
+			Location *struct {
+				File      string `json:"file"`
+				Line      int    `json:"line"`
+				Column    int    `json:"column"`
+				EndLine   int    `json:"end_line"`
+				EndColumn int    `json:"end_column"`
+			} `json:"location"`
+		} `json:"diagnostics"`
+	}
+	if uerr := json.Unmarshal([]byte(out), &rep); uerr != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", uerr, out)
+	}
+	if len(rep.Diagnostics) != 1 {
+		t.Fatalf("expected exactly one diagnostic, got %d:\n%s", len(rep.Diagnostics), out)
+	}
+	d := rep.Diagnostics[0]
+	if d.Severity != "error" {
+		t.Fatalf("severity = %q, want error", d.Severity)
+	}
+	if !strings.Contains(d.Summary, "break") {
+		t.Fatalf("summary %q should mention break", d.Summary)
+	}
+	if d.Detail == "" {
+		t.Fatalf("expected a detail for the break diagnostic")
+	}
+	if d.Location == nil {
+		t.Fatalf("expected a source location for the diagnostic")
+	}
+	if d.Location.Line != 1 || d.Location.Column < 1 || d.Location.EndColumn <= d.Location.Column {
+		t.Fatalf("unexpected 1-based location: %+v", *d.Location)
+	}
+}
+
 func TestRunUncaughtAssertRendersDiagnostic(t *testing.T) {
 	// An uncaught assertion surfaces as a source-located diagnostic: the message,
 	// the failing source line, and the captured operand values (its detail).

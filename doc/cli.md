@@ -91,6 +91,31 @@ Error: break outside loop
 break may only be used inside a for or while loop.
 ```
 
+- **`--json`** emits a single machine-readable JSON report of the diagnostics to
+  stdout instead of the human-readable output — for editor tooling (e.g. the VSCode
+  extension's Problems panel). The exit status is unchanged. The report is one object
+  with a `diagnostics` array; a clean file yields an empty array, so a consumer can
+  always parse stdout:
+
+  ```console
+  $ functy check --json broken.cty
+  {
+    "diagnostics": [
+      {
+        "severity": "error",
+        "summary": "break outside loop",
+        "detail": "break may only be used inside a for or while loop.",
+        "location": { "file": "broken.cty", "line": 2, "column": 3, "end_line": 2, "end_column": 8 }
+      }
+    ]
+  }
+  ```
+
+  Each entry carries a `severity` (`"error"` or `"warning"`), a `summary`, an optional
+  `detail`, and (when the diagnostic has a source range) a 1-based `location` with
+  `file`/`line`/`column`/`end_line`/`end_column` — enough to map onto a precise editor
+  diagnostic range without scraping the text output.
+
 ## test
 
 Run every `test "..." { ... }` block defined in the source files (see

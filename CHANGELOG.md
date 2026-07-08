@@ -8,6 +8,17 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Added
+
+- **`functy check --json`.** The `check` command gains a `--json` flag that
+  emits diagnostics as a machine-readable report to stdout —
+  `{ diagnostics: [ { severity, summary, detail?, location? } ] }`, each
+  `location` a 1-based `file`/`line`/`column`/`end_line`/`end_column` range —
+  instead of the human-readable text writer. A clean file yields an empty array,
+  and the exit status is unchanged, so editor tooling (the VSCode extension's
+  Problems panel) can map diagnostics to precise ranges without scraping text.
+  See `doc/cli.md#check`.
+
 ## [0.7.3] - 2026-07-07
 
 ### Added
