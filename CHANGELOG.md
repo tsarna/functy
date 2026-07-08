@@ -8,6 +8,8 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-07-08
+
 ### Changed
 
 - **`check --json` and `test --json` now emit their report to stderr** (not
