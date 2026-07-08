@@ -45,6 +45,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Cross-repo token so GoReleaser can push the Homebrew cask to the tap.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 
       # GoReleaser's --release-notes doesn't populate the body when the
       # changelog is disabled, so set it on the release it just created.

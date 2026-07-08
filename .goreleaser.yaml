@@ -48,3 +48,24 @@ changelog:
 
 release:
   prerelease: auto
+
+# Publish a Homebrew cask to tsarna/homebrew-tap so macOS users can
+# `brew install tsarna/tap/functy`. Casks are macOS-only; Linux users use the
+# archives or `go install`. Prerelease tags skip the tap (skip_upload: auto).
+homebrew_casks:
+  - name: functy
+    repository:
+      owner: tsarna
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/tsarna/functy"
+    description: "Run and check functy (.cty) source files"
+    skip_upload: "auto"
+    # The macOS binaries are unsigned, so Gatekeeper quarantines them and
+    # refuses to run them. Strip the quarantine attribute on install.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/functy"]
+          end

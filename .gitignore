@@ -20,6 +20,9 @@ coverage.*
 *.coverprofile
 profile.cov
 
+# GoReleaser build output
+/dist/
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

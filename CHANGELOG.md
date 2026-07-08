@@ -8,6 +8,15 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-07-07
+
+### Added
+
+- **Homebrew cask.** macOS users can now install the CLI with
+  `brew install tsarna/tap/functy`. The release publishes a cask to the
+  `tsarna/homebrew-tap` tap; it strips the Gatekeeper quarantine attribute on
+  install so the unsigned binary runs without prompting.
+
 ## [0.7.2] - 2026-07-07
 
 ### Fixed
