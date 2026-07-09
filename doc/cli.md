@@ -17,6 +17,7 @@ functy repl [--func NAME] [FILE...] [-- ARG...]
 functy check [--json] [--filename NAME] [FILE|DIR ... | -]
 functy test [--run PATTERN] [-v] [--json] [FILE...]
 functy fmt [-w] [-l] [FILE|DIR ...]
+functy symbols [--filename NAME] [FILE|DIR ... | -]
 functy version [--json]
 ```
 
@@ -313,6 +314,34 @@ the baseline context. Given files, it loads them into one eval context, runs the
 entry function if present, then drops into the prompt. `:help` lists the REPL's
 meta-commands; the `help()` / `doc()` [baseline functions](#baseline-functions)
 introspect the available functions from inside the session.
+
+## symbols
+
+Emit every top-level declaration (`func`, `const`, `var`, `type`) and `test`
+block, in source order, as a machine-readable JSON object on stdout — for editor
+tooling such as an outline view or test discovery:
+
+```console
+$ functy symbols examples/math.cty
+{
+  "symbols": [
+    {
+      "kind": "func",
+      "name": "add",
+      "detail": "(a: number, b: number) -> number",
+      "range": { "file": "examples/math.cty", "line": 2, "column": 1, "end_line": 4, "end_column": 2 }
+    }
+  ]
+}
+```
+
+Each symbol carries its `kind`, `name`, a function's rendered signature (`detail`),
+any leading doc comment (`doc`), and its 1-based `range` (the full definition span —
+a whole block for `func`/`test`). Input is handled like [check](#check): files and
+directories (walked recursively), the current directory with no arguments, or a
+single `-` to read one buffer from stdin (named with `--filename`). Parse errors are
+tolerated — whatever declarations the parser recovers are still emitted — so an editor
+can outline a file mid-edit.
 
 ## version
 

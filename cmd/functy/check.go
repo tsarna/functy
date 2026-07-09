@@ -6,7 +6,6 @@ import (
 	"io"
 
 	"github.com/spf13/cobra"
-	"github.com/tsarna/functy"
 )
 
 func checkCmd() *cobra.Command {
@@ -27,24 +26,9 @@ func checkCmd() *cobra.Command {
 			"instead of the human-readable output, for editor tooling. Exit status is " +
 			"unchanged.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var input any
-			switch {
-			case len(args) == 1 && args[0] == "-":
-				src, err := io.ReadAll(cmd.InOrStdin())
-				if err != nil {
-					return err
-				}
-				name := filename
-				if name == "" {
-					name = "<stdin>"
-				}
-				input = functy.Source{Filename: name, Bytes: src}
-			case len(args) == 0:
-				// No paths given: check the working directory tree, the same
-				// recursive walk a directory argument gets (as test and fmt do).
-				input = []string{"."}
-			default:
-				input = args
+			input, err := resolveSourceInput(cmd.InOrStdin(), args, filename)
+			if err != nil {
+				return err
 			}
 			_, _, fileMap, diags := loadProgram(input, baselineFunctions(io.Discard))
 

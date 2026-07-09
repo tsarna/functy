@@ -793,6 +793,60 @@ func TestEvalJSONError(t *testing.T) {
 	}
 }
 
+func TestSymbolsJSON(t *testing.T) {
+	src := "// Add two numbers.\n" +
+		"func add(a: number, b: number = 0) -> number { return a + b }\n" +
+		"const pi = 3.14159\n" +
+		"test \"adds\" { assert(add(1, 2) == 3) }\n"
+	c := rootCmd()
+	var out, errb bytes.Buffer
+	c.SetOut(&out)
+	c.SetErr(&errb)
+	c.SetIn(strings.NewReader(src))
+	c.SetArgs([]string{"symbols", "-", "--filename", "x.cty"})
+	if err := c.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var rep struct {
+		Symbols []struct {
+			Kind   string `json:"kind"`
+			Name   string `json:"name"`
+			Detail string `json:"detail"`
+			Doc    string `json:"doc"`
+			Range  struct {
+				File string `json:"file"`
+				Line int    `json:"line"`
+			} `json:"range"`
+		} `json:"symbols"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, out.String())
+	}
+	// Source order: func add, const pi, test adds.
+	if len(rep.Symbols) != 3 {
+		t.Fatalf("expected 3 symbols, got %d: %+v", len(rep.Symbols), rep.Symbols)
+	}
+	fn := rep.Symbols[0]
+	if fn.Kind != "func" || fn.Name != "add" {
+		t.Fatalf("symbol[0] = %+v, want func add", fn)
+	}
+	if fn.Detail != "(a: number, b: number = 0) -> number" {
+		t.Fatalf("add detail = %q", fn.Detail)
+	}
+	if fn.Doc != "Add two numbers." {
+		t.Fatalf("add doc = %q", fn.Doc)
+	}
+	if fn.Range.File != "x.cty" || fn.Range.Line != 2 {
+		t.Fatalf("add range = %+v, want x.cty line 2", fn.Range)
+	}
+	if rep.Symbols[1].Kind != "const" || rep.Symbols[1].Name != "pi" {
+		t.Fatalf("symbol[1] = %+v, want const pi", rep.Symbols[1])
+	}
+	if rep.Symbols[2].Kind != "test" || rep.Symbols[2].Name != "adds" {
+		t.Fatalf("symbol[2] = %+v, want test adds", rep.Symbols[2])
+	}
+}
+
 func TestVersionJSON(t *testing.T) {
 	out, _, err := execCLI(t, "version", "--json")
 	if err != nil {

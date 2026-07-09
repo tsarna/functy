@@ -19,6 +19,29 @@ import (
 // variables), a filename->file map for rendering diagnostics with source
 // snippets, the parsed Result (carrying test blocks and declarations), and any
 // diagnostics produced along the way.
+// resolveSourceInput turns command arguments into a ParseSources input: a single
+// "-" reads one buffer from stdin (named `filename`, or "<stdin>"); no arguments
+// means the current directory tree; otherwise the args (files/dirs) are used
+// as-is. Shared by check and symbols so their file/dir/stdin handling matches.
+func resolveSourceInput(stdin io.Reader, args []string, filename string) (any, error) {
+	switch {
+	case len(args) == 1 && args[0] == "-":
+		src, err := io.ReadAll(stdin)
+		if err != nil {
+			return nil, err
+		}
+		name := filename
+		if name == "" {
+			name = "<stdin>"
+		}
+		return functy.Source{Filename: name, Bytes: src}, nil
+	case len(args) == 0:
+		return []string{"."}, nil
+	default:
+		return args, nil
+	}
+}
+
 // The input is anything functy.ParseSources understands — typically a []string
 // of paths/directories, but also a functy.Source for in-memory content (e.g. an
 // editor buffer piped to `check -`).
