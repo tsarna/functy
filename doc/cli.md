@@ -12,6 +12,7 @@ go install github.com/tsarna/functy/cmd/functy@latest
 
 ```text
 functy run [--func NAME] [--output json|hcl|raw] [--json] FILE... [-- ARG...]
+functy eval [--output json|hcl|raw] [--json] EXPR [FILE...]
 functy repl [--func NAME] [FILE...] [-- ARG...]
 functy check [--json] FILE...
 functy test [--run PATTERN] [-v] [--json] [FILE...]
@@ -101,6 +102,26 @@ collection, number, and encoding functions such as `upper`, `merge`, `keys`,
   [stdlib.md](stdlib.md#helpfuncfuncs-evalctxfn--context-aware)). Handy in the REPL.
 - `doc(name)` — a function's one-line description by name (`null` if no such
   function).
+
+## eval
+
+Evaluate a single expression against the context built from the given files:
+`functy eval EXPR [FILE...]`. The first argument is the expression; the rest are
+source files whose functions, consts, and types it may reference. Zero files is
+allowed (the expression sees only the [baseline context](#baseline-functions)).
+
+```sh
+functy eval 'add(2, 3)' lib.cty        # 5
+functy eval '1 + 2 * 3'                # 7, no files needed
+functy eval --output raw 'upper("hi")' # HI
+```
+
+The result is printed to stdout in the `--output` format (`hcl` by default, or
+`json` / `raw`). With `--json`, any diagnostics (a malformed expression, a compile
+error in the files, or an evaluation error) are written to stderr as the same
+machine-readable report the other verbs produce, and the command exits non-zero —
+convenient for editor "evaluate selection" tooling. Unlike the REPL, `eval` is a
+one-shot with a reliable exit status and no banner on stdout.
 
 ## check
 

@@ -698,6 +698,52 @@ func TestFmtParseErrorFails(t *testing.T) {
 	}
 }
 
+func TestEvalWithFileContext(t *testing.T) {
+	path := writeCty(t, "lib.cty", "func add(a: number, b: number) -> number { return a + b }")
+	out, _, err := execCLI(t, "eval", "add(2, 3)", path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(out) != "5" {
+		t.Fatalf("got %q, want 5", out)
+	}
+}
+
+func TestEvalNoFiles(t *testing.T) {
+	// Zero files is allowed: the expression evaluates against the baseline context.
+	out, _, err := execCLI(t, "eval", "1 + 2 * 3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(out) != "7" {
+		t.Fatalf("got %q, want 7", out)
+	}
+}
+
+func TestEvalJSONError(t *testing.T) {
+	// An evaluation error emits a structured diagnostic to stderr, nothing to
+	// stdout, and exits non-zero.
+	out, errOut, err := execCLI(t, "eval", "--json", "nosuchfunc(1)")
+	if err == nil {
+		t.Fatalf("expected eval to fail; stderr:\n%s", errOut)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("--json stdout should be empty, got:\n%s", out)
+	}
+	var rep struct {
+		Diagnostics []struct {
+			Severity string `json:"severity"`
+			Summary  string `json:"summary"`
+		} `json:"diagnostics"`
+	}
+	if uerr := json.Unmarshal([]byte(errOut), &rep); uerr != nil {
+		t.Fatalf("stderr is not valid JSON: %v\n%s", uerr, errOut)
+	}
+	if len(rep.Diagnostics) != 1 || rep.Diagnostics[0].Severity != "error" {
+		t.Fatalf("expected one error diagnostic, got %+v", rep.Diagnostics)
+	}
+}
+
 func TestVersionJSON(t *testing.T) {
 	out, _, err := execCLI(t, "version", "--json")
 	if err != nil {
