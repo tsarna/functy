@@ -19,8 +19,11 @@ import (
 // variables), a filename->file map for rendering diagnostics with source
 // snippets, the parsed Result (carrying test blocks and declarations), and any
 // diagnostics produced along the way.
-func loadProgram(paths []string, baseline map[string]function.Function) (*functy.Result, *hcl.EvalContext, map[string]*hcl.File, hcl.Diagnostics) {
-	sources, diags := functy.ParseSources(paths)
+// The input is anything functy.ParseSources understands — typically a []string
+// of paths/directories, but also a functy.Source for in-memory content (e.g. an
+// editor buffer piped to `check -`).
+func loadProgram(input any, baseline map[string]function.Function) (*functy.Result, *hcl.EvalContext, map[string]*hcl.File, hcl.Diagnostics) {
+	sources, diags := functy.ParseSources(input)
 
 	files := make(map[string]*hcl.File, len(sources))
 	for _, s := range sources {

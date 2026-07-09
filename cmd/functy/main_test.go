@@ -132,6 +132,55 @@ func TestCheckInvalid(t *testing.T) {
 	}
 }
 
+func TestCheckDirectory(t *testing.T) {
+	// A directory argument is walked recursively; the files are checked as one
+	// merged program (so main.cty may reference lib.cty's function).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "lib.cty"),
+		[]byte("func add(a: number, b: number) -> number { return a + b }"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.cty"),
+		[]byte("func main() -> number { return add(1, 2) }"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := execCLI(t, "check", dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(out) != "ok" {
+		t.Fatalf("got %q, want ok", out)
+	}
+}
+
+func TestCheckStdinFilename(t *testing.T) {
+	// `check -` reads the buffer from stdin; --filename names it so the diagnostic
+	// location carries a real path (an editor checking an unsaved buffer).
+	c := rootCmd()
+	var out, errb bytes.Buffer
+	c.SetOut(&out)
+	c.SetErr(&errb)
+	c.SetIn(strings.NewReader("func main() { break }"))
+	c.SetArgs([]string{"check", "--json", "-", "--filename", "buf.cty"})
+	if err := c.Execute(); err == nil {
+		t.Fatal("expected check to fail")
+	}
+	var rep struct {
+		Diagnostics []struct {
+			Location *struct {
+				File string `json:"file"`
+			} `json:"location"`
+		} `json:"diagnostics"`
+	}
+	if err := json.Unmarshal(errb.Bytes(), &rep); err != nil {
+		t.Fatalf("stderr is not valid JSON: %v\n%s", err, errb.String())
+	}
+	if len(rep.Diagnostics) != 1 || rep.Diagnostics[0].Location == nil ||
+		rep.Diagnostics[0].Location.File != "buf.cty" {
+		t.Fatalf("expected one diagnostic at buf.cty, got %+v", rep.Diagnostics)
+	}
+}
+
 func TestRunHelpAndDocWired(t *testing.T) {
 	// The standalone CLI wires the reflection builtins into the run context:
 	// help(name) renders a functy function's signature, help() lists all functions,

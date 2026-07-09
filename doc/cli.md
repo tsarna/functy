@@ -14,7 +14,7 @@ go install github.com/tsarna/functy/cmd/functy@latest
 functy run [--func NAME] [--output json|hcl|raw] [--json] FILE... [-- ARG...]
 functy eval [--output json|hcl|raw] [--json] EXPR [FILE...]
 functy repl [--func NAME] [FILE...] [-- ARG...]
-functy check [--json] FILE...
+functy check [--json] [--filename NAME] [FILE|DIR ... | -]
 functy test [--run PATTERN] [-v] [--json] [FILE...]
 functy fmt [-w] [-l] [FILE|DIR ...]
 functy version [--json]
@@ -127,9 +127,15 @@ one-shot with a reliable exit status and no banner on stdout.
 
 Parse and type-check the source files without running them. Diagnostics are
 printed with source context; the command exits non-zero if any are errors.
+Directory arguments are walked recursively for `.cty` files, and with no
+arguments the current directory tree is checked (consistent with `test` and
+`fmt`) — so `functy check` checks a whole project.
 
 ```console
 $ functy check examples/greet.cty
+ok
+
+$ functy check .          # check every .cty under the current directory
 ok
 
 $ functy check broken.cty
@@ -166,6 +172,13 @@ break may only be used inside a for or while loop.
   `detail`, and (when the diagnostic has a source range) a 1-based `location` with
   `file`/`line`/`column`/`end_line`/`end_column` — enough to map onto a precise editor
   diagnostic range without scraping the text output.
+
+- **`-` (stdin) with `--filename NAME`** checks a single buffer read from stdin
+  instead of files on disk, naming it `NAME` so diagnostics carry a real path. This
+  lets an editor type-check an **unsaved buffer** on every keystroke without writing to
+  disk — `functy check --json - --filename /path/to/buffer.cty`. Only that one buffer is
+  checked, so references to functions in sibling files are not resolved (the same
+  single-source limitation as checking one file).
 
 ## test
 
