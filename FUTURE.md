@@ -392,6 +392,49 @@ links the library directly and supplies its own richer context). Planned additio
   delivers most of the day-to-day value (highlighting, run/check/format, test
   running) with no server to build, deferring the LSP work rather than blocking on
   it.
+- **Machine-readable CLI surfaces for editor tooling (a pre-LSP bridge).** Several
+  small, JSON-emitting CLI additions would remove the fragile *heuristics* the VSCode
+  extension currently hand-rolls (regex outline, regex test discovery, save-then-check)
+  and buy a surprising amount of "IDE feel" **without** committing to the language
+  server. Each is cheap because the parser, type checker, reflection (`help`/`doc`),
+  and `functy.Format` already exist — these are effectively *LSP primitives exposed over
+  the CLI*, and the JSON contracts designed here carry straight over to informing the
+  eventual LSP. Ranked by leverage:
+  - **`functy check --json -` / `functy run --json -` — check/run from stdin with a
+    virtual filename.** `fmt` already reads stdin; extending `check`/`run` to accept `-`
+    (paired with a `--filename NAME` so diagnostics carry a real path) lets an editor
+    type-check the **unsaved buffer on every keystroke** (debounced) → **live, on-type
+    diagnostics with no disk writes and no LSP.** This is the single biggest pre-LSP
+    unlock: ~80% of what "LSP diagnostics" feels like for a fraction of the work. Caveat,
+    stated honestly: stdin is one buffer, so cross-file resolution is partial — acceptable
+    for edit-time feedback given functy's flat all-merged model, and the same limitation
+    the single-file `check` already has.
+  - **`functy symbols --json` (or `outline --json`) — authoritative declarations + tests
+    with ranges.** The parsed `Result` already holds every top-level `func` / `const` /
+    `var` / `type` and every `test` block with `DefRange`s; emitting them as JSON lets a
+    client replace **both** its regex document-symbol/outline provider **and** its regex
+    test discovery with parser truth — correct names, correct ranges, no comment/heredoc
+    scanning. Two brittle client heuristics collapse into one reliable feed. Shape mirrors
+    the existing `jsonRange`; include a `kind` (`func`/`const`/`var`/`type`/`test`) and,
+    for functions, the signature and doc-comment.
+  - **`functy version --json`** — *shipped* (`cmd/functy/version.go`): a single
+    `{version, commit, date, go}` object. Note it is *not* the right tool for an editor's
+    minimum-version *gate* — that check must detect binaries too old to have the flag, so it
+    parses the plain-text `functy version` first line instead; `--json` serves other
+    consumers that already know the binary is recent enough.
+  - **`functy doc --json <name>` / `functy help --json <name>`.** `DocFunc` / `HelpFunc`
+    already produce this content; a JSON form lets a client render **pre-LSP hovers**
+    (spawn on hover, cache) showing a function's signature + doc-comment — a genuine
+    stepping stone toward the LSP hover, reusing the same reflection data.
+  - **`functy fmt --range START:END`** — range formatting / format-on-type for the editor's
+    range formatter. Lower priority; whole-document `fmt` covers the common case.
+
+  Framing: `check --json -` and `symbols --json` are the two that matter most — together
+  they give a client live diagnostics + authoritative symbols/tests, which meaningfully
+  **extends the pre-LSP runway** and lets the language server be deferred rather than
+  rushed. They overlap with (and de-risk) the LSP without being throwaway: the LSP later
+  provides the same information in-process, but the CLI forms remain useful for scripting
+  and non-LSP editors.
 - **Inline tests** — *shipped*: co-located `test "…" { … }` blocks, the core runner
   (`(*Result).RunTests` / `RunTestsMatching`), the `functy test` CLI verb (quiet/`-v`,
   `--run` name filter, machine-readable `--json` report, and no-argument discovery of
@@ -413,7 +456,7 @@ links the library directly and supplies its own richer context). Planned additio
     `rich-cty-types` adding `IsContextObject` wrapping `GetContextFromValue`) — for
     non-destructive open registration (`RegisterOpenType`), currently leaf-only.
 
-  The host picks identity vs. open per type. 
+  The host picks identity vs. open per type.
 - **Terraform / OpenTofu provider binding (speculative — low priority).** A third
   embedding target, distinct from a host like Vinculum: expose functy-authored functions
   to Terraform as provider-defined functions, callable as `provider::functy::<name>(...)`.

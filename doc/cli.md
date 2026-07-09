@@ -16,6 +16,7 @@ functy repl [--func NAME] [FILE...] [-- ARG...]
 functy check [--json] FILE...
 functy test [--run PATTERN] [-v] [--json] [FILE...]
 functy fmt [-w] [-l] [FILE|DIR ...]
+functy version [--json]
 ```
 
 ## run
@@ -278,3 +279,21 @@ the baseline context. Given files, it loads them into one eval context, runs the
 entry function if present, then drops into the prompt. `:help` lists the REPL's
 meta-commands; the `help()` / `doc()` [baseline functions](#baseline-functions)
 introspect the available functions from inside the session.
+
+## version
+
+Print the functy version, build metadata (commit, date), and Go toolchain
+version: `functy version`. Release builds carry a real version; a plain
+`go build` reports `dev`.
+
+With `--json`, emit a single machine-readable object instead, for editor
+tooling:
+
+```json
+{
+  "version": "0.8.1",
+  "commit": "1a2b3c4",
+  "date": "2026-07-08T00:00:00Z",
+  "go": "go1.25.0"
+}
+```

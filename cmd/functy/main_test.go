@@ -570,7 +570,7 @@ func TestCLITestJSONCompileFailureIsValid(t *testing.T) {
 		t.Fatal("expected a non-zero exit for a compile failure")
 	}
 	var rep struct {
-		Tests   []any `json:"tests"`
+		Tests   []any                                 `json:"tests"`
 		Summary struct{ Passed, Failed, Skipped int } `json:"summary"`
 	}
 	if uerr := json.Unmarshal([]byte(out), &rep); uerr != nil {
@@ -695,5 +695,27 @@ func TestFmtParseErrorFails(t *testing.T) {
 	_, _, err := execCLI(t, "fmt", path)
 	if err == nil {
 		t.Fatal("expected fmt to fail on a file that does not parse")
+	}
+}
+
+func TestVersionJSON(t *testing.T) {
+	out, _, err := execCLI(t, "version", "--json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var v struct {
+		Version string `json:"version"`
+		Commit  string `json:"commit"`
+		Date    string `json:"date"`
+		Go      string `json:"go"`
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, out)
+	}
+	if v.Version == "" {
+		t.Error("version field is empty")
+	}
+	if !strings.HasPrefix(v.Go, "go") {
+		t.Errorf("go field %q missing 'go' prefix", v.Go)
 	}
 }
