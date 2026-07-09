@@ -8,6 +8,35 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.9.0-rc.1] - 2026-07-09
+
+A 0.9.0 release candidate for testing the VSCode extension, bundling the
+editor-facing CLI additions since 0.8.1.
+
+### Added
+
+- **`functy eval EXPR [FILE...]`.** Evaluate a single HCL expression against the
+  context built from the given files (functions, consts, types); zero files is
+  allowed (baseline context only). The result is printed to stdout in the
+  `--output` format (`hcl` by default, or `json` / `raw`); with `--json`, any
+  diagnostics go to stderr and the command exits non-zero on error. Unlike using
+  the REPL as an eval backend, `eval` is a one-shot with a reliable exit status
+  and no banner on stdout — the clean backend for an editor's "evaluate
+  selection". See `doc/cli.md#eval`.
+- **`functy version --json`.** Emit version, commit, date, and Go toolchain
+  version as a single machine-readable object for editor tooling. The text
+  output is unchanged. See `doc/cli.md#version`.
+
+### Changed
+
+- **`check` now discovers directories and the current directory, and can read
+  stdin.** A directory argument is walked recursively for `.cty` files, and with
+  no arguments the current directory tree is checked — consistent with `test`
+  and `fmt`, so `functy check` checks a whole project. A single `-` reads one
+  buffer from stdin; pair it with `--filename NAME` so diagnostics carry a real
+  path, letting an editor type-check an unsaved buffer without writing to disk.
+  See `doc/cli.md#check`.
+
 ## [0.8.1] - 2026-07-08
 
 ### Changed
