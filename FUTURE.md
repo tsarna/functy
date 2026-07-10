@@ -365,74 +365,33 @@ links the library directly and supplies its own richer context). Planned additio
 - **LSP / editor support** — diagnostics, hovers (using doc-comment metadata),
   go-to-definition, completion. Editor-agnostic; the VSCode extension below is its
   first client (and can ship static features ahead of the server).
-- **VSCode extension for `.cty` — nearer-term.** A full-featured extension is the
-  highest-leverage editor investment (the target audience overlaps the
-  HCL/Terraform crowd, who live in VSCode) and, importantly, **stages cleanly**: the
-  static half needs no language server and can ship first.
-  - **Static, ship-first (no server):** a TextMate grammar with **embedded HCL** for
-    expression/type regions (so operators, templates, and function calls highlight
-    with the same rules as HCL elsewhere — mirroring how the parser hands expressions
-    to `hclsyntax`); a language configuration (`//` and `#` line comments, bracket
-    matching / auto-close, indentation); `.cty` file association and an icon;
-    snippets for `func` / `if` / `for` / `switch` / `test`; and commands that shell
-    out to the existing CLI — **Run** (`functy run`), **Check** (`functy check`), and
-    **Format** wired to `functy fmt` as the document formatter / format-on-save (gated
-    on that item shipping).
-  - **Test Explorer integration** — surface `test "…"` blocks in VSCode's native
-    Testing UI (run / re-run individual tests), driving `functy test --run <name>`
-    under the hood. This is the concrete consumer of the shipped test runner and its
-    **`--json` output** (see *Inline tests* below) — machine-readable results are what
-    make per-test pass/fail/skip reporting in the UI clean.
-  - **LSP-backed, later:** once the language server (above) exists, the extension
-    becomes its client, upgrading diagnostics, hovers (doc-comment metadata),
-    go-to-definition, and completion from "none / grammar-only" to full semantic
-    support without changing the static layer.
-
-  Recorded as **nearer-term** precisely because the static + CLI-command layer
-  delivers most of the day-to-day value (highlighting, run/check/format, test
-  running) with no server to build, deferring the LSP work rather than blocking on
-  it.
-- **Machine-readable CLI surfaces for editor tooling (a pre-LSP bridge).** Several
-  small, JSON-emitting CLI additions would remove the fragile *heuristics* the VSCode
-  extension currently hand-rolls (regex outline, regex test discovery, save-then-check)
-  and buy a surprising amount of "IDE feel" **without** committing to the language
-  server. Each is cheap because the parser, type checker, reflection (`help`/`doc`),
-  and `functy.Format` already exist — these are effectively *LSP primitives exposed over
-  the CLI*, and the JSON contracts designed here carry straight over to informing the
-  eventual LSP. Ranked by leverage:
-  - **`functy check --json -` / `functy run --json -` — check/run from stdin with a
-    virtual filename.** `fmt` already reads stdin; extending `check`/`run` to accept `-`
-    (paired with a `--filename NAME` so diagnostics carry a real path) lets an editor
-    type-check the **unsaved buffer on every keystroke** (debounced) → **live, on-type
-    diagnostics with no disk writes and no LSP.** This is the single biggest pre-LSP
-    unlock: ~80% of what "LSP diagnostics" feels like for a fraction of the work. Caveat,
-    stated honestly: stdin is one buffer, so cross-file resolution is partial — acceptable
-    for edit-time feedback given functy's flat all-merged model, and the same limitation
-    the single-file `check` already has.
-  - **`functy symbols --json`** — *shipped* (`cmd/functy/symbols.go`): every top-level
-    `func` / `const` / `var` / `type` and every `test`, in source order, with `kind`, name,
-    a function's rendered signature, doc comment, and 1-based range (the full block for
-    func/test). The VSCode extension uses it for **both** its outline and test discovery,
-    retiring two regex heuristics. Input matches `check` (files/dirs/cwd/stdin), and parse
-    errors are tolerated so an editor can outline mid-edit (see the recovery item below).
-  - **`functy version --json`** — *shipped* (`cmd/functy/version.go`): a single
-    `{version, commit, date, go}` object. Note it is *not* the right tool for an editor's
-    minimum-version *gate* — that check must detect binaries too old to have the flag, so it
-    parses the plain-text `functy version` first line instead; `--json` serves other
-    consumers that already know the binary is recent enough.
+- **VSCode extension for `.cty`** — *shipped* (separate repo `vscode-functy`, its own
+  `README.md` / `CHANGELOG.md` / `FUTURE.md`). The static + CLI-command layer is done:
+  TextMate grammar, language config, snippets, Run/Check/Format, Evaluate Selection,
+  Run-with-arguments, REPL integration, version gating, tasks + workspace commands, the
+  `functy symbols`-backed outline, the Test Explorer (driven by `functy test --json`) with
+  continuous run, and a Get Started walkthrough. **Remaining on the functy side:** the
+  language server (see *LSP / editor support* above and the linked `functy lsp --stdio`
+  work) — the extension already has the client wiring planned and becomes its consumer,
+  upgrading diagnostics/hover/definition/completion without touching the static layer.
+- **Machine-readable CLI surfaces for editor tooling (a pre-LSP bridge).** Small,
+  JSON-emitting CLIs that expose *LSP primitives over the CLI* (reusing the parser, type
+  checker, `help`/`doc` reflection, and `functy.Format`) so an editor gets "IDE feel"
+  without the language server. The high-leverage ones have **shipped and are adopted** by
+  `vscode-functy`: `check --json -` / `run --json -` (stdin + `--filename` → live on-type
+  diagnostics), `eval --json`, `symbols --json` (outline + test discovery), and
+  `version --json`. Their JSON contracts now have downstream consumer tests in
+  `vscode-functy` (`src/protocol.ts`), so treat a shape change as breaking. Still wanted:
   - **`functy doc --json <name>` / `functy help --json <name>`.** `DocFunc` / `HelpFunc`
-    already produce this content; a JSON form lets a client render **pre-LSP hovers**
-    (spawn on hover, cache) showing a function's signature + doc-comment — a genuine
-    stepping stone toward the LSP hover, reusing the same reflection data.
+    already produce this content; a JSON form lets a client render **pre-LSP hovers** (spawn
+    on hover, cache) — a stepping stone toward the LSP hover, reusing the same reflection
+    data. Lower urgency: a client-side hover is exactly what the LSP subsumes, so this may
+    just fold into the language server.
   - **`functy fmt --range START:END`** — range formatting / format-on-type for the editor's
     range formatter. Lower priority; whole-document `fmt` covers the common case.
 
-  Framing: `check --json -` and `symbols --json` are the two that matter most — together
-  they give a client live diagnostics + authoritative symbols/tests, which meaningfully
-  **extends the pre-LSP runway** and lets the language server be deferred rather than
-  rushed. They overlap with (and de-risk) the LSP without being throwaway: the LSP later
-  provides the same information in-process, but the CLI forms remain useful for scripting
-  and non-LSP editors.
+  The CLI forms are not throwaway: the LSP later provides the same information in-process,
+  but they remain useful for scripting and non-LSP editors.
 - **Parser/lexer error-recovery hardening (for mid-edit tooling).** The parser already
   recovers well — `recoverToTopLevel` / `skipToParamBoundary` / `recoverToStatementEnd`
   let `symbols`/`check` still report the declarations *around* a syntax error, so an editor
