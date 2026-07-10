@@ -409,14 +409,12 @@ links the library directly and supplies its own richer context). Planned additio
     stated honestly: stdin is one buffer, so cross-file resolution is partial — acceptable
     for edit-time feedback given functy's flat all-merged model, and the same limitation
     the single-file `check` already has.
-  - **`functy symbols --json` (or `outline --json`) — authoritative declarations + tests
-    with ranges.** The parsed `Result` already holds every top-level `func` / `const` /
-    `var` / `type` and every `test` block with `DefRange`s; emitting them as JSON lets a
-    client replace **both** its regex document-symbol/outline provider **and** its regex
-    test discovery with parser truth — correct names, correct ranges, no comment/heredoc
-    scanning. Two brittle client heuristics collapse into one reliable feed. Shape mirrors
-    the existing `jsonRange`; include a `kind` (`func`/`const`/`var`/`type`/`test`) and,
-    for functions, the signature and doc-comment.
+  - **`functy symbols --json`** — *shipped* (`cmd/functy/symbols.go`): every top-level
+    `func` / `const` / `var` / `type` and every `test`, in source order, with `kind`, name,
+    a function's rendered signature, doc comment, and 1-based range (the full block for
+    func/test). The VSCode extension uses it for **both** its outline and test discovery,
+    retiring two regex heuristics. Input matches `check` (files/dirs/cwd/stdin), and parse
+    errors are tolerated so an editor can outline mid-edit (see the recovery item below).
   - **`functy version --json`** — *shipped* (`cmd/functy/version.go`): a single
     `{version, commit, date, go}` object. Note it is *not* the right tool for an editor's
     minimum-version *gate* — that check must detect binaries too old to have the flag, so it
@@ -435,6 +433,31 @@ links the library directly and supplies its own richer context). Planned additio
   rushed. They overlap with (and de-risk) the LSP without being throwaway: the LSP later
   provides the same information in-process, but the CLI forms remain useful for scripting
   and non-LSP editors.
+- **Parser/lexer error-recovery hardening (for mid-edit tooling).** The parser already
+  recovers well — `recoverToTopLevel` / `skipToParamBoundary` / `recoverToStatementEnd`
+  let `symbols`/`check` still report the declarations *around* a syntax error, so an editor
+  outline survives most transient edits (a half-typed expression, an incomplete parameter).
+  Two cases still truncate everything after the error, which matters because both are
+  common **while typing**:
+  - **An unterminated `{`** (you've typed `func f() {` but not the closing brace) makes the
+    body swallow the rest of the file — the block-open has no matching close, so
+    `recoverToTopLevel` can't find the next declaration boundary. A brace-aware recovery
+    (resynchronize at column-0 `func`/`test`/`const`/`var`/`type` at the *outer* brace
+    depth, or track unbalanced braces) would let declarations *after* an unclosed block
+    still parse.
+  - **Lexer-level garbage** (a stray `@`, `$`, backtick — characters that aren't valid
+    tokens) currently aborts more aggressively than a *parser* error does. Making the lexer
+    emit an error token and skip to the next newline/boundary (rather than derailing the
+    token stream) would keep recovery working through the kind of nonsense that appears
+    momentarily during editing.
+
+  Neither is required for correctness — a file that doesn't parse is genuinely broken — but
+  both improve the *live-editing* experience of any `symbols`/`check`-backed tool (outline,
+  test discovery, on-type diagnostics), and would let the VSCode extension's parser-backed
+  outline match the resilience of the regex scanner it replaced. Lower priority than the
+  LSP itself, but a cheap, self-contained front-end improvement that benefits every editor
+  client. (Recorded after observing the extension's outline truncate below an unclosed
+  brace / stray `@#$` while the parser recovered cleanly for every ordinary syntax error.)
 - **Inline tests** — *shipped*: co-located `test "…" { … }` blocks, the core runner
   (`(*Result).RunTests` / `RunTestsMatching`), the `functy test` CLI verb (quiet/`-v`,
   `--run` name filter, machine-readable `--json` report, and no-argument discovery of
