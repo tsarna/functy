@@ -8,6 +8,16 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.9.0-rc.3] - 2026-07-10
+
+### Changed
+
+- **`functy symbols` now defaults to a human-readable listing**, with `--json`
+  for the machine-readable object — consistent with `check` / `test` / `run` /
+  `version` / `eval` (default human, `--json` opt-in). The default prints one
+  `file:line: kind name` line per symbol; `--json` emits the same object as
+  before. (In rc.2 `symbols` was JSON-only with no flag.)
+
 ## [0.9.0-rc.2] - 2026-07-09
 
 ### Added
