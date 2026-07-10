@@ -8,6 +8,18 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.9.0-rc.2] - 2026-07-09
+
+### Added
+
+- **`functy symbols`.** Emit every top-level declaration (`func`, `const`, `var`,
+  `type`) and `test` block, in source order, as a JSON object on stdout — kind,
+  name, a function's rendered signature, any doc comment, and the 1-based
+  definition range (the full block for `func`/`test`). Input is handled like
+  `check` (files/dirs, the current directory, or stdin via `-` + `--filename`),
+  and parse errors are tolerated so an editor can outline a file mid-edit. Backs
+  the VSCode extension's outline and test discovery. See `doc/cli.md#symbols`.
+
 ## [0.9.0-rc.1] - 2026-07-09
 
 A 0.9.0 release candidate for testing the VSCode extension, bundling the
