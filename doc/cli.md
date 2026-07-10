@@ -17,7 +17,7 @@ functy repl [--func NAME] [FILE...] [-- ARG...]
 functy check [--json] [--filename NAME] [FILE|DIR ... | -]
 functy test [--run PATTERN] [-v] [--json] [FILE...]
 functy fmt [-w] [-l] [FILE|DIR ...]
-functy symbols [--filename NAME] [FILE|DIR ... | -]
+functy symbols [--json] [--filename NAME] [FILE|DIR ... | -]
 functy version [--json]
 ```
 
@@ -317,12 +317,23 @@ introspect the available functions from inside the session.
 
 ## symbols
 
-Emit every top-level declaration (`func`, `const`, `var`, `type`) and `test`
-block, in source order, as a machine-readable JSON object on stdout — for editor
-tooling such as an outline view or test discovery:
+List every top-level declaration (`func`, `const`, `var`, `type`) and `test`
+block, in source order — for editor tooling such as an outline view or test
+discovery. The default output is a greppable `file:line: kind name` listing:
 
 ```console
 $ functy symbols examples/math.cty
+examples/math.cty:2: func add(a: number, b: number) -> number
+examples/math.cty:6: func main() -> number
+```
+
+With `--json`, emit a machine-readable object instead — each symbol carries its
+`kind`, `name`, a function's rendered signature (`detail`), any leading doc comment
+(`doc`), and its 1-based `range` (the full definition span — a whole block for
+`func`/`test`):
+
+```console
+$ functy symbols --json examples/math.cty
 {
   "symbols": [
     {
@@ -335,13 +346,10 @@ $ functy symbols examples/math.cty
 }
 ```
 
-Each symbol carries its `kind`, `name`, a function's rendered signature (`detail`),
-any leading doc comment (`doc`), and its 1-based `range` (the full definition span —
-a whole block for `func`/`test`). Input is handled like [check](#check): files and
-directories (walked recursively), the current directory with no arguments, or a
-single `-` to read one buffer from stdin (named with `--filename`). Parse errors are
-tolerated — whatever declarations the parser recovers are still emitted — so an editor
-can outline a file mid-edit.
+Input is handled like [check](#check): files and directories (walked recursively),
+the current directory with no arguments, or a single `-` to read one buffer from
+stdin (named with `--filename`). Parse errors are tolerated — whatever declarations
+the parser recovers are still emitted — so an editor can outline a file mid-edit.
 
 ## version
 

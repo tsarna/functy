@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -32,13 +33,15 @@ type jsonSymbol struct {
 
 func symbolsCmd() *cobra.Command {
 	var filename string
+	var jsonOut bool
 	c := &cobra.Command{
-		Use:   "symbols [--filename NAME] [FILE|DIR ... | -]",
-		Short: "List top-level declarations and tests as a machine-readable JSON report",
-		Long: "Emit every top-level declaration (func, const, var, type) and test block, in " +
-			"source order, as a single JSON object on stdout — for editor tooling (an outline " +
-			"view, test discovery). Each symbol carries its kind, name, a function's signature " +
-			"(detail), any doc comment, and its 1-based source range.\n\n" +
+		Use:   "symbols [--json] [--filename NAME] [FILE|DIR ... | -]",
+		Short: "List top-level declarations and tests",
+		Long: "List every top-level declaration (func, const, var, type) and test block, in " +
+			"source order — a `file:line: kind name` listing by default, or a machine-readable " +
+			"JSON object with --json (each symbol carries kind, name, a function's signature, any " +
+			"doc comment, and its 1-based range), for editor tooling such as an outline or test " +
+			"discovery.\n\n" +
 			"Input is handled like check: files and directories (walked recursively), the " +
 			"current directory tree with no arguments, or a single '-' to read one buffer from " +
 			"stdin (name it with --filename). Parse errors are tolerated — whatever declarations " +
@@ -51,19 +54,26 @@ func symbolsCmd() *cobra.Command {
 			// Diagnostics are ignored on purpose: symbols is best-effort, so a file
 			// mid-edit still yields whatever top-level declarations parsed.
 			res, _, _, _ := loadProgram(input, baselineFunctions(io.Discard))
-			writeSymbolsJSON(cmd.OutOrStdout(), res)
+			syms := collectSymbols(res)
+			if jsonOut {
+				writeSymbolsJSON(cmd.OutOrStdout(), syms)
+			} else {
+				writeSymbolsText(cmd.OutOrStdout(), syms)
+			}
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&jsonOut, "json", false, "emit a machine-readable JSON object instead of the human-readable listing")
 	c.Flags().StringVar(&filename, "filename", "", "virtual filename for stdin input (used with '-')")
 	return c
 }
 
-func writeSymbolsJSON(w io.Writer, res *functy.Result) {
-	report := jsonSymbols{Symbols: []jsonSymbol{}}
+// collectSymbols flattens a parse Result into the symbol list, in source order.
+func collectSymbols(res *functy.Result) []jsonSymbol {
+	symbols := []jsonSymbol{}
 	if res != nil {
 		for _, fn := range res.Funcs {
-			report.Symbols = append(report.Symbols, jsonSymbol{
+			symbols = append(symbols, jsonSymbol{
 				Kind:   "func",
 				Name:   fn.Name,
 				Detail: funcSignature(fn),
@@ -78,32 +88,32 @@ func writeSymbolsJSON(w io.Writer, res *functy.Result) {
 			})
 		}
 		for _, t := range res.Tests {
-			report.Symbols = append(report.Symbols, jsonSymbol{
+			symbols = append(symbols, jsonSymbol{
 				Kind:  "test",
 				Name:  t.Name,
 				Range: rangeToJSON(t.DefRange),
 			})
 		}
 		for _, d := range res.Consts {
-			report.Symbols = append(report.Symbols, jsonSymbol{
+			symbols = append(symbols, jsonSymbol{
 				Kind: "const", Name: d.Name, Doc: d.Doc, Range: rangeToJSON(d.DefRange),
 			})
 		}
 		for _, d := range res.Vars {
-			report.Symbols = append(report.Symbols, jsonSymbol{
+			symbols = append(symbols, jsonSymbol{
 				Kind: "var", Name: d.Name, Doc: d.Doc, Range: rangeToJSON(d.DefRange),
 			})
 		}
 		for _, ta := range res.Types {
-			report.Symbols = append(report.Symbols, jsonSymbol{
+			symbols = append(symbols, jsonSymbol{
 				Kind: "type", Name: ta.Name, Range: rangeToJSON(ta.DefRange),
 			})
 		}
 	}
 
 	// Source order: by file, then position.
-	sort.SliceStable(report.Symbols, func(i, j int) bool {
-		a, b := report.Symbols[i].Range, report.Symbols[j].Range
+	sort.SliceStable(symbols, func(i, j int) bool {
+		a, b := symbols[i].Range, symbols[j].Range
 		if a.File != b.File {
 			return a.File < b.File
 		}
@@ -113,9 +123,30 @@ func writeSymbolsJSON(w io.Writer, res *functy.Result) {
 		return a.Column < b.Column
 	})
 
+	return symbols
+}
+
+func writeSymbolsJSON(w io.Writer, symbols []jsonSymbol) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(report)
+	_ = enc.Encode(jsonSymbols{Symbols: symbols})
+}
+
+// writeSymbolsText prints one `file:line: kind name` per symbol — greppable and
+// mirroring how the diagnostic text output names locations.
+func writeSymbolsText(w io.Writer, symbols []jsonSymbol) {
+	for _, s := range symbols {
+		var display string
+		switch s.Kind {
+		case "test":
+			display = fmt.Sprintf("test %q", s.Name)
+		case "func":
+			display = "func " + s.Name + s.Detail
+		default:
+			display = s.Kind + " " + s.Name
+		}
+		fmt.Fprintf(w, "%s:%d: %s\n", s.Range.File, s.Range.Line, display)
+	}
 }
 
 // funcSignature renders a function's parameters and return type as they appear in

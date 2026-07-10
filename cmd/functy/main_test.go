@@ -803,7 +803,7 @@ func TestSymbolsJSON(t *testing.T) {
 	c.SetOut(&out)
 	c.SetErr(&errb)
 	c.SetIn(strings.NewReader(src))
-	c.SetArgs([]string{"symbols", "-", "--filename", "x.cty"})
+	c.SetArgs([]string{"symbols", "--json", "-", "--filename", "x.cty"})
 	if err := c.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -844,6 +844,30 @@ func TestSymbolsJSON(t *testing.T) {
 	}
 	if rep.Symbols[2].Kind != "test" || rep.Symbols[2].Name != "adds" {
 		t.Fatalf("symbol[2] = %+v, want test adds", rep.Symbols[2])
+	}
+}
+
+func TestSymbolsText(t *testing.T) {
+	// The default (no --json) is a greppable `file:line: kind name` listing.
+	src := "func add(a: number, b: number) -> number { return a + b }\n" +
+		"test \"adds\" { assert(add(1, 2) == 3) }\n"
+	c := rootCmd()
+	var out, errb bytes.Buffer
+	c.SetOut(&out)
+	c.SetErr(&errb)
+	c.SetIn(strings.NewReader(src))
+	c.SetArgs([]string{"symbols", "-", "--filename", "m.cty"})
+	if err := c.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"m.cty:1: func add(a: number, b: number) -> number",
+		"m.cty:2: test \"adds\"",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q; got:\n%s", want, got)
+		}
 	}
 }
 
