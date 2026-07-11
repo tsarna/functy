@@ -55,13 +55,12 @@ These are deliberately out of scope. Some are deferred; some are structural.
   live in `EvalContext.Functions`, not `Variables`, so functions are not
   ordinary values. (Deferred.)
 - **Go-style multi-value returns.** A `cty` function returns exactly one value;
-  multiple results are expressed by returning an object or tuple. (A
-  statement-level `value, err = expr` error-capture form — sugar over
-  `try`/`catch`, not a function return — is planned future work.)
+  multiple results are expressed by returning an object or tuple. (The
+  statement-level `val, err = expr` error-capture form — sugar over
+  `try`/`catch`, not a function return — has since shipped; see
+  `doc/language.md`, "Error capture".)
 - **In-place mutation of collection elements** (`a[i] = x`). cty values are
   immutable; assignment targets are plain variable names only.
-- **Get/set/delete and declaration shorthands** (`->`/`::`/`:=`). Designed but
-  deferred.
 - **New top-level host block types.** A `.cty` file declares functions only; it
   does not extend the host's configuration grammar.
 
