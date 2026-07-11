@@ -392,31 +392,46 @@ links the library directly and supplies its own richer context). Planned additio
 
   The CLI forms are not throwaway: the LSP later provides the same information in-process,
   but they remain useful for scripting and non-LSP editors.
-- **Parser/lexer error-recovery hardening (for mid-edit tooling).** The parser already
-  recovers well — `recoverToTopLevel` / `skipToParamBoundary` / `recoverToStatementEnd`
-  let `symbols`/`check` still report the declarations *around* a syntax error, so an editor
+- **Parser/lexer error-recovery hardening (for mid-edit tooling)** — *the two
+  file-swallowing cases are shipped.* The parser already recovered well —
+  `recoverToTopLevel` / `skipToParamBoundary` / `recoverToStatementEnd` let
+  `symbols`/`check` still report the declarations *around* a syntax error, so an editor
   outline survives most transient edits (a half-typed expression, an incomplete parameter).
-  Two cases still truncate everything after the error, which matters because both are
-  common **while typing**:
-  - **An unterminated `{`** (you've typed `func f() {` but not the closing brace) makes the
-    body swallow the rest of the file — the block-open has no matching close, so
-    `recoverToTopLevel` can't find the next declaration boundary. A brace-aware recovery
-    (resynchronize at column-0 `func`/`test`/`const`/`var`/`type` at the *outer* brace
-    depth, or track unbalanced braces) would let declarations *after* an unclosed block
-    still parse.
-  - **Lexer-level garbage** (a stray `@`, `$`, backtick — characters that aren't valid
-    tokens) currently aborts more aggressively than a *parser* error does. Making the lexer
-    emit an error token and skip to the next newline/boundary (rather than derailing the
-    token stream) would keep recovery working through the kind of nonsense that appears
-    momentarily during editing.
+  Two cases used to truncate everything after the error, both common **while typing**;
+  both are now fixed:
+  - **An unterminated `{`** (you've typed `func f() {` but not the closing brace) made the
+    body swallow the rest of the file — the block-open had no matching close, so
+    `recoverToTopLevel` never found the next declaration boundary. *Fixed* in
+    `parseStatements` (`parser.go`): a `func` keyword can never appear at statement
+    position (closures / nested functions are a non-goal — see DESIGN.md), so it is an
+    unambiguous signal that an enclosing block was left open and the next top-level
+    declaration has leaked into this body. The statement loop breaks on it, the body
+    reports its missing `}`, and `parseFile` resynchronizes on the leaked `func`.
+    (`func` is the only *unconditionally* safe resync token: `var` is legal in a body,
+    `const` has its own in-body diagnostic, and `test`/`type` are contextual idents that
+    are legal as ordinary expressions — so gating those on column-0 would risk breaking
+    valid code, whereas `func` alone covers the dominant real case.)
+  - **Unterminated quoted string** (`return "oops` with no closing quote) — the *real*
+    lexer-level derailment. HCL enters string mode and consumes the entire rest of the
+    file as `TokenQuotedLit`/`TokenQuotedNewline` content (the closing brace, every later
+    declaration), so `recoverToTopLevel` never sees another keyword. *Fixed* in `lexAll`
+    (`lexer.go`): on the `TokenQuotedNewline` marker HCL emits for the offending newline,
+    the broken string is cut, a real newline is emitted to terminate the statement, and
+    the remainder is re-lexed from just past the marker (`LexConfig` honors the start
+    position, so ranges stay absolute); one genuine "Invalid multi-line string"
+    diagnostic is kept and the phantom per-line ones are dropped. (Note: the *originally
+    recorded* second case — "stray `@`, `$`, backtick" — turned out **not** to be broken:
+    HCL emits a lone `TokenInvalid`/`TokenBacktick` and keeps the rest of the stream
+    coherent, so existing parser recovery already handled those. The unterminated string
+    is the case that actually swallowed the file.)
 
-  Neither is required for correctness — a file that doesn't parse is genuinely broken — but
-  both improve the *live-editing* experience of any `symbols`/`check`-backed tool (outline,
-  test discovery, on-type diagnostics), and would let the VSCode extension's parser-backed
-  outline match the resilience of the regex scanner it replaced. Lower priority than the
-  LSP itself, but a cheap, self-contained front-end improvement that benefits every editor
-  client. (Recorded after observing the extension's outline truncate below an unclosed
-  brace / stray `@#$` while the parser recovered cleanly for every ordinary syntax error.)
+  Remaining nicety (lower priority): an **unterminated heredoc** (`<<EOT` with no closing
+  marker) is the same class as the unterminated string but derails via a different token
+  pattern (`TokenOHeredoc` without a close) and is not yet resynchronized. Rare enough to
+  defer. Neither shipped fix is required for correctness — a file that doesn't parse is
+  genuinely broken — but both let any `symbols`/`check`-backed tool (outline, test
+  discovery, on-type diagnostics) keep working through the transient breakage of live
+  editing, matching the resilience of the regex scanner the parser-backed outline replaced.
 - **Inline tests** — *shipped*: co-located `test "…" { … }` blocks, the core runner
   (`(*Result).RunTests` / `RunTestsMatching`), the `functy test` CLI verb (quiet/`-v`,
   `--run` name filter, machine-readable `--json` report, and no-argument discovery of

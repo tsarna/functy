@@ -362,3 +362,52 @@ func TestParseThrowAndDefer(t *testing.T) {
 		t.Fatalf("stmt1 should be Throw, got %T", fn.Body[1])
 	}
 }
+
+// hasFunc reports whether a parse Result contains a top-level function of the
+// given name — used by the error-recovery tests to prove a declaration after a
+// syntax error still parses.
+func hasFunc(res *Result, name string) bool {
+	for _, fn := range res.Funcs {
+		if fn.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// TestParseRecoverUnterminatedBrace verifies brace-aware recovery: an
+// unterminated function body must not swallow the declarations after it. A
+// bare `func` at statement position (closures are a non-goal) ends the runaway
+// body so the following function still parses.
+func TestParseRecoverUnterminatedBrace(t *testing.T) {
+	src := "func broken() {\n    return 2\n\nfunc after() {\n    return 3\n}\n"
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if !diags.HasErrors() {
+		t.Fatal("expected a diagnostic for the unterminated brace")
+	}
+	if !hasFunc(res, "broken") {
+		t.Errorf("the broken function itself should still be recovered")
+	}
+	if !hasFunc(res, "after") {
+		t.Fatalf("recovery failed: 'after' was swallowed by the unterminated body")
+	}
+	// The runaway body must not have absorbed after's statements as its own.
+	for _, fn := range res.Funcs {
+		if fn.Name == "broken" && len(fn.Body) != 1 {
+			t.Errorf("broken body should hold only its own `return 2`, got %d statements", len(fn.Body))
+		}
+	}
+}
+
+// TestParseRecoverUnterminatedString verifies lexer resync: an unterminated
+// quoted string must not swallow the rest of the file into string content.
+func TestParseRecoverUnterminatedString(t *testing.T) {
+	src := "func broken() -> string {\n    return \"oops\n}\n\nfunc after() {\n    return 3\n}\n"
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if !diags.HasErrors() {
+		t.Fatal("expected a diagnostic for the unterminated string")
+	}
+	if !hasFunc(res, "after") {
+		t.Fatalf("recovery failed: 'after' was swallowed by the unterminated string")
+	}
+}

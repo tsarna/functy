@@ -47,35 +47,86 @@ var keywords = map[string]bool{
 //
 // All other lexer diagnostics are returned to the caller.
 func lexAll(src []byte, filename string) ([]token, []Comment, hcl.Diagnostics) {
-	raw, diags := hclsyntax.LexConfig(src, filename, hcl.InitialPos)
-	diags = dropSemicolonDiags(diags)
-
-	out := make([]token, 0, len(raw))
+	out := make([]token, 0, 64)
 	var comments []Comment
-	for _, t := range raw {
-		switch t.Type {
-		case hclsyntax.TokenComment:
-			line := isLineComment(t.Bytes)
-			comments = append(comments, Comment{
-				Text:  strings.TrimRight(string(t.Bytes), "\r\n"),
-				Line:  line,
-				Range: t.Range,
-			})
-			if line && bytes.HasSuffix(t.Bytes, []byte("\n")) {
-				// A line comment ends the line; preserve that as a newline so
-				// statement termination still happens.
-				out = append(out, token{
-					Type:  hclsyntax.TokenNewline,
-					Bytes: []byte("\n"),
+	var diags hcl.Diagnostics
+
+	// Lex the source in segments so an unterminated quoted string can't swallow
+	// the rest of the file. HCL, on a newline inside a single-line quoted string,
+	// stays in string mode and turns every following line into bogus
+	// TokenQuotedLit content — the closing brace, later declarations, everything.
+	// It marks the offending newline with a TokenQuotedNewline. We stop at that
+	// marker, emit a real newline to terminate the broken statement, and re-lex
+	// the remainder from just past it (LexConfig honors the start position, so
+	// ranges stay absolute). This resynchronizes editor tooling through the
+	// half-typed string literals that appear constantly while typing.
+	pos := hcl.InitialPos
+	for {
+		raw, rawDiags := hclsyntax.LexConfig(src[pos.Byte:], filename, pos)
+
+		resync := -1
+		for i, t := range raw {
+			if t.Type == hclsyntax.TokenQuotedNewline {
+				resync = i
+				break
+			}
+		}
+
+		limit := len(raw)
+		if resync >= 0 {
+			limit = resync // consume tokens before the marker; drop it and the bogus remainder
+		}
+		for _, t := range raw[:limit] {
+			switch t.Type {
+			case hclsyntax.TokenComment:
+				line := isLineComment(t.Bytes)
+				comments = append(comments, Comment{
+					Text:  strings.TrimRight(string(t.Bytes), "\r\n"),
+					Line:  line,
 					Range: t.Range,
 				})
+				if line && bytes.HasSuffix(t.Bytes, []byte("\n")) {
+					// A line comment ends the line; preserve that as a newline so
+					// statement termination still happens.
+					out = append(out, token{
+						Type:  hclsyntax.TokenNewline,
+						Bytes: []byte("\n"),
+						Range: t.Range,
+					})
+				}
+				// Block comments (and an EOF-terminated line comment) are dropped
+				// from the token stream but still recorded above.
+			default:
+				out = append(out, token{Type: t.Type, Bytes: t.Bytes, Range: t.Range})
 			}
-			// Block comments (and an EOF-terminated line comment) are dropped
-			// from the token stream but still recorded above.
-		default:
-			out = append(out, token{Type: t.Type, Bytes: t.Bytes, Range: t.Range})
 		}
+
+		if resync < 0 {
+			diags = append(diags, rawDiags...)
+			break
+		}
+
+		// Keep only the diagnostics for the consumed portion — the genuine
+		// "Invalid multi-line string" for this string. HCL emits one such
+		// diagnostic per swallowed line; the re-lex handles the remainder, so
+		// dropping the phantom ones past the marker avoids a duplicate cascade.
+		marker := raw[resync]
+		for _, d := range rawDiags {
+			if d.Subject == nil || d.Subject.Start.Byte <= marker.Range.Start.Byte {
+				diags = append(diags, d)
+			}
+		}
+		// Emit a real newline in place of the marker so the broken statement is
+		// terminated, then resume lexing just past it.
+		out = append(out, token{
+			Type:  hclsyntax.TokenNewline,
+			Bytes: []byte("\n"),
+			Range: marker.Range,
+		})
+		pos = marker.Range.End
 	}
+
+	diags = dropSemicolonDiags(diags)
 	return out, comments, diags
 }
 

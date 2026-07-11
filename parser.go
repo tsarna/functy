@@ -483,6 +483,15 @@ func (p *parser) parseStatements() []Statement {
 		if p.cur().Type == hclsyntax.TokenCBrace || p.atEOF() {
 			break
 		}
+		// Brace-aware recovery: a `func` keyword can never appear at statement
+		// position (closures / nested functions are a non-goal — see DESIGN.md),
+		// so encountering one means an enclosing block was left unterminated and
+		// the following top-level declaration has leaked into this body. Stop here
+		// rather than swallowing it; the caller (parseBlockBody) reports the
+		// missing `}` and parseFile resynchronizes on the leaked `func`.
+		if p.cur().isKeyword("func") {
+			break
+		}
 
 		startPos := p.pos
 		stmt := p.parseStatement()

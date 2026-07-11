@@ -8,6 +8,21 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Parser/lexer error recovery no longer lets one mid-edit typo swallow the
+  rest of the file** — so `symbols`/`check`-backed editor tooling (outline, test
+  discovery, on-type diagnostics) keeps working through transient breakage:
+  - An **unterminated `{`** (`func f() {` with no closing brace) used to absorb
+    every following declaration into the runaway body. `parseStatements` now
+    treats a `func` keyword at statement position as an unambiguous "a block was
+    left open" signal (closures are a non-goal, so `func` can't appear there) and
+    stops, letting the following functions parse.
+  - An **unterminated quoted string** (`return "oops` with no closing quote) used
+    to turn the entire remainder of the file into string content. `lexAll` now
+    resynchronizes at the offending newline (HCL's `TokenQuotedNewline`) and
+    re-lexes the rest, so later declarations tokenize normally.
+
 ## [0.9.0-rc.3] - 2026-07-10
 
 ### Changed

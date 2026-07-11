@@ -1,6 +1,7 @@
 package functy
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -86,5 +87,41 @@ func TestContinuesLine(t *testing.T) {
 		if continuesLine(tt) {
 			t.Errorf("%v should not continue the line", tt)
 		}
+	}
+}
+
+// TestLexResyncAfterUnterminatedString verifies that an unterminated single-line
+// quoted string does not swallow the rest of the file. HCL would otherwise turn
+// every following line into TokenQuotedLit content; lexAll resynchronizes at the
+// offending newline so later declarations tokenize normally.
+func TestLexResyncAfterUnterminatedString(t *testing.T) {
+	src := "func a() {\n    return \"oops\n}\nfunc after() {\n}\n"
+	toks, diags := lex([]byte(src), "test")
+	if !diags.HasErrors() {
+		t.Fatal("expected an 'invalid multi-line string' diagnostic")
+	}
+	// The `func after` declaration on a later line must survive as real tokens,
+	// not be absorbed into quoted-literal string content.
+	var sawFunc, sawAfter, swallowed bool
+	for i, tok := range toks {
+		// A quoted-literal carrying later source text (the `}` or the next
+		// declaration) is the swallowing symptom; `"oops"` before the break is a
+		// legitimate quoted literal and expected.
+		if tok.Type == hclsyntax.TokenQuotedLit &&
+			(bytes.Contains(tok.Bytes, []byte("func")) || bytes.Contains(tok.Bytes, []byte("}"))) {
+			swallowed = true
+		}
+		if tok.isKeyword("func") && i+1 < len(toks) && toks[i+1].ident() == "after" {
+			sawFunc = true
+		}
+		if tok.ident() == "after" {
+			sawAfter = true
+		}
+	}
+	if !sawFunc || !sawAfter {
+		t.Fatalf("resync failed: `func after` not recovered as tokens (func=%v after=%v)", sawFunc, sawAfter)
+	}
+	if swallowed {
+		t.Errorf("later source lines were swallowed as quoted-literal string content")
 	}
 }
