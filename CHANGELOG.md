@@ -8,6 +8,14 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-11
+
+Promotes `0.9.0-rc.3` to the final **0.9.0** release, adding the parser/lexer
+recovery fix below on top of the editor-facing CLI work landed across the rc
+series (`symbols`, `eval`, machine-readable `--json` diagnostics, stdin
+type-checking, `version --json`). See the `0.9.0-rc.*` sections for the full set
+of changes since 0.8.1.
+
 ### Fixed
 
 - **Parser/lexer error recovery no longer lets one mid-edit typo swallow the
