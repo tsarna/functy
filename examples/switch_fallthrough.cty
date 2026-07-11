@@ -1,0 +1,41 @@
+// A `switch` on a value, with `fallthrough`. Cases match the subject by equality
+// and a matched clause exits the switch (no implicit fallthrough); `fallthrough`
+// as a clause's last statement continues into the next clause unconditionally.
+//
+//   functy run examples/switch_fallthrough.cty --func permissions --output json -- '"admin"'
+//       # => ["delete","write","read"]
+//   functy run examples/switch_fallthrough.cty --func permissions --output json -- '"editor"'
+//       # => ["write","read"]
+//   functy run examples/switch_fallthrough.cty --func permissions --output json -- '"guest"'
+//       # => []
+//   functy run examples/switch_fallthrough.cty --func day_kind --output raw -- '"sun"'   # => weekend
+
+// Each higher role inherits the permissions below it, expressed with `fallthrough`.
+func permissions(role: string) -> list(string) {
+    var perms: list(string) = []
+    switch role {
+    case "admin":
+        perms = concat(perms, ["delete"])
+        fallthrough
+    case "editor":
+        perms = concat(perms, ["write"])
+        fallthrough
+    case "viewer":
+        perms = concat(perms, ["read"])
+    }
+    return perms
+}
+
+// A value `switch` with grouped cases and a `default` (no fallthrough here).
+func day_kind(day: string) -> string {
+    switch day {
+    case "sat", "sun":
+        return "weekend"
+    default:
+        return "weekday"
+    }
+}
+
+func main() -> list(string) {
+    return permissions("admin")
+}

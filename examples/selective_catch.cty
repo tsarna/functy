@@ -1,0 +1,38 @@
+// Selective catch: a `try` may have several `catch` clauses, tried in order; the
+// first match runs. A clause can filter by error type (`catch e: T`), add a guard
+// (`catch e if cond`), or be a catch-all (`catch e`, which must be last). The type
+// filter runs before the guard, so the guard only sees errors of the right shape.
+//
+//   functy run examples/selective_catch.cty --func handle --output raw -- 200   # => ok
+//   functy run examples/selective_catch.cty --func handle --output raw -- 404   # => not found
+//   functy run examples/selective_catch.cty --func handle --output raw -- 503   # => retry: server busy
+//   functy run examples/selective_catch.cty --func handle --output raw -- 302   # => unhandled: status 302
+//   functy run examples/selective_catch.cty --func handle --output raw -- -1    # => unhandled: invalid status
+
+// Raise a structured error carrying a numeric `code` for any non-2xx status, or a
+// plain string error (no `code` field) for a nonsensical one.
+func check_status(code: number) -> string {
+    if code < 0 {
+        throw "invalid status"
+    }
+    if code >= 200 && code < 300 {
+        return "ok"
+    }
+    throw { message = "status ${code}", code = code }
+}
+
+func handle(code: number) -> string {
+    try {
+        return check_status(code)
+    } catch e: object({ code = number }) if e.code >= 500 {
+        return "retry: server busy"
+    } catch e: object({ code = number }) if e.code == 404 {
+        return "not found"
+    } catch e {
+        return "unhandled: ${e.message}"
+    }
+}
+
+func main() -> string {
+    return handle(503)
+}

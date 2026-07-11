@@ -1,0 +1,27 @@
+// Variadic parameters: `*rest` collects extra arguments into a tuple, `*rest: T`
+// into a list(T). A variadic parameter must be last, and any required parameters
+// come before it.
+//
+//   functy run examples/variadic.cty --func sum -- 1 2 3 4        # => 10
+//   functy run examples/variadic.cty --func sum                   # => 0 (no args)
+//   functy run examples/variadic.cty --func join_with --output raw -- '" / "' '"a"' '"b"' '"c"'
+//       # => a / b / c
+//   functy run examples/variadic.cty                              # => 6
+
+// Sum any number of arguments; `*nums` collects them into a list(number).
+func sum(*nums: number) -> number {
+    var total = 0
+    for n in nums {
+        total = total + n
+    }
+    return total
+}
+
+// A required parameter (the separator) before the variadic one.
+func join_with(sep: string, *words: string) -> string {
+    return join(sep, words)
+}
+
+func main() -> number {
+    return sum(1, 2, 3)
+}

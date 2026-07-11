@@ -1,0 +1,40 @@
+// Co-located tests: a `test "description" { … }` block runs under `functy test`.
+// Bodies are ordinary functy statements using `assert` (an optional second
+// argument is the failure message). This file also shows a recursive function —
+// functy resolves calls late, so `factorial` can call itself.
+//
+//   functy test examples/tests.cty
+//   functy test examples/tests.cty -v
+//   functy run examples/tests.cty --func factorial -- 5      # => 120
+
+func factorial(n: number) -> number {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+test "factorial of 0 and 1 is 1" {
+    assert(factorial(0) == 1)
+    assert(factorial(1) == 1)
+}
+
+test "factorial of 5 is 120" {
+    assert(factorial(5) == 120, "5! should be 120")
+}
+
+test "factorial grows monotonically" {
+    var prev = factorial(1)
+    for var n = 2; n <= 6; n = n + 1 {
+        var cur = factorial(n)
+        assert(cur > prev)
+        prev = cur
+    }
+}
+
+// `skip(...)` marks a test skipped rather than passed or failed — for
+// work-in-progress or environment-gated cases.
+test "negative input (WIP)" {
+    skip("negative factorial not defined yet")
+    assert(factorial(-1) == 1)
+}

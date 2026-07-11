@@ -1,0 +1,32 @@
+// Type aliases: `type Name = <type>` gives a reusable name for a type, usable in
+// parameters, returns, and nested positions. Aliases are order-independent and
+// project-scoped.
+//
+//   functy run examples/types.cty --func describe --output raw -- '{x=0,y=0}' '{x=3,y=4}'
+//       # => segment of length 7
+//   functy run examples/types.cty --output json
+//       # => {"length":7,"midpoint":{"x":1.5,"y":2}}
+
+type Point = object({ x = number, y = number })
+type Segment = object({ start = Point, end = Point })
+
+// Manhattan distance between two points.
+func distance(a: Point, b: Point) -> number {
+    return abs(b.x - a.x) + abs(b.y - a.y)
+}
+
+func midpoint(a: Point, b: Point) -> Point {
+    return { x = (a.x + b.x) / 2, y = (a.y + b.y) / 2 }
+}
+
+func describe(a: Point, b: Point) -> string {
+    return "segment of length ${distance(a, b)}"
+}
+
+func main() -> object({ length = number, midpoint = Point }) {
+    var s: Segment = { start = { x = 0, y = 0 }, end = { x = 3, y = 4 } }
+    return {
+        length   = distance(s.start, s.end),
+        midpoint = midpoint(s.start, s.end),
+    }
+}
