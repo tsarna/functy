@@ -1,0 +1,60 @@
+// Control flow: an expression-less `switch`, a three-clause `for`, a range `for`
+// with `continue`, and a `while` loop with `break`.
+//
+//   functy run examples/controlflow.cty --output json          # => the FizzBuzz sequence
+//   functy run examples/controlflow.cty --func classify --output raw -- 15   # => FizzBuzz
+//   functy run examples/controlflow.cty --func first_negative -- '[4, 7, -2, 9]'  # => 2
+
+// An expression-less `switch` acts as an if/else chain (cases are booleans).
+func classify(n: number) -> string {
+    switch {
+    case n % 15 == 0:
+        return "FizzBuzz"
+    case n % 3 == 0:
+        return "Fizz"
+    case n % 5 == 0:
+        return "Buzz"
+    default:
+        return format("%d", n)
+    }
+}
+
+// A three-clause `for`, building the sequence up to `upto`.
+func fizzbuzz(upto: number) -> list(string) {
+    var out: list(string) = []
+    for var i = 1; i <= upto; i = i + 1 {
+        out = concat(out, [classify(i)])
+    }
+    return out
+}
+
+// A range `for` with `continue`: sum only the even numbers.
+func sum_evens(xs: list(number)) -> number {
+    var total = 0
+    for x in xs {
+        if x % 2 != 0 {
+            continue
+        }
+        total = total + x
+    }
+    return total
+}
+
+// A `while` loop with an early `break`: index of the first negative number, or -1.
+func first_negative(xs: list(number)) -> number {
+    var i = 0
+    while i < length(xs) {
+        if xs[i] < 0 {
+            break
+        }
+        i = i + 1
+    }
+    if i == length(xs) {
+        return -1
+    }
+    return i
+}
+
+func main() -> list(string) {
+    return fizzbuzz(15)
+}

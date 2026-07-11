@@ -1,0 +1,49 @@
+// Two styles of error handling: `try` / `catch` / `finally` with `throw`, and
+// the `val, err = expr` capture form (the statement-level analog of Go's
+// `v, err := f()`).
+//
+//   functy run examples/errors.cty --func parse_port --output raw -- '"8080"'
+//       # => OK:8080
+//   functy run examples/errors.cty --func parse_port --output raw -- '"70000"'
+//       # => ERROR:PORT OUT OF RANGE
+//   functy run examples/errors.cty                     # => 8080 (calls main)
+
+// Raise a structured error with `throw` when the port is out of range. A parse
+// failure from `parseint` (a non-numeric string) raises on its own.
+func check_port(p: number) -> number {
+    if p < 1 || p > 65535 {
+        throw { message = "port out of range", port = p }
+    }
+    return p
+}
+
+// Style 1 — try / catch / finally. The `finally` clause runs on both the success
+// and the failure path, so the shared normalization (uppercasing) is written once.
+func parse_port(s: string) -> string {
+    var status = "unknown"
+    try {
+        var p = check_port(parseint(s, 10))
+        status = "ok:${p}"
+    } catch e {
+        status = "error:${e.message}"
+    } finally {
+        status = upper(status)
+    }
+    return status
+}
+
+// Style 2 — `val, err = expr` capture. No unwinding: the error is bound to `err`
+// and inspected inline. Returns the first candidate that parses to a valid port.
+func first_valid_port(candidates: list(string)) -> number {
+    for s in candidates {
+        p, err := check_port(parseint(s, 10))
+        if err == null {
+            return p
+        }
+    }
+    return -1
+}
+
+func main() -> number {
+    return first_valid_port(["nope", "70000", "8080"])
+}

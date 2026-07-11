@@ -1,0 +1,33 @@
+// Local variables: `var` and the `:=` shorthand, reassignment, typed locals,
+// and accumulation across a loop.
+//
+//   functy run examples/locals.cty                               # => 15
+//   functy run examples/locals.cty --func stats --output json -- '[3, 1, 4, 1, 5, 9]'
+//       # => {"count":6,"max":9,"sum":23}
+
+// Sum a list by reassigning a running total (a dynamic local).
+func sum(xs: list(number)) -> number {
+    var total = 0
+    for x in xs {
+        total = total + x
+    }
+    return total
+}
+
+// Accumulate several statistics in locals of mixed declaration styles.
+func stats(xs: list(number)) -> object({ count = number, sum = number, max = number }) {
+    count := length(xs)          // `:=` shorthand — an untyped local
+    var total = 0                // dynamic local, reassigned below
+    var biggest: number = 0      // typed local
+    for x in xs {
+        total = total + x
+        if x > biggest {
+            biggest = x
+        }
+    }
+    return { count = count, sum = total, max = biggest }
+}
+
+func main() -> number {
+    return sum([1, 2, 3, 4, 5])
+}

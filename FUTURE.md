@@ -259,6 +259,56 @@ functy ships its **own** standard library — `functy.Stdlib()` (`typeof`, `type
   timing (parse-time vs. a host pass, given the special context), and whether the
   annotation context may reference the declaration's own name/type.
 
+- **Marker-annotation tier (`@name` only) as a first, self-contained slice —
+  motivated by `@standalone` tests.** The full design above evaluates each
+  annotation as an expression in a host-controlled context; a much smaller subset
+  covers a real, immediate need, and the full feature later subsumes it. A
+  **marker** is the no-argument, no-context case: the parser recognizes a leading
+  `@ident` before a declaration and records the bare name (an `Annotations` field
+  as `[]string` on `Decl` / `FuncDecl` / `TestDecl`), with no eval context and no
+  allowlist evaluation — only the syntax and attachment plumbing the full feature
+  also needs. Shipping markers first de-risks the larger design by proving that
+  plumbing on a concrete use case.
+
+  The motivating case is **test selection in embedded / host-coupled sources**.
+  When functy is embedded in a host's own files (see *Embedding functy inside a
+  host's HCL files* under Tooling & ecosystem) or otherwise linked into a host, a
+  `test` block may exercise host functions / ambient values (`send`, `bus.*`) that
+  exist only under the host's full eval context — so bare `functy test` (baseline
+  context) cannot run it. A marker resolves this declaratively:
+
+  ```functy
+  @standalone
+  test "add sums" { assert add(2, 3) == 5 }        // runs under bare `functy test`
+
+  test "publishes an event" { send(bus.out, "t", 1) }   // needs the host context
+  ```
+
+  Two decisions this introduces:
+  - **`test` as an annotation target.** The full design lists `var` / `const` /
+    `func`; tests are declarations too and are the first concrete target (`TestDecl`
+    gains the same `Annotations` field).
+  - **A functy-built-in annotation vocabulary, distinct from host-registered
+    names.** The full design frames annotations as host-registered (the host
+    declares the allowlist). But `@standalone` concerns functy's *own* test runner
+    and its context, and bare `functy test` has no host to register it — so functy
+    owns a small built-in set (`@standalone`, with room for `@slow` / `@skip` /
+    `@integration`), recognized by its own tooling, alongside (not replacing)
+    host-registered annotations.
+
+  **Policy lives in the runner, not the annotation** (consistent with the
+  caller-supplies-the-context discipline of `RunTests`): `functy test` (baseline
+  context) runs `@standalone` tests and skips the rest into a *distinct* reported
+  bucket ("skipped: requires host"), never silently; a host's `<host> test` (full
+  context) runs everything, using the marker only for optional filtering (e.g.
+  `--only @standalone`). The scheme is **self-checking**: an unbound host reference
+  inside a `@standalone` test is a genuine *failure* (the author asserted "no host
+  needed" and was wrong) — which is why this is preferred over auto-classifying
+  unresolved references as skips, a heuristic that would silently hide typos. The
+  existing test-only `skip("reason")` builtin remains for *conditional* skips (a
+  runtime probe); `@standalone` is the static, declarative default. Beyond tests,
+  markers generalize to plain tags for CLI filtering.
+
 ## Error handling
 
 - **`defer` argument snapshotting.** Evaluate a deferred call's arguments at `defer`
@@ -454,6 +504,71 @@ links the library directly and supplies its own richer context). Planned additio
     non-destructive open registration (`RegisterOpenType`), currently leaf-only.
 
   The host picks identity vs. open per type.
+- **Embedding functy inside a host's HCL files (mixed `functy { … }` regions).**
+  Today a host (Vinculum) links functy and loads `.cty` sources *alongside* its HCL
+  config. A tighter integration lets one file interleave both — an escape-to-functy
+  region inside an otherwise-HCL file, so function definitions live next to the
+  config that uses them:
+
+  ```hcl
+  bus "main" { queue_size = 1000 }
+
+  functy {
+      func double(n: number) -> number { return n * 2 }
+  }
+
+  server "http" "api" { listen = ":8080" }
+  ```
+
+  **Mechanism — feasible with essentially no HCL changes and none *required* of
+  functy.** functy already tokenizes via `hclsyntax.LexConfig` (the same
+  native-syntax lexer HCL's own parser uses) from an absolute start position, so one
+  lex pass yields a token stream both grammars agree on and any carved-out byte span
+  keeps its original line/column. A preprocessing shim then: (1) lexes once;
+  (2) brace-matches the token stream to find each top-level `functy { … }` span
+  (template/heredoc braces are distinct token types, so this is robust against
+  `${…}` and `{k = v}`); (3) produces two equal-length overlay buffers by blanking
+  bytes with spaces while preserving newlines — one with the `functy` regions
+  blanked *out* (handed to the HCL parser), one with everything *except* the region
+  interiors blanked (handed to functy). Because blanking is a 1:1 byte substitution,
+  every offset/line/column is unchanged, so **both parsers report diagnostics at
+  true positions** and a single original-source file map renders snippets for both.
+  (Validated with a throwaway prototype: an HCL block and a functy `func` in one
+  file each parsed at their real lines, and a functy runtime error surfaced at its
+  true `line,col`.)
+
+  **Naming.** `functy` (not `functions`) as the block keyword: it avoids colliding
+  with hosts that already have a `function` construct, and a region can hold `func`
+  / `const` / `var` / `type` / `test` — not only functions. Multiple `functy { }`
+  blocks merge into one namespace (matching functy's cross-source `ParseAll`
+  semantics); a label is unnecessary.
+
+  **Where the code lives + tooling impact.** The shim is one small shared component
+  (an exported helper — e.g. an `hclmix`-style package — so both the host and
+  functy's own tooling call it). Most CLI verbs then fall out of capabilities functy
+  already has:
+  - **`check` / `symbols`** need no host knowledge — a functy syntax/type check is
+    late-bound (unresolved host names are not errors; they surface only at
+    *runtime*), so functy can validate the functy slice of a mixed file on its own.
+    The existing `-` (stdin) + `--filename` seam already accepts the blank-outside
+    buffer and returns correctly-positioned results with **no new flags**
+    (`functy check - --filename foo.vcl`); the host layers its own schema /
+    host-symbol checks over the same file for the authoritative whole-file result.
+  - **`test`** works via the caller-supplied context (`RunTests`): the host runs
+    *all* tests against its full context, while bare `functy test` runs the
+    `@standalone`-marked subset (see the *Marker-annotation tier* under Annotations)
+    and skips the rest.
+  - **`fmt` is the one genuinely hard piece** — the formatter is a whole-file AST
+    reprinter, so a mixed file needs a two-layer splice: format each `functy` region
+    and re-indent it to the block's column, leaving the HCL text untouched (full HCL
+    re-canonicalization via `hclwrite` is a harder three-way splice, deferrable).
+  - **Editor support.** Highlighting is the standard "language-in-language" TextMate
+    injection (embed `source.functy` inside `functy { }`); semantic features are
+    best driven through the *host's* CLI (which links functy and runs the shim),
+    rather than making two editor extensions cooperate at runtime.
+
+  Recorded as the intended shape for host embedding; the shim is host-agnostic, so
+  nothing here is Vinculum-specific.
 - **Terraform / OpenTofu provider binding (speculative — low priority).** A third
   embedding target, distinct from a host like Vinculum: expose functy-authored functions
   to Terraform as provider-defined functions, callable as `provider::functy::<name>(...)`.
@@ -560,6 +675,69 @@ links the library directly and supplies its own richer context). Planned additio
   `provider::functy::valid_json(...)` — i.e. a `validatefx` or `corefunc` you author in
   `.cty` instead of maintaining a Go provider. All such functions are pure (no I/O, no
   state), so they sit cleanly inside the pure-only constraint.
+- **Embedded functy in Terraform / OpenTofu (core-change alternative to the provider
+  binding) — *explored, not currently planned.*** The provider binding above works on
+  stock Terraform but reintroduces the build/publish loop and cannot load local `.cty`
+  (static schema). The opposite trade is to author functions *in the configuration* —
+  inline `functy { }` regions (via the mixed-file shim under *Embedding functy inside a
+  host's HCL files*) or sibling `.cty` files — and have the tool compile and expose them.
+  This is the long-requested "user-defined functions in the language" feature, with
+  functy as the implementation.
+
+  **It requires a core change; it cannot be a plugin.** To call a config-defined function
+  elsewhere in the same config, the compiled function must be injected into the eval
+  context the tool builds during config load (`lang.Scope.Functions()`, a
+  `map[string]function.Function`). A third-party provider exposes only a *static* gRPC
+  schema in its own `provider::name::` namespace and cannot inject into the config's
+  table; a preprocessor can't help either, since Terraform functions aren't first-class
+  values, so a call site whose arguments derive from resource attributes can't be
+  macro-expanded ahead of eval. Only core can do it.
+
+  **The fit, if core could change, is excellent** — better than the provider path. A
+  compiled functy function *is* a `cty.Function` with a static return type, exactly what
+  the function table holds, so integration is "discover → compile → merge." Purity and
+  determinism map cleanly (pure core only; no `send` / `log_*`), with one guardrail — an
+  execution limit (see *Execution limits*) so an unbounded `for` cannot wedge `plan`.
+  Keep functions **args-only** (no `var.` / `resource.` references) so they are pure
+  transforms compiled once per module and stay entirely out of the dependency graph,
+  which keeps the change small. Namespace via the `::` token (`fn::f` / `local::f`),
+  mirroring `provider::`. Mental model: "`locals`, but for functions."
+
+  **Why "not planned": the governance door is (currently) closed on both forks.** The
+  canonical OpenTofu request (opentofu/opentofu#793) — whose proposed
+  `locals { func myfunc(a: string) => map(string) { … } }` syntax is nearly functy
+  already — was **closed as "not planned"**; the maintainer's stated reasons were that
+  they "are not the owner of the HCL language" and it "would be a significant change to
+  maintain in a fork," with provider-defined functions offered as the sanctioned
+  alternative. The HashiCorp origin request (hashicorp/terraform#27696) is open but
+  untriaged. Notably, several thread objections are ones functy's design *answers*: that
+  HCL attributes are unordered (bad for a function body) — functy owns an **ordered**
+  statement grammar, so bodies are never HCL attribute maps; that embedding bodies as
+  **strings** kills tooling and makes functions "third-class citizens" with no
+  inspectable purity/cycle guarantees — clean embedding keeps them real source (typed,
+  statically checkable, pure-by-construction, bounded, with existing check/fmt/symbols +
+  a VSCode extension); and that the tool "doesn't own HCL and can't change it" — the
+  embedding shim requires **zero** HCL changes (it reuses HCL's own lexer and expression
+  parser and preprocesses at the byte level), and functy is an external MIT library, so
+  the ask is "link a library + a small shim," not "fork HCL." What functy does *not*
+  remove are the governance objections proper: language-surface growth, an added eval
+  phase, and long-term maintenance.
+
+  **The one variant that might thread the needle — a *built-in* `functy` provider.**
+  Distinct from the third-party provider above: core code that loads local `.cty` at
+  config-load time and exposes them as `provider::functy::name`. It reuses machinery both
+  projects already accepted — dynamic provider-defined functions, and the "built-in
+  functions as sugar for a built-in provider" direction (opentofu/opentofu#1707) — so it
+  asks them to extend a mechanism they *own* rather than add language syntax they have
+  rejected. The static-schema fragility that sank the third-party path does not apply to
+  a built-in provider (core controls schema timing, so enumerating local files is
+  legitimate). It also cleanly answers a maintainer's own thread sketch —
+  `providers::custom_fn::exec(body, …)` with the body as a string — by replacing the
+  string with real `.cty` source. Cost: the verbose-but-idiomatic `provider::functy::`
+  call form. This is the most viable path if the idea is ever pursued; the credible next
+  step (not taken) would be a working OpenTofu fork/prototype plus a written RFC, since
+  functy's differentiator is an end-to-end demonstration that abstract UDF requests never
+  had. Recorded as analysis; nothing here is planned.
 
 ## Type system
 

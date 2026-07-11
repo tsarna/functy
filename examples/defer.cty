@@ -1,0 +1,41 @@
+// `defer` schedules an expression to run when the enclosing function exits — by
+// return, by falling off the end, or by an error unwinding past it — in LIFO
+// order. It exists for cleanup side effects, so this example uses `println` to
+// make the ordering visible.
+//
+//   functy run examples/defer.cty
+//       # opened a
+//       # opened b
+//       # working
+//       # closing b      <- LIFO: the last defer runs first
+//       # closing a
+//
+//   functy run examples/defer.cty --func with_error --output raw
+//       # setup
+//       # cleanup ran    <- the defer still runs while the error unwinds
+//       # caught: boom
+
+func main() {
+    println("opened a")
+    defer println("closing a")
+    println("opened b")
+    defer println("closing b")
+    println("working")
+}
+
+// A `defer` runs even when an error unwinds through the function, so the caller
+// sees the cleanup happen before it catches the error.
+func risky() {
+    defer println("cleanup ran")
+    println("setup")
+    throw "boom"
+}
+
+func with_error() -> string {
+    try {
+        risky()
+    } catch e {
+        return "caught: ${e.message}"
+    }
+    return "no error"
+}
