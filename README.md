@@ -228,7 +228,10 @@ a very basic interactive `repl` — see [doc/cli.md](doc/cli.md).
 
 Designed-but-not-yet-implemented features (module imports / namespacing, closures,
 declaration annotations, nested *open* types, ...) are recorded in
-[FUTURE.md](FUTURE.md). The design rationale ("why a language, not an embedded
+[FUTURE.md](FUTURE.md); designs that were worked out and then *declined*, with the
+reasoning, are in [REJECTED.md](REJECTED.md); and the standing analysis of Terraform /
+OpenTofu as a potential host — undecided, neither planned nor rejected — is in
+[TERRAFORM.md](TERRAFORM.md). The design rationale ("why a language, not an embedded
 one") is in [DESIGN.md](DESIGN.md), and the internal architecture is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
