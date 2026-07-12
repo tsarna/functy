@@ -1,22 +1,23 @@
-# functy on Terraform / OpenTofu
+# functy on Terraform: the blocked routes
 
-Terraform and OpenTofu are the most consequential potential hosts for functy that
-functy does not currently serve. They are also the hardest: unlike an ordinary host,
-which links functy as a library and is free to shape its own configuration language,
-these tools are governed projects whose extension points are deliberately narrow, and
-whose maintainers have already ruled on most of what functy would want to ask for.
+Terraform and OpenTofu are the most consequential potential hosts for functy that functy
+does not currently serve. They are also the hardest: unlike an ordinary host, which links
+functy as a library and is free to shape its own configuration language, these tools are
+governed projects whose extension points are deliberately narrow, and whose maintainers
+have already ruled on most of what functy would want to ask for.
 
-This file is the analysis of that question — kept separate from both `FUTURE.md` and
-`REJECTED.md` because it is neither a planned direction nor a rejected one: nothing here
-has been decided. It is a map of the terrain, written down so the
-question can be re-opened without re-deriving it, and so that a "wouldn't this be great
+> **Read [`OPENTOFU.md`](OPENTOFU.md) first.** There *is* a route that works — a provider
+> for OpenTofu, buildable today with no core change and nobody's permission. It has its own
+> file because it is a live design, while everything here is settled and blocked.
+>
+> **This file is the rest:** what Terraform allows (much less), what would require a core
+> change (a lot), and the governance history that explains why. Nothing in it is planned.
+
+Three routes are analyzed below, in decreasing order of plausibility. They are recorded so
+the question can be re-opened without re-deriving it, and so that a "wouldn't this be great
 in Terraform?" impulse meets the constraints before it meets a keyboard.
 
-**Nothing in this file is planned.** Two routes are analyzed — a provider binding that
-works on stock Terraform, and a core change that does not — along with a third variant
-that may be the only one able to thread the needle.
-
-## The prior art, and why it matters
+## The governance picture: the two feature requests
 
 Everything here is downstream of one long-standing request: **user-defined functions in
 the configuration language.** It has been asked in both projects, and the two answers are
@@ -33,41 +34,62 @@ the boundary conditions for anything functy might propose.
   provider-defined functions offered as the sanctioned alternative.
 
 Read those two before reading anything below. They establish that the *feature* is
-wanted, the *governance door* is closed on the OpenTofu side and unmoving on the
-HashiCorp side, and that provider-defined functions are the only channel either project
-currently blesses — which is exactly why Route 1 exists despite negating much of functy's
-value, and why Route 3 (a *built-in* provider, extending a mechanism they already own
-rather than adding language syntax they have refused) is the most viable of the three.
+wanted, that the *governance door* is closed on the OpenTofu side and unmoving on the
+HashiCorp side, and that **provider-defined functions are the only channel either project
+currently blesses**. Terraform's maintainer (@jbardin) put the boundary about as plainly
+as it can be put, closing #27696:
+
+> *"HCL is not a general purpose programming language… **The RPC layer is where we've
+> chosen to extend the function interface, and will be what's available for the
+> foreseeable future.**"*
+
+That sentence is why Routes 2 and 3 below (which ask for language surface) are recorded
+rather than pursued — and why the OpenTofu provider (`OPENTOFU.md`), which asks for nothing
+and lives entirely inside the RPC layer they endorse, is the live one. The maintainers did
+not merely tolerate the provider channel; they named it as the *only* one.
 
 A third rejection, from HCL itself rather than the tools, bounds the inline-embedding
 variant of Route 2: [hashicorp/hcl#207](https://github.com/hashicorp/hcl/issues/207).
 See `REJECTED.md`.
 
-## Route 1: a provider binding (speculative — low priority)
+## Route 1: stock Terraform — a provider binding (speculative — low priority)
 
-Works on stock Terraform; asks nothing of anyone. Expose functy-authored functions
-to Terraform as provider-defined functions, callable as `provider::functy::<name>(...)`.
-Since Terraform 1.8 / OpenTofu 1.7 this is the *only* sanctioned way to add custom
-functions, delivered through terraform-plugin-framework's `function` package (the
-provider declares typed parameters + a typed return per function and implements `Run`).
-The binding is conceptually thin — a compiled functy function is already a `cty.Function`
-with a static return type, and the framework's `Run` bridges to cty over the wire — so
-the adapter mainly translates functy/cty types into framework type definitions and
-marshals args. functy's typed signatures + strict typing are what make this clean:
-Terraform *requires* declared parameter/return types, which functy can now guarantee.
+The OpenTofu provider (`OPENTOFU.md`) depends on an OpenTofu-only protocol feature. On
+**Terraform**, the function list is fixed before the provider is configured, so a provider
+cannot learn about your `.cty` files at all. That leaves two shapes, and neither is good:
 
-**Worth it? Mostly no — recorded for the analysis, not as a roadmap item.** The core
-value of functy as a scripting extension is the no-build edit→run loop (drop a `.cty`,
-it's live — what Vinculum and the standalone CLI give you). Terraform's provider model
-structurally forbids exactly that: static schema, registry-distributed binaries pinned
-via `.terraform.lock.hcl`. So the only *robust* integration (option 1 below) reintroduces
-the build-and-publish loop functy exists to eliminate, and the paths that keep the
-no-build feel (options 2–3) are the unsafe ones. The robust option negates the value;
-the value-preserving options aren't robust — an intrinsic tension, not a gap to engineer
-around. Once a build step is mandatory the marginal saving over writing the functions in
-Go shrinks to "bodies in functy vs. Go" (the annoying framework boilerplate is mechanical
-and code-generatable *without* functy), and off-the-shelf providers (corefunc, validatefx,
-the AWS/time/google functions) already cover the common cases.
+- **A compiled catalog.** `.cty` sources compiled into a custom provider binary at build
+  time, exposed as `provider::functy::<name>(...)` via terraform-plugin-framework's
+  `function` package. Real static types (functy's typed signatures are exactly what the
+  framework wants), but the user must build and publish a provider. This is what
+  `corefunc` is, minus the embedded language.
+- **A generic `eval`.** One function taking the source as a string:
+  `provider::functy::eval("<source>", {args})`, returning `dynamic`. This is the shape
+  `terraform-provider-starlark` chose and the one `terraform-provider-lua` falls back to
+  on Terraform. It works everywhere, and it throws away everything functy is for: no
+  static types (the return is `dynamic`, deferring all type errors to apply), the function
+  body is a quoted string your editor cannot help you with, and the call site is *more*
+  verbose than the HCL it replaces.
+
+**Worth it? Mostly no — recorded for the analysis, not as a roadmap item.** The core value
+of functy as a scripting extension is the no-build edit→run loop (drop a `.cty`, it's live
+— what Vinculum and the standalone CLI give you). Terraform's provider model structurally
+forbids exactly that: static schema, registry-distributed binaries pinned via
+`.terraform.lock.hcl`. So the only *robust* integration (the compiled catalog) reintroduces
+the build-and-publish loop functy exists to eliminate, and the path that keeps the no-build
+feel (generic `eval`) discards the typing that makes functy worth having. The robust option
+negates the value; the value-preserving option isn't robust — an intrinsic tension, not a
+gap to engineer around. Once a build step is mandatory, the marginal saving over writing
+the functions in Go shrinks to "bodies in functy vs. Go" (the framework boilerplate is
+mechanical and code-generatable *without* functy), and off-the-shelf providers (corefunc,
+validatefx, the AWS/time/google functions) already cover the common cases.
+
+**Note what this asymmetry means.** The same feature is a clean plugin on OpenTofu and an
+unsatisfying compromise on Terraform, purely because of one protocol decision. If a
+Terraform-shaped answer is ever wanted, the honest ask is not "let us add language syntax"
+(refused) but "call `GetFunctions()` after `ConfigureProvider`, as OpenTofu does" — a
+request confined to the RPC layer that @jbardin explicitly named as *the* place Terraform
+extends the function interface.
 
 **The one framing where it's not a waste** is narrow and worth stating precisely: not
 "functy as a Terraform scripting extension" (Terraform kills that), but *functy as a
@@ -90,23 +112,20 @@ Two constraints shape the design:
   core re-exposed). The natural fit is exactly what existing provider functions do:
   pure data transforms — parse↔build pairs, encoding/formatting, validation, CIDR /
   semver / time helpers — things awkward to express in raw HCL.
-- **Static function schema vs. file-loaded functions (the crux).** Terraform fetches a
-  provider's function list as *static schema*, before and independently of provider
-  configuration — so a provider cannot be told "load `./funcs/*.cty` and expose
-  whatever they define." Options, increasing in cleverness and decreasing in honesty:
-  (1) **build-your-own-provider** — `.cty` compiled into a custom provider binary at
-  build time (cleanest typing, heaviest ergonomics; the honest MVP); (2) **one generic
-  dynamic function** — `provider::functy::eval("expr", {args})` returning a dynamic
-  type (sidesteps the static set but discards static typing and is *more* verbose —
-  rejected as defeating the point); (3) **scan-at-schema-time** — enumerate `*.cty` in
-  the working dir when Terraform requests the schema (most "magic", but makes the
-  schema depend on local files, against Terraform's stability assumptions).
+- **The static function schema (the crux — and it is a Terraform-only crux).** Terraform
+  fetches a provider's function list as *static schema*, before and independently of
+  provider configuration, so a provider cannot be told "load `./funcs/*.cty` and expose
+  whatever they define." A tempting third option — **scan-at-schema-time**, enumerating
+  `*.cty` in the working directory when the schema is requested — is not merely
+  inadvisable but *unavailable*: the schema RPC carries no knowledge of the configuration
+  directory, and no project in the wild attempts it. That leaves the compiled catalog and
+  the generic `eval` described above. OpenTofu removes the crux entirely (`OPENTOFU.md`); on
+  Terraform it is load-bearing and unfixable from outside.
 
-The call-site verbosity (`provider::functy::add(2, 3)`) is inherent and inescapable:
-Terraform namespaces provider functions deliberately and offers no aliasing or import,
-and functions are not first-class values (so `locals { add = provider::functy::add }`
-is impossible). It is, however, idiomatic Terraform. This item is gated on choosing an
-answer to the static-schema question; option (1) is the recommended starting point.
+The call-site verbosity (`provider::functy::add(2, 3)`) is inherent and inescapable on
+both tools: they namespace provider functions deliberately and offer no aliasing or
+import, and functions are not first-class values (so `locals { add = provider::functy::add }`
+is impossible). It is, however, idiomatic.
 
 **Motivating examples.** The killer demo is not `add(2, 3)` — it is the two categories
 that dominate real provider functions, both of which are tedious in Go and painful in
@@ -152,25 +171,33 @@ Re-exposed, these are called `provider::functy::arn_parse(...)` /
 `.cty` instead of maintaining a Go provider. All such functions are pure (no I/O, no
 state), so they sit cleanly inside the pure-only constraint.
 
-## Route 2: embedded functy (a core change — explored, not planned)
+## Route 2: functions in the language itself (a core change — explored, not planned)
 
-Route 1 works on stock Terraform but reintroduces the build/publish loop and cannot load
-local `.cty` (static schema). The opposite trade is to author functions *in the
-configuration* — as sibling `.cty` files, or as inline `functy { }` regions (see
-*Embedding functy inside a host's HCL files* in `REJECTED.md` for both mechanisms, and
-for why inline regions carry a cost that sibling files do not) — and have the tool
-compile and expose them.
-This is the long-requested "user-defined functions in the language" feature, with
-functy as the implementation.
+Route 1 and the OpenTofu provider both put functions behind a `provider::functy::`
+namespace. The ambitious alternative is to make config-defined functions **first-class in
+the language**, callable
+as plain `f(x)` — authored as sibling `.cty` files, or as inline `functy { }` regions (see
+*Embedding functy inside a host's HCL files* in `REJECTED.md` for both mechanisms, and for
+why inline regions carry a cost that sibling files do not) — with the tool compiling and
+exposing them. This is the long-requested "user-defined functions in the language" feature
+of #27696 / #793, with functy as the implementation.
 
-**It requires a core change; it cannot be a plugin.** To call a config-defined function
-elsewhere in the same config, the compiled function must be injected into the eval
-context the tool builds during config load (`lang.Scope.Functions()`, a
-`map[string]function.Function`). A third-party provider exposes only a *static* gRPC
-schema in its own `provider::name::` namespace and cannot inject into the config's
-table; a preprocessor can't help either, since Terraform functions aren't first-class
-values, so a call site whose arguments derive from resource attributes can't be
-macro-expanded ahead of eval. Only core can do it.
+**This is the route that requires a core change and cannot be a plugin** — and note that
+the claim is narrower than it used to look. It is *unqualified* namespacing that is out of
+reach: to call a config-defined function as bare `f(x)` elsewhere in the same config, the
+compiled function must be injected into the eval context the tool builds during config
+load (`lang.Scope.Functions()`, a `map[string]function.Function`). A provider can only
+publish into its own `provider::name::` namespace over gRPC and cannot touch the config's
+own function table; a preprocessor cannot help either, since these functions are not
+first-class values, so a call site whose arguments derive from resource attributes cannot
+be macro-expanded ahead of eval. Only core can do it.
+
+What the OpenTofu provider shows is that **the rest of the feature — loading local `.cty`, compiling it,
+and exposing real typed functions — does not need core at all** on OpenTofu. The core
+change buys exactly one thing: dropping the `provider::functy::` prefix. That is a
+genuine ergonomic win and it is the thing the issue threads were actually asking for, but
+it is a much smaller delta than this route's framing once implied, and a much worse
+cost-to-benefit trade than simply shipping the OpenTofu provider.
 
 **The fit, if core could change, is excellent** — better than the provider path. A
 compiled functy function *is* a `cty.Function` with a static return type, exactly what
@@ -211,19 +238,28 @@ ecosystem — but not zero: `tflint`, `terraform-ls`, `tfsec` and every other th
 consumer of `.tf` files are exactly the tooling that would break. **Sibling `.cty` files
 avoid the question entirely, and are the recommended shape for this route.**
 
-## Route 3: a *built-in* `functy` provider — the one variant that might thread the needle
+## Route 3: a *built-in* `functy` provider — largely superseded by the OpenTofu provider
 
-Distinct from the third-party provider of Route 1: core code that loads local `.cty` at
-config-load time and exposes them as `provider::functy::name`. It reuses machinery both
-projects already accepted — dynamic provider-defined functions, and the "built-in
-functions as sugar for a built-in provider" direction (opentofu/opentofu#1707) — so it
-asks them to extend a mechanism they *own* rather than add language syntax they have
-rejected. The static-schema fragility that sank the third-party path does not apply to
-a built-in provider (core controls schema timing, so enumerating local files is
-legitimate). It also cleanly answers a maintainer's own thread sketch —
-`providers::custom_fn::exec(body, …)` with the body as a string — by replacing the
-string with real `.cty` source. Cost: the verbose-but-idiomatic `provider::functy::`
-call form. This is the most viable path if the idea is ever pursued; the credible next
-step (not taken) would be a working OpenTofu fork/prototype plus a written RFC, since
-functy's differentiator is an end-to-end demonstration that abstract UDF requests never
-had. Recorded as analysis; nothing here is planned.
+Core code that loads local `.cty` at config-load time and exposes it as
+`provider::functy::name`, shipped *in* the tool rather than installed from the registry.
+It reuses machinery both projects already accepted — dynamic provider-defined functions,
+and the "built-in functions as sugar for a built-in provider" direction
+(opentofu/opentofu#1707) — so it asks them to extend a mechanism they *own* rather than
+add language syntax they have refused. It also answers a maintainer's own thread sketch —
+`providers::custom_fn::exec(body, …)`, with the body as a string — by replacing the string
+with real `.cty` source.
+
+**This was written as the most viable path, and the OpenTofu provider has since overtaken
+it.** Every
+capability listed above is achievable *today*, on OpenTofu, by an ordinary third-party
+provider, with no core change and no permission. What remains exclusive to a built-in
+provider is thin: no separate `required_providers` entry / registry install, and a
+plausible answer for **Terraform**, where the third-party route is blocked by the
+static-schema rule that core itself would not be bound by.
+
+So this stays recorded as the shape to propose *if* someone ever wants first-party
+support — but the honest sequencing is now obvious: **build the OpenTofu provider first.**
+A working
+provider is the argument. Proposing a built-in before a working third-party one exists is
+asking a governed project to adopt something nobody has demonstrated; proposing it after
+is showing them something their users already run.

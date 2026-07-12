@@ -159,7 +159,7 @@ file over, and every file in the tree remains exactly what its extension claims 
 
 The verdict would change if the calculus changed. If a host's config files were never
 touched by generic HCL tooling — a closed ecosystem, or a tool that *is* the ecosystem
-(see the Terraform/OpenTofu core-change discussion in `FUTURE.md`, where core itself
+(see the Terraform/OpenTofu core-change discussion in `TERRAFORM.md`, where core itself
 would own the parser) — the cost largely evaporates and the analysis above becomes a
 build plan rather than a post-mortem.
 
@@ -288,7 +288,7 @@ available option beats an elegant unavailable one.
 
 The philosophical one is that the region becomes an attribute *value* rather than a
 declaration site — the "embedding bodies as strings makes functions third-class citizens"
-objection from the OpenTofu thread (quoted under the Terraform item in `FUTURE.md`). It is
+objection from the OpenTofu thread (quoted in `TERRAFORM.md`). It is
 weaker than it sounds: highlighting is TextMate injection either way (SQL-in-heredoc is a
 well-worn path), diagnostics land at true positions either way, and the host recovers a
 byte range from the AST either way. The string-ness is a fact about the AST, not about the

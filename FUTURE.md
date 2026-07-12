@@ -274,11 +274,6 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
     namespace \"foo::bar::\""* even when the namespace exists and is populated. Pre-existing
     (the same defect affects name suggestions for unqualified calls), but namespaces make
     it the default experience for a mistyped call. The fix is upstream in HCL.
-  - **`kind: "namespace"` in `functy symbols`.** The additive `namespace` / `qualified` /
-    `private` fields shipped; a distinct `kind:"namespace"` symbol did **not**, because
-    `vscode-functy`'s `src/symbols.ts` indexes a *total* `Record` by `s.kind` and an
-    unknown kind yields `undefined` where a `vscode.SymbolKind` is required. Land an
-    unknown-kind fallback in the extension first, then emit the new kind.
   - **REPL namespace context.** The REPL evaluates against the host context, so namespaced
     functions need qualified names and privates are unreachable from the prompt. Correct by
     design — the session is not "inside" any namespace — but a `:namespace foo::bar`
@@ -395,7 +390,12 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
 ## Safety & execution
 
 - **Execution limits (step / time budget).** functy permits unbounded `for` / `while`
-  over a tree-walking interpreter, so a single `.cty` file can wedge the process. The
+  over a tree-walking interpreter, so a single `.cty` file can wedge the process.
+  Worth knowing: this is the **one unclaimed safety property** among the embedded-language
+  Terraform providers (see `OPENTOFU.md`). None of them bounds execution — the Starlark
+  provider even *disables* Starlark's built-in termination guarantees and never sets a step
+  budget, so a runaway script hangs `plan`. If functy ever ships a provider, this item
+  stops being hygiene and becomes the differentiator. The
   design below is **cooperative, not preemptive** — functy can only
   checkpoint at its *own* interpreter boundaries, so a single long-running host or
   cty-stdlib call (a huge `range()`, a catastrophic regex) runs to completion regardless
@@ -581,10 +581,15 @@ links the library directly and supplies its own richer context). Planned additio
     non-destructive open registration (`RegisterOpenType`), currently leaf-only.
 
   The host picks identity vs. open per type.
-- **Terraform / OpenTofu as a host — see `TERRAFORM.md`.** Both routes (a
-  provider binding on stock Terraform, and a core change exposing config-defined
-  functions) are analyzed at length there. Nothing is planned; the file exists so the
-  question can be re-opened without re-deriving it.
+- **An OpenTofu provider — see `OPENTOFU.md`.** OpenTofu 1.7 lets a *configured* provider
+  mint functions dynamically (an OpenTofu-only protocol feature), so a `functy` provider
+  handed `file("./lib.cty")` can expose real, statically-typed `provider::functy::name`
+  functions — **no core change, no fork, and no build step for the user.** Two
+  proof-of-concept providers (Go/Yaegi and Lua) already do this with other languages;
+  functy fits better than either, since a compiled functy function *is* already a
+  `cty.Function` with a static signature. Nothing is planned, but this is the one
+  Terraform-adjacent idea that is buildable today. What is *not* possible — on Terraform,
+  and in the language itself — is analyzed separately in `TERRAFORM.md`.
 
 ## Type system
 
