@@ -2,7 +2,8 @@
 
 functy is an imperative language whose values are [cty](https://github.com/zclconf/go-cty)
 values and whose *expressions* are HCL. A functy source file (`.cty`) is a sequence
-of function declarations; compiling one yields ordinary `cty` `function.Function`
+of top-level declarations — functions, plus optional `const`/`var`/`type` aliases
+and co-located `test` blocks; compiling one yields ordinary `cty` `function.Function`
 values that can be added to an `*hcl.EvalContext` and called from any HCL
 expression. functy parses the *statement* grammar (`func`, `var`, `if`/`else`,
 `for`/`while`, `switch`, `try`/`catch`, ...) itself, but hands every embedded
@@ -43,9 +44,11 @@ depends only on:
 - `github.com/zclconf/go-cty` (and `.../cty/function`, `.../cty/convert`) — the
   value and type system.
 
-`github.com/spf13/cobra` is used **only** by the `cmd/functy` CLI, never by the
-library. Do not introduce new dependencies into the root package without a strong
-reason; a host embedding functy should be able to take it on with no surprises.
+`github.com/spf13/cobra` (the `cmd/functy` CLI) and `github.com/chzyer/readline` /
+`golang.org/x/term` (the `repl/` package) are used **only** outside the root
+library, never by it. Do not introduce new dependencies into the root package
+without a strong reason; a host embedding functy should be able to take it on with
+no surprises.
 
 ## Architecture overview
 
@@ -74,7 +77,7 @@ functions:
    environment. The parser walks the token stream for statement structure, and for
    every embedded expression or type annotation it recovers the exact byte span and
    calls `hclsyntax.ParseExpression` (see below). Parsed declarations accumulate
-   into the `Result` (`Funcs`, plus optionally `Consts`/`Vars`/`Types`).
+   into the `Result` (`Funcs` and `Tests`, plus optionally `Consts`/`Vars`/`Types`).
 5. **Compile.** `Result.Compile(evalCtxFn)` turns each `FuncDecl` into a cty
    `function.Function`. The eval context is **late-bound**: each function captures
    `evalCtxFn` and calls it at *invocation* time, not at compile time. This is what
@@ -91,9 +94,10 @@ Root package (`github.com/tsarna/functy`):
 | `source.go` | `ParseSources` — discovers `.cty` sources from paths, directories, `embed.FS`, `[]byte`, and `Source` values; defines the `.cty` `Extension`. |
 | `lexer.go` | `lex` and the `token` type: wraps `hclsyntax.LexConfig`, adapts comments/semicolons, and provides the token classifiers (bracket, terminator, line-continuation) the parser depends on. |
 | `parser.go` | The recursive-descent statement parser, including `scanSpan` (the expression-boundary algorithm) and the per-context stop functions. |
-| `ast.go` | AST node types: `FuncDecl`, `Param`, and every `Statement` (`VarDecl`, `Assign`, `ExprStmt`, `Return`, `Block`, `IfChain`, `For`, `Switch`, `Try`, `Throw`, `Defer`, `Break`, `Continue`). |
+| `ast.go` | AST node types: `FuncDecl`, `TestDecl`, `Param`, and every `Statement` (`VarDecl`, `Assign`, `CaptureAssign`, `ExprStmt`, `Return`, `Block`, `IfChain`, `For`, `Switch`, `Try`, `Throw`, `Defer`, `Break`, `Continue`, `Fallthrough`). |
 | `aliases.go` | `collectTypeAliases` / `resolveTypeAliases` — the project-wide, order-independent `type Name = <type>` pass that runs before the main parse. |
-| `directives.go` | `Directive`, `collectLeadingDirectives`, and Go-style `//namespace:name args` directive-comment parsing. |
+| `directives.go` | `Directive` and Go-style `//namespace:name args` directive-comment parsing (`parseDirectiveComment`). |
+| `comments.go` | The `Comment` type, comment collection, `leadingDirectives` (a file's leading directive block), and doc-comment attachment to declarations. |
 | `strict.go` | Strict-typing model: `reqSource` (off/host/file), `combineReq` (tighten-only folding), and `interpretFunctyDirectives` for the `functy:strict`/`functy:require` directives. |
 | `types.go` | The `TypeConstraint` interface and its implementations, plus the `TypeResolver`/`typeEnv` that resolves an HCL type expression (including named capsule and open predicate types) into a constraint. |
 | `scope.go` | `Scope` — the chained lexical scope, `binding` slots with optional pinned type constraints, and the `dirty` flag that drives eval-context caching. |
@@ -101,9 +105,18 @@ Root package (`github.com/tsarna/functy`):
 | `interp.go` | The tree-walking interpreter (`interp`, `execBlock`, per-statement executors) and `scopeEvalContext`, which merges a scope into the host eval context. |
 | `builder.go` | `Compile` and `BuildFunction` — turn a `FuncDecl` into a cty `function.Function`, handling required/optional/variadic parameters, defaults, defers, and return-type coercion. |
 | `errors.go` | functy error values: `errorValue`/`errValueFromDiags` construction, the open `error` type predicate, and `errorMessage` extraction at the function boundary. |
+| `stdlib.go` | `Stdlib()` / `StdlibExtras()` — the expression builtins a host merges into the eval context (`typeof`, `typekind`, `cond`, `switch`, `error`, `assert`; opt-in `try`, `can`). |
+| `reflection.go` | Reflection builtins over the parsed declarations (`help`/`doc`), consumed by the CLI and REPL. |
+| `assert.go` | The `assert` builtin: raises a `ThrownError` carrying the condition's source range and operand values, so a failure reports where and why. |
+| `testrun.go` | Running `test` blocks: `RunTests`/`RunTestsMatching`, the `TestOutcome` type (passed/failed/skipped), and the test-only `skip(...)` builtin. |
+| `format.go` | The canonical formatter — `Format` / `(*Parser).Format` — an AST reprinter backing `functy fmt`. |
+| `typestring.go` | Renders a `cty` type back into functy's type-annotation grammar (the inverse of the type resolver). |
 
-The CLI lives under `cmd/functy/` (`main.go`, `check.go`, `run.go`, `load.go`,
-`baseline.go`, `output.go`) and is the only consumer of cobra.
+The CLI lives under `cmd/functy/` — `main.go` plus one file per verb (`run.go`,
+`eval.go`, `repl.go`, `check.go`, `test.go`, `fmt.go`, `symbols.go`, `version.go`)
+and the shared `load.go`/`baseline.go`/`output.go` — and is the only consumer of
+cobra. The interactive REPL's engine is a separate `repl/` package (the sole user
+of `readline` / `golang.org/x/term`).
 
 ## The expression-boundary algorithm
 
@@ -201,15 +214,3 @@ determined; a defer that raises replaces the in-flight outcome.
 `Detail`, and `Subject` range. The parser keeps recovering after an error
 (best-effort), so a `Result` may be returned alongside error diagnostics — callers
 must check `diags` before using it.
-
-## Lineage
-
-functy's runtime — the chained `Scope`, the `Signal` control-flow model, and the
-tree-walking interpreter that evaluates lazy HCL expressions against a late-bound
-eval context — was adapted from the `procedure` block of the
-[Vinculum](https://github.com/tsarna/vinculum) project, which pioneered the idea of
-an imperative front-end compiling down to a cty `function.Function`. The design was
-**copied and then evolved independently**; functy is a standalone module with no
-dependency on Vinculum, and the two have diverged. The shared ancestry is historical
-context, not a live coupling. Vinculum will be adopting functy and deprecating its
-`procedure` block at any rate.

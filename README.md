@@ -60,7 +60,13 @@ go get github.com/tsarna/functy
 The library depends only on `github.com/hashicorp/hcl/v2` and
 `github.com/zclconf/go-cty`.
 
-As a CLI:
+As a CLI, on macOS via [Homebrew](https://brew.sh):
+
+```sh
+brew install tsarna/tap/functy
+```
+
+or with `go install` (any platform):
 
 ```sh
 go install github.com/tsarna/functy/cmd/functy@latest
@@ -98,7 +104,10 @@ test reports the source line and operand values.
 
 See [doc/cli.md](doc/cli.md) for the full CLI reference,
 [doc/language.md](doc/language.md) for the language reference, and
-[doc/language.md#tests](doc/language.md#tests) for inline tests.
+[doc/language.md#tests](doc/language.md#tests) for inline tests. The
+[examples/](examples/) directory has runnable samples covering local variables,
+control flow, both error-handling styles, type aliases, variadic parameters,
+`switch`/`fallthrough`, tests, and more.
 
 ## Library usage
 
@@ -207,15 +216,18 @@ it, so a host registers its capsule/open types once and uses them both for parsi
 functy implements a complete core language: typed and dynamic variables,
 reassignment, all control-flow forms, variadic and optional parameters,
 structured error handling (`try`/`catch`/`finally`, `throw`, `defer`, and
-`val, err = expr` error capture), a `null` (void) return type, and the
-`functy run` / `functy check` CLI commands.
+`val, err = expr` error capture), a `null` (void) return type, and co-located
+`test` blocks.
 
 Types are resolved by functy's own resolver (not `ext/typeexpr`), with a
 host-pluggable named-type environment for capsule and open types, `type` aliases,
 and opt-in strict typing.
 
-Designed-but-not-yet-implemented features (a REPL, a formatter, module imports,
-closures, nested *open* types, ...) are recorded in
+The CLI is comprehensive — `run`, `eval`, `check`, `test`, `fmt`, `symbols`, and
+a very basic interactive `repl` — see [doc/cli.md](doc/cli.md).
+
+Designed-but-not-yet-implemented features (module imports / namespacing, closures,
+declaration annotations, nested *open* types, ...) are recorded in
 [FUTURE.md](FUTURE.md). The design rationale ("why a language, not an embedded
 one") is in [DESIGN.md](DESIGN.md), and the internal architecture is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
