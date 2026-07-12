@@ -26,7 +26,7 @@ func evalCmd() *cobra.Command {
 			files := args[1:]
 
 			baseline := baselineFunctions(cmd.OutOrStdout())
-			_, ctx, fileMap, diags := loadProgram(files, baseline)
+			_, _, ctx, fileMap, diags := loadProgram(files, baseline)
 			if diags.HasErrors() {
 				return emitRunError(cmd, jsonOut, fileMap, diags, "compilation failed")
 			}

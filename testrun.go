@@ -100,12 +100,30 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 		}()
 	}
 
+	// A test body belongs to its file's namespace, so it must resolve that
+	// namespace's functions — including its private ones — by their bare names,
+	// exactly as a function in the same file would. Build the unit layers against
+	// *this* evalCtxFn rather than reusing any from an earlier Compile: RunTests is
+	// handed its own context function, and binding test bodies to a compile-time
+	// closure instead would be a silent, hard-to-see bug. Diagnostics are dropped
+	// here — duplicates are reported by the Compile every caller already runs.
+	//
+	// `skip` still resolves: it is injected into evalCtxFn()'s context above, which
+	// is the *parent* of the unit layer, and HCL walks the whole chain. (A namespace
+	// may itself declare `func skip()`, which shadows it for that namespace's tests
+	// — a consequence of local-wins, documented in doc/language.md.)
+	compiled, _ := r.CompileUnits(evalCtxFn)
+
 	outcomes := make([]TestOutcome, 0, len(r.Tests))
 	for _, td := range r.Tests {
 		if filter != nil && !filter(td.Name) {
 			continue
 		}
-		fn := BuildFunction(&FuncDecl{Name: td.Name, Body: td.Body}, evalCtxFn)
+		bodyCtxFn := evalCtxFn
+		if table, ok := compiled.Units[td.Namespace]; ok {
+			bodyCtxFn = unitCtxFn(evalCtxFn, table)
+		}
+		fn := BuildFunction(&FuncDecl{Name: td.Name, Namespace: td.Namespace, Body: td.Body}, bodyCtxFn)
 		start := time.Now()
 		_, err := fn.Call([]cty.Value{})
 		o := TestOutcome{Name: td.Name, DefRange: td.DefRange, Duration: time.Since(start), Err: err}

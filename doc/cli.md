@@ -37,7 +37,8 @@ hello alice
 ```
 
 - **Entry point.** `main` by default; `--func NAME` selects another. It is an
-  error if the chosen function is absent.
+  error if the chosen function is absent. `NAME` may be a bare name or a
+  fully-qualified one — see *Namespaces* below.
 - **Files vs. arguments.** Positional arguments before `--` are source files;
   everything after `--` is passed to the entry function. With no `--`, all
   positionals are files and the entry function is called with no arguments.
@@ -53,9 +54,12 @@ hello alice
   machine-readable report instead of the human-readable text, for editor tooling.
   Every verb's `--json` report goes to stderr, so `run`'s **stdout** stays reserved
   for the program's own output (`print` / `println`) and the return value, both
-  left untouched by `--json` (`--output` still controls the value's format). On
-  failure stderr is a single well-formed object and the exit status is non-zero; on
-  success stderr is empty. The report shape matches `check --json`:
+  left untouched by `--json` (`--output` still controls the value's format). Stderr
+  is always a **single** well-formed object: warnings (such as a namespaced function
+  shadowing a built-in) are folded into the same report as any error rather than
+  emitted separately, so a consumer never sees two concatenated objects. On failure
+  the exit status is non-zero; on success stderr is empty unless there were
+  warnings. The report shape matches `check --json`:
 
   ```console
   $ functy run --json broken.cty -- -3
@@ -70,6 +74,42 @@ hello alice
     ]
   }
   ```
+
+### Namespaces
+
+A file that declares `namespace acme::math` registers its `main` as
+`acme::math::main`, so `--func` (and its `main` default) resolves in two steps:
+
+1. an **exact** name — a host function, or an exported functy function under its
+   qualified name (`--func acme::math::double`);
+2. a **bare** name declared in exactly one namespace.
+
+Step 2 is what keeps `functy run file.cty` working the moment a file grows a
+namespace, and it is also the only way to invoke a **private** function, since a
+`_`-prefixed function is never placed in the eval context at all:
+
+```console
+$ functy run math.cty                     # resolves acme::math::main
+42
+$ functy run math.cty --func _twice -- 8  # a private helper, for debugging
+16
+```
+
+A bare name declared in *several* namespaces is ambiguous and is reported as
+such, listing the candidates, rather than guessed at:
+
+```console
+$ functy run ./src
+functy: entry function "main" is declared in more than one namespace
+(acme::math::main, acme::text::main); name one of them with --func
+```
+
+**Shadowing warning.** A namespaced function whose bare name matches a baseline
+built-in shadows it inside that namespace. `run` and `check` report this as a
+warning (it is legal, and the qualified name still works). The equivalent clash in
+the global namespace remains a hard error, since there the function really would
+replace the built-in. See
+[language.md](language.md#shadowing-local-wins).
 
 ### Top-level constants
 
@@ -315,6 +355,13 @@ entry function if present, then drops into the prompt. `:help` lists the REPL's
 meta-commands; the `help()` / `doc()` [baseline functions](#baseline-functions)
 introspect the available functions from inside the session.
 
+**Namespaces in the REPL.** The session evaluates against the *host* context, not
+from inside any namespace — so call namespaced functions by their qualified names
+(`acme::math::double(21)`), exactly as a host would. Private functions are
+therefore not reachable from the prompt; that is by design, since the REPL is not
+"inside" the namespace that owns them. To exercise one directly, use
+`functy run --func _helper`.
+
 ## symbols
 
 List every top-level declaration (`func`, `const`, `var`, `type`) and `test`
@@ -341,6 +388,33 @@ $ functy symbols --json examples/math.cty
       "name": "add",
       "detail": "(a: number, b: number) -> number",
       "range": { "file": "examples/math.cty", "line": 2, "column": 1, "end_line": 4, "end_column": 2 }
+    }
+  ]
+}
+```
+
+For a namespaced file, three further fields appear. `namespace` is the
+declaration's namespace, `qualified` is the name a function is callable under, and
+`private` marks a `_`-prefixed declaration. All three are omitted in the global
+namespace, so output for a file without a `namespace` declaration is unchanged.
+`name` always stays the **bare** declared name (it is the outline label and the
+test identifier); the text listing prints functions under their qualified name.
+
+Private declarations *are* listed — an outline should show the whole file — and
+are flagged rather than hidden:
+
+```console
+$ functy symbols --json math.cty
+{
+  "symbols": [
+    {
+      "kind": "func",
+      "name": "_twice",
+      "namespace": "acme::math",
+      "qualified": "acme::math::_twice",
+      "private": true,
+      "detail": "(n: number) -> number",
+      "range": { "file": "math.cty", "line": 8, "column": 1, "end_line": 8, "end_column": 47 }
     }
   ]
 }

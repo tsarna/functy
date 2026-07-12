@@ -30,7 +30,7 @@ func checkCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _, fileMap, diags := loadProgram(input, baselineFunctions(io.Discard))
+			_, _, _, fileMap, diags := loadProgram(input, baselineFunctions(io.Discard))
 
 			if jsonOut {
 				// The report goes to stderr (not stdout) for consistency with run/test

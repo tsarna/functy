@@ -40,15 +40,18 @@ func runInteractive(cmd *cobra.Command, args []string, funcName string, explicit
 	files, callArgs := splitFilesAndArgs(args, cmd.ArgsLenAtDash())
 
 	baseline := baselineFunctions(cmd.OutOrStdout())
-	_, ctx, fileMap, diags := loadProgram(files, baseline)
+	_, compiled, ctx, fileMap, diags := loadProgram(files, baseline)
 	if diags.HasErrors() {
 		writeDiags(cmd.ErrOrStderr(), fileMap, diags)
 		return errors.New("compilation failed")
 	}
+	writeDiags(cmd.ErrOrStderr(), fileMap, diags) // warnings, if any
 
-	fn, ok := ctx.Functions[funcName]
+	// An ambiguous name is a real failure even here; only a *missing* entry is
+	// tolerated, and only when it wasn't asked for explicitly.
+	fn, resolved, err := resolveEntry(compiled, ctx, funcName)
 	switch {
-	case ok:
+	case err == nil:
 		argVals, adiags := evalArgs(callArgs, ctx)
 		if adiags.HasErrors() {
 			writeDiags(cmd.ErrOrStderr(), fileMap, adiags)
@@ -61,17 +64,19 @@ func runInteractive(cmd *cobra.Command, args []string, funcName string, explicit
 				writeDiags(cmd.ErrOrStderr(), fileMap, te.Diagnostics())
 				return errors.New("execution failed")
 			}
-			return fmt.Errorf("calling %q: %w", funcName, err)
+			return fmt.Errorf("calling %q: %w", resolved, err)
 		}
 		if err := printResult(cmd.OutOrStdout(), result, output); err != nil {
 			return err
 		}
+	case !errors.Is(err, errEntryNotFound):
+		return err
 	case explicitFunc:
 		// An explicitly requested entry function must exist.
-		return fmt.Errorf("entry function %q not found", funcName)
+		return err
 	case len(callArgs) > 0:
 		// Args were supplied for an entry that does not exist.
-		return fmt.Errorf("entry function %q not found (arguments were given after --)", funcName)
+		return fmt.Errorf("%w (arguments were given after --)", err)
 	}
 
 	session := repl.New(repl.NewStaticHost(ctx), repl.Options{

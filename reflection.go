@@ -85,9 +85,25 @@ func DocFunc(evalCtxFn func() *hcl.EvalContext) function.Function {
 // not recoverable from cty — so the fallback shows the raw required-plus-variadic
 // shape.
 func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Function {
+	// Keyed by qualified name — the name the function is actually callable under.
+	// Private functions are included: they are not host-visible, but help() is a
+	// developer tool and `help("foo::_helper")` is exactly what you want when
+	// debugging one.
 	byName := make(map[string]*FuncDecl, len(funcs))
+	// byBare backs a last-resort fallback so help("baz") still works in the common
+	// single-namespace project. Names declared in more than one namespace are
+	// ambiguous and dropped from it rather than guessed at.
+	byBare := make(map[string]*FuncDecl, len(funcs))
+	ambiguous := make(map[string]bool)
 	for _, fn := range funcs {
-		byName[fn.Name] = fn
+		byName[fn.QualifiedName()] = fn
+		if _, dup := byBare[fn.Name]; dup {
+			ambiguous[fn.Name] = true
+		}
+		byBare[fn.Name] = fn
+	}
+	for name := range ambiguous {
+		delete(byBare, name)
 	}
 	return function.New(&function.Spec{
 		Description: `Return a human-readable help summary for a function by name: help("f"). Includes its signature, description, and per-parameter docs; null if there is no such function. Called with no argument, help() lists the names of all available functions.`,
@@ -115,6 +131,11 @@ func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 					}
 				}
 			}
+			// Last: a bare name that is unambiguous across the namespaces. Ordered
+			// after the eval-context lookup so it can never shadow a host function.
+			if fn, ok := byBare[name]; ok {
+				return cty.StringVal(renderFuncHelp(fn)), nil
+			}
 			return cty.NullVal(cty.String), nil // no such function
 		},
 	})
@@ -124,6 +145,10 @@ func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 // function, for the no-argument help() form. It prefers the assembled eval context
 // (which holds host- and functy-defined functions in one flat map) and falls back
 // to the functy declarations when no context is available.
+//
+// Private functions never appear. From the eval context that is structural rather
+// than filtered — they were never put in the host's map — and the declaration
+// fallback below skips them to match.
 func renderFuncList(byName map[string]*FuncDecl, evalCtxFn func() *hcl.EvalContext) string {
 	names := make(map[string]struct{})
 	if evalCtxFn != nil {
@@ -134,7 +159,10 @@ func renderFuncList(byName map[string]*FuncDecl, evalCtxFn func() *hcl.EvalConte
 		}
 	}
 	if len(names) == 0 {
-		for n := range byName {
+		for n, fn := range byName {
+			if fn.IsPrivate() {
+				continue
+			}
 			names[n] = struct{}{}
 		}
 	}
@@ -153,7 +181,7 @@ type paramDoc struct{ name, doc string }
 // signature, the function's doc, and a per-parameter section for documented params.
 func renderFuncHelp(fn *FuncDecl) string {
 	var b strings.Builder
-	b.WriteString(fn.Name)
+	b.WriteString(fn.QualifiedName()) // the name it is callable under
 	b.WriteByte('(')
 	var docs []paramDoc
 	for i, p := range fn.Params {

@@ -8,6 +8,65 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Added
+
+- **Namespaces and `_` visibility — unit-scoped names.** A `.cty` file may open
+  with a `namespace acme::math` declaration; its functions are registered with the
+  host under their qualified names (`acme::math::double`), while the namespace's
+  own functions go on calling each other by their bare names. A declaration whose
+  name begins with an underscore is **namespace-local**: compiled and callable from
+  within its namespace, but never handed to the host — so a file can finally keep a
+  helper to itself instead of publishing it into the host's shared function
+  namespace. See [doc/language.md](doc/language.md#namespaces-and-visibility).
+
+  - A namespace name is one or more `::`-separated identifiers (`namespace foo` is
+    as valid as `namespace foo::bar`). Nesting is a **naming convention, not
+    containment**: `foo::bar` is not "inside" `foo`, gets no special visibility into
+    it, and must call `foo::helper()` in full.
+  - A namespace **spans files**: two files declaring the same namespace share one
+    unit and see each other's functions, private ones included. This is why `_` means
+    *namespace*-local rather than *file*-local.
+  - **Imports are deliberately not part of this.** A namespace is usable the moment
+    it exists, because a caller can always spell the fully-qualified name.
+  - `namespace` is a *contextual* keyword, like `test` and `type`, so
+    `func namespace(...)` keeps working.
+  - Because `::` is a function-call selector in HCL, only functions can be
+    qualified. Top-level `const`/`var` carry their namespace as metadata for the host
+    to interpret; type aliases remain project-scoped.
+  - New API: `(*Result).CompileUnits` returns a `Compiled{Funcs, Units}` — the host
+    map (exported, qualified) and the per-namespace resolution layers (bare, privates
+    included). `functy.Qualify` joins a namespace and a bare name.
+  - CLI: `run --func` resolves a bare name declared in exactly one namespace (so
+    `functy run file.cty` keeps working when a file gains a namespace, and
+    `--func _helper` can exercise a private one), and reports an ambiguous name
+    rather than guessing. `symbols` gains additive `namespace` / `qualified` /
+    `private` fields — omitted in the global namespace, so existing consumers see
+    unchanged output.
+
+- **Shadowing warning.** A namespaced function whose bare name matches a baseline
+  built-in shadows it *inside that namespace* (local wins). Namespacing otherwise
+  disarms the reserved-name check — `acme::text::upper` collides with nothing in the
+  host's map — so `run` and `check` now emit a warning where the host's function set
+  is known. A library host can do the same by comparing `Compiled.Units` against its
+  own registry. The equivalent clash in the global namespace remains a hard error.
+
+### Fixed
+
+- **Default-parameter expressions are now evaluated against the same context as the
+  function body.** They were evaluated against the host context directly, bypassing
+  the interpreter's context construction; a default like `= _helper()` could not see
+  the function's own namespace. Fixed as a consequence of the namespace work.
+
+### Changed
+
+- **BREAKING (library):** `_`-prefixed top-level functions are no longer included in
+  the map returned by `(*Result).Compile`. They were previously exported like any
+  other function; they are now namespace-local. A host that relied on calling one
+  should rename it.
+- **BREAKING (library):** keys in `(*Result).Compile`'s map may now contain `::`, for
+  functions declared in a namespace. HCL resolves such a name as a single flat map
+  key, so a host that merges the map into an eval context needs no change.
+
 ## [0.9.0] - 2026-07-11
 
 Promotes `0.9.0-rc.3` to the final **0.9.0** release, adding the parser/lexer

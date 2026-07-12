@@ -8,30 +8,142 @@ import (
 	"github.com/zclconf/go-cty/cty/function"
 )
 
-// Compile turns the parsed function declarations into cty functions. Each
+// Compiled is the outcome of compiling a Result: the functions to hand the host,
+// and the per-namespace name-resolution layers functy's own bodies resolve
+// against.
+type Compiled struct {
+	// Funcs is the map for the host's eval context. It holds only the *exported*
+	// functions — private (`_`-prefixed) ones are absent — keyed by their
+	// *qualified* name (`foo::bar::baz`, or the bare name in the global
+	// namespace).
+	Funcs map[string]function.Function
+
+	// Units maps a namespace ("" = global) to that namespace's own functions by
+	// their *bare* names, private ones included. This mirrors the layer a
+	// namespace's functions resolve their siblings through, and it is what makes a
+	// private function callable from inside its namespace while remaining invisible
+	// to the host. Exposed because tooling needs it: to reach a private function by
+	// name (`functy run --func _helper`), and to detect a bare name that shadows a
+	// host function (see the note on unitCtxFn).
+	//
+	// It is a *snapshot*, not the live table the compiled functions read: those are
+	// consulted on every call, from whatever goroutine is calling, so handing the
+	// same maps out would let a host's write race a running function.
+	Units map[string]map[string]function.Function
+}
+
+// Compile turns the parsed function declarations into cty functions for the host.
+//
+// It returns the exported functions, keyed by qualified name; private functions
+// are compiled but withheld. Use CompileUnits when the namespace-local layers are
+// needed too.
+func (r *Result) Compile(evalCtxFn func() *hcl.EvalContext) (map[string]function.Function, hcl.Diagnostics) {
+	compiled, diags := r.CompileUnits(evalCtxFn)
+	return compiled.Funcs, diags
+}
+
+// CompileUnits turns the parsed function declarations into cty functions. Each
 // function captures evalCtxFn and calls it at invocation time (late binding), so
 // a function may call sibling functions and reference host globals that are
 // finalized after compilation — enabling recursion and mutual recursion.
 //
-// Duplicate function names within the result are reported as errors; the host is
-// responsible for detecting collisions against its own built-in functions when
-// it merges the returned map into its registry.
-func (r *Result) Compile(evalCtxFn func() *hcl.EvalContext) (map[string]function.Function, hcl.Diagnostics) {
-	funcs := make(map[string]function.Function, len(r.Funcs))
+// Functions are scoped by namespace. A namespace's functions see each other by
+// their bare names through a unit layer (see unitCtxFn) and are handed to the host
+// under their qualified names; `_`-prefixed functions are never handed over at all.
+//
+// Duplicate function names within a namespace are reported as errors. Two
+// different namespaces may each declare the same bare name — their qualified names
+// differ, so they are distinct functions. The host remains responsible for
+// detecting collisions against its own built-in functions when it merges Funcs
+// into its registry.
+func (r *Result) CompileUnits(evalCtxFn func() *hcl.EvalContext) (*Compiled, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
+
+	// Allocate every namespace's table (and the context function closing over it)
+	// before building anything, so each function can be built against a layer that
+	// will hold all of its siblings. The tables are populated below; that is safe
+	// because a built function only reads its table when it is *called*, which
+	// cannot happen before this function returns.
+	units := make(map[string]map[string]function.Function)
+	ctxFns := make(map[string]func() *hcl.EvalContext)
 	for _, fn := range r.Funcs {
-		if _, exists := funcs[fn.Name]; exists {
+		if _, ok := units[fn.Namespace]; !ok {
+			table := make(map[string]function.Function)
+			units[fn.Namespace] = table
+			ctxFns[fn.Namespace] = unitCtxFn(evalCtxFn, table)
+		}
+	}
+
+	exported := make(map[string]function.Function, len(r.Funcs))
+	seen := make(map[string]bool, len(r.Funcs))
+	for _, fn := range r.Funcs {
+		qualified := fn.QualifiedName()
+		if seen[qualified] {
 			diags = diags.Append(&hcl.Diagnostic{
 				Severity: hcl.DiagError,
 				Summary:  "Duplicate function",
-				Detail:   fmt.Sprintf("Function %q is already defined.", fn.Name),
+				Detail:   fmt.Sprintf("Function %q is already defined.", qualified),
 				Subject:  fn.DefRange.Ptr(),
 			})
 			continue
 		}
-		funcs[fn.Name] = BuildFunction(fn, evalCtxFn)
+		seen[qualified] = true
+
+		f := BuildFunction(fn, ctxFns[fn.Namespace])
+		units[fn.Namespace][fn.Name] = f
+		if !fn.IsPrivate() {
+			exported[qualified] = f
+		}
 	}
-	return funcs, diags
+
+	// Hand out a copy: `units` is read by every compiled function on every call, so
+	// sharing it would let a caller's write race a running function.
+	snapshot := make(map[string]map[string]function.Function, len(units))
+	for ns, table := range units {
+		copied := make(map[string]function.Function, len(table))
+		for name, f := range table {
+			copied[name] = f
+		}
+		snapshot[ns] = copied
+	}
+	return &Compiled{Funcs: exported, Units: snapshot}, diags
+}
+
+// unitCtxFn wraps a late-bound host eval context in a child layer carrying one
+// namespace's own functions under their bare names, private ones included.
+//
+// HCL resolves a call by walking the *entire* context chain, checking each non-nil
+// Functions map, so this layer ADDS the namespace's names without hiding the
+// host's library: a sibling call resolves here, everything else falls through to
+// the host. It is also the only place a private function is reachable, which is
+// what lets it be callable from its namespace yet absent from the host's map.
+//
+// Two consequences worth naming:
+//
+//   - Local wins. A namespace's bare name shadows a host function of the same name
+//     *inside that namespace's bodies*. This cannot be diagnosed here — evalCtxFn is
+//     late-bound and the host's function set may not exist yet — so a host that wants
+//     to warn should compare Compiled.Units against its own registry (cmd/functy does).
+//     Note a private name cannot collide this way: no host function is `_`-prefixed.
+//
+//   - The child is rebuilt per call, because evalCtxFn is late-bound and may return a
+//     different context each time. That is one small allocation (NewChild is just
+//     &EvalContext{parent}) against an interpreter that already builds a context per
+//     statement group. Memoizing on the parent pointer would be safe but buys nothing
+//     and adds a concurrency surface; don't.
+func unitCtxFn(evalCtxFn func() *hcl.EvalContext, table map[string]function.Function) func() *hcl.EvalContext {
+	return func() *hcl.EvalContext {
+		var parent *hcl.EvalContext
+		if evalCtxFn != nil {
+			parent = evalCtxFn()
+		}
+		child := &hcl.EvalContext{}
+		if parent != nil {
+			child = parent.NewChild()
+		}
+		child.Functions = table
+		return child
+	}
 }
 
 // BuildFunction builds a single cty function from a parsed declaration.

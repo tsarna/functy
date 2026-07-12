@@ -49,7 +49,7 @@ func testCmd() *cobra.Command {
 			// (below), so a test that prints never corrupts the machine-readable report.
 			out := cmd.OutOrStdout()
 			report := cmd.ErrOrStderr()
-			res, ctx, fileMap, diags := loadProgram(args, baselineFunctions(out))
+			res, _, ctx, fileMap, diags := loadProgram(args, baselineFunctions(out))
 			if diags.HasErrors() {
 				if jsonOut {
 					// A compile failure produces no test outcomes; still emit a
@@ -60,6 +60,12 @@ func testCmd() *cobra.Command {
 				}
 				writeDiags(cmd.ErrOrStderr(), fileMap, diags)
 				return errors.New("compilation failed")
+			}
+			if !jsonOut {
+				// Warnings (e.g. a namespaced function shadowing a built-in). Only in
+				// text mode: --json emits a test report, not a diagnostics report, so
+				// folding diagnostics into that stream would break its shape.
+				writeDiags(cmd.ErrOrStderr(), fileMap, diags)
 			}
 
 			outcomes := res.RunTestsMatching(func() *hcl.EvalContext { return ctx }, filter)

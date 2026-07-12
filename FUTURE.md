@@ -166,12 +166,9 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
     *implemented-but-undocumented*. A leaf package can take a **build-time-only** dependency
     on functy to run this validation over its own extern block in CI (optionally a
     `--externs-only` mode) without pulling functy into its runtime graph.
-- **Declaration visibility (`_` prefix).** *Designed.* Merged with namespacing into a single
-  feature — see **Namespaces + `_` visibility** under *Top-level constructs*, where the
-  rationale for a convention over a `private` keyword, the name-resolution mechanism, and the
-  scoping rules are recorded together. Summary: a leading underscore marks a declaration
-  namespace-local; `Compile` builds it like any other but leaves it out of the map handed to
-  the host.
+- **Declaration visibility (`_` prefix)** — *shipped*, as one feature with namespacing; see
+  **Namespaces + `_` visibility** under *Top-level constructs* for what remains, and
+  `doc/language.md` for the feature itself.
 - **Function-local helper functions.** Nested `func` declared inside a body
   (file-private scope); related to closures below.
 - **First-class function values / closures.** Storing / passing functions as values.
@@ -239,173 +236,52 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
 
 ## Top-level constructs
 
-- **Namespaces + `_` visibility — unit-scoped names.** *Designed as **one** feature; the
-  intended next substantial piece of work.* Two problems with one shape: functy registers
-  every top-level `func` into the host's single flat function namespace — in vinculum's case
-  right next to `send`, `log_info`, and every stdlib builtin — so a file cannot keep a helper
-  to itself (a collision is a live hazard, not a hypothetical), and several files cannot
-  organize what they *do* export. `_` hides; `namespace` disambiguates. They are the same
-  mechanism seen from two ends, and the *unit* — the scope both are defined against — is what
-  a `namespace` declaration names. Shipping visibility alone would mean defining that unit as
-  "whatever files happened to be parsed together" and then redefining it later; shipping them
-  together defines it once.
+- **Namespaces + `_` visibility — unit-scoped names** — *shipped.* A file may open with
+  `namespace foo::bar`; its functions register with the host under qualified names while
+  the namespace's own functions call each other by bare names, and a `_`-prefixed
+  declaration is namespace-local (compiled, callable within the namespace, never handed
+  to the host). A namespace spans files; nesting is a naming convention, not containment
+  (no parent fallback). Implemented as a name-resolution *layer* in the eval-context
+  chain: `unitCtxFn` (`builder.go`) wraps the host's late-bound context in a child whose
+  `Functions` map holds the namespace's bare names, and HCL's chain walk does the
+  resolving. See `doc/language.md` (*Namespaces and visibility*) and `CHANGELOG.md`.
 
-  ```functy
-  namespace foo::bar
+  Remaining work, in rough order of appeal:
 
-  func baz() -> null { … }        // registered with the host as foo::bar::baz
-  func _helper() -> number { … }  // visible to foo::bar only; never handed to the host
-  ```
-
-  **Imports are explicitly *not* part of this**, and that is the point that makes the feature
-  small: a namespace is usable the moment it exists, because a caller can always spell the
-  fully-qualified `foo::bar::baz()`. Import syntax, aliasing, and `import *` are a separate,
-  later, purely additive design (see *Imports, deferred* below).
-
-  ### Mechanism — a name-resolution layer
-
-  `scopeEvalContext` (`interp.go`) already builds `parentCtx.NewChild()` per call and sets
-  **only** `Variables`, leaving `Functions` nil so every call falls through to the host. That
-  nil slot is the hook: fill it with the unit's own function table and a functy body resolves
-  its siblings — private and exported, unqualified — while HCL keeps walking up for everything
-  else. The child map is not a trick for privates; it is a general **name-resolution layer**,
-  with HCL's chain walk as the resolver one would otherwise have to write:
-
-  ```text
-  locals (scope.ToMap())  →  unit layer (the namespace's own names, unqualified)
-                          →  host layer (globals + fully-qualified foo::bar::baz)
-  ```
-
-  Verified against stock HCL (v2.24):
-
-  - Function lookup walks the **entire** parent chain, checking each non-nil `Functions` map
-    (`hclsyntax/expression.go`, `FunctionCallExpr.Value`) — it does *not* stop at the first
-    non-nil map, so a child layer **adds** names without hiding the host's library.
-  - `foo::bar::baz` is a **flat map key**; HCL performs no namespace resolution of its own.
-    So registering the qualified name in the host map and the bare name in the unit layer is
-    all namespacing requires. A qualified call still resolves correctly from *inside* the
-    layer, and an unregistered namespace yields a usable diagnostic for free ("There are no
-    functions in namespace \"unknown::\"").
-  - `_`-prefixed identifiers parse and evaluate as both call names and variable references,
-    so the convention needs **no** lexer or parser change — only a decision about which map a
-    name lands in.
-
-  Every non-local layer is prebuilt and assigned by reference, so the per-call cost stays
-  O(1).
-
-  ### `::` is a function-call selector only — the scope-limiting fact
-
-  HCL's parser requires an open parenthesis after a `::` selector, so a qualified **variable**
-  or **type** reference (`foo::bar::x`, `foo::bar::MyType`) is a *parse error*. Supporting one
-  would mean forking HCL's expression parser — the same wall that killed named call arguments.
-  Namespacing therefore applies to **functions**, which is the correct scope anyway: the
-  function registry is precisely the namespace that gets polluted.
-
-  For top-level `var` / `const` this is a non-problem, because functy already takes no position
-  on them: they are opt-in (`AllowTopLevelVar` / `AllowTopLevelConst`, off by default) and are
-  never evaluated or registered — merely **collected** into `Result.Vars` / `Result.Consts` for
-  the host, which decides what a global even means. So the namespace work adds nothing here but
-  a namespace on the `Decl`; the host then ignores namespaced globals, rejects them, or
-  implements them by some mechanism of its own. Do **not** invent a namespace-local variable
-  scope inside functy — that would have functy inventing semantics for globals it deliberately
-  has none for.
-
-  Type aliases (`Result.Types`, currently project-scoped across all sources and resolved by
-  functy's own resolver, not HCL) are the one open question: they have no qualified spelling
-  either, so they either stay project-scoped as today or become namespace-scoped with `_` for
-  privacy. Left open; nothing depends on it.
-
-  ### Scoping rules
-
-  - **A namespace name is one or more `::`-separated identifiers.** `namespace foo` is as
-    legitimate as `namespace foo::bar` — `::` *subdivides* a namespace but is not required, and
-    no fixed depth is implied. The qualified name is the namespace joined to the function name
-    by `::`, so `namespace foo` exports `foo::baz` while `namespace foo::bar` exports
-    `foo::bar::baz`. Both depths are verified to parse and evaluate as calls in stock HCL,
-    which follows from `::` names being flat map keys rather than a structure HCL interprets —
-    it neither knows nor cares how many segments there are. Nesting is therefore purely a
-    naming convention, not a containment relationship: `foo::bar` is not "inside" `foo` in any
-    sense functy or HCL enforces, and a name is either an exact key or it is not found. It
-    follows that code in `foo::bar` gets **no special visibility into `foo`** — no
-    parent-namespace fallback, no partial qualification, no hierarchy to walk. A unit layer
-    holds exactly its own namespace's names; anything else must be spelled fully qualified,
-    exactly as an unrelated namespace would spell it.
-  - **Every file is in exactly one namespace.** Absent a `namespace` declaration it is in the
-    **global** namespace — today's behavior, so nothing existing changes. This is not a special
-    case: the global namespace is a namespace like any other, its exported names simply reach
-    the host unqualified (and so are the ones that can still collide with host names — the
-    status quo).
-  - **`_` means namespace-local, uniformly.** A `_`-prefixed name is visible to its namespace's
-    own functions and is never handed to the host — including in the global namespace, where
-    `_helper` is still private to functy rather than exported. One rule, no carve-out.
-  - **A namespace spans files** (the Go package model), which is why `_` is namespace-local
-    rather than file-local: siblings should see each other's helpers, and per-file privacy
-    would need a second table and would fight this rule.
-
-  ### Why a `_` convention and not a `private` keyword
-
-  Four reasons, in descending order of force.
-
-  1. *It makes the shadowing hazard structurally impossible.* Unit-layer names resolve **before**
-     the host's, so a private named `send` would silently intercept the host's `send` — and a
-     compile-time collision check cannot reliably catch it, because the host's function set is
-     late-bound through `evalCtxFn` and may not exist yet. No host function, cty builtin, or
-     add-on package function is ever `_`-prefixed, so the two namespaces are **disjoint by
-     construction** and no check is needed. A keyword would need the check and could not
-     complete it. (Note this protection is specific to `_`: a namespace's *unqualified* sibling
-     names **can** collide with host names, and the unit layer silently wins — confirmed. So
-     namespaces need an explicit shadowing policy — error, warn, or local-wins — that `_` gets
-     to skip.)
-  2. *Visibility is consulted at call sites, and a keyword tells you nothing there.* functy calls
-     are bare HCL expressions with no import or qualification, so in a large file `helper(x)`
-     gives the reader no clue whether it is local or part of the host's open-ended, invisible
-     library. The prefix puts that information where it is read.
-  3. *The declaration-modifier slot is already spoken for.* See *Annotations* — a general
-     `@name` / `@name(args)` mechanism is already designed for declaration metadata, so "a
-     keyword paves the way for `pure` later" cuts the other way: the future modifier is `@pure`.
-     (Visibility itself should **not** be `@private`: annotations are host-interpreted
-     *metadata*, visibility is a core compile-time semantic the compiler must act on, and
-     blurring that is how annotation systems rot.)
-  4. *Keywords are unusually expensive in this parser* — each new leading keyword is another
-     contextual identifier that is also a legal HCL expression identifier, joining the awkward
-     `test` / `type` class the error-recovery work had to work around. `_` costs the lexer
-     nothing. (`namespace` **does** earn its keyword: it is a genuine new construct rather than
-     a modifier competing with `@`.)
-
-  It also applies to `var` / `const` / `type` with no grammar change, where a keyword would need
-  a per-kind rule — and since those kinds have no qualified spelling (above), `_` is the *only*
-  visibility mechanism available to them.
-
-  ### `namespace` must be a declaration, not a directive
-
-  Forced by the rule that justifies `//functy:extern` (see *`extern`* under *Functions*): **a
-  directive may change what is syntactically legal, but must never silently change the semantics
-  of a declaration that looks identical either way.** A namespace changes the registered name of
-  every function in the file, so it fails that test and must be spelled in the language. The same
-  rule independently rejects a `//functy:`-directive that flips `_` to private-by-default: two
-  identical-looking `func foo()` declarations would mean different things depending on a line at
-  the top of the file. The `_` convention forecloses that flip, which is a feature.
-
-  ### Loose ends
-
-  - Default-parameter expressions are evaluated against `parentCtx` directly in `BuildFunction`
-    (`builder.go`), not through `scopeEvalContext`, so a default like `= _helper()` would not
-    see unit names unless that call site is changed too.
-  - CLI surfaces need to handle qualified names: `run --func foo::bar::baz`, `symbols`, and
-    no-arg `help()` (which should list exported names, not privates — though `run --func _x`
-    should still work for debugging).
-  - A host's function-registry merge and collision detection must tolerate `::` in a map key.
-    It should — it is just a key — but vinculum's merge is worth a look.
-  - `Result` grows the three-set split shared with *`extern`*: exported (→ host map, qualified),
-    unit-local (→ interpreter's child layer only), extern-declared (→ reflection only).
-
-  ### Imports, deferred
-
-  Purely additive once the layer exists, and unconstrained by it — which is why no import design
-  is being decided here. Prefix-preserving use (`lib::foo()`) needs **no** injection at all, since
-  the qualified name is already in the host map. `from foo import *` and `import foo::bar as baz`
-  are each just entries in the importing unit's layer. All three styles are expressible; the
-  language-level choice can be deferred indefinitely.
+  - **Module / import.** Deliberately excluded from the shipped feature — a namespace is
+    usable immediately via its fully-qualified name, so imports are purely additive and
+    unconstrained by the mechanism. The layer already expresses every candidate design:
+    prefix-preserving use (`lib::foo()`) needs **no** injection at all, since the
+    qualified name is already in the host map, while `from foo import *` and
+    `import foo::bar as baz` are each just entries in the importing unit's layer. The
+    open questions are all language-level (spelling, aliasing, whether a bare import is
+    even wanted), not runtime.
+  - **Namespace-scoped type aliases.** Type aliases stay project-scoped (one flat
+    `env.named`, resolved by a token pre-scan before any file is parsed). The blocker is
+    not effort but spelling: `::` is a *function-call selector* in HCL, so
+    `foo::bar::MyType` in a type annotation is a parse error — a namespace-scoped alias
+    would be unreferenceable from outside its namespace, i.e. strictly worse than today.
+    Doing this properly needs a functy-internal qualified-type syntax, or per-namespace
+    `typeEnv` layers with bare-then-qualified resolution. Consequence today: two files in
+    different namespaces still collide on `type Id = …`.
+  - **HCL's "no functions in namespace" diagnostic is misleading inside functy bodies.**
+    HCL builds its available-names list from the *innermost* context only
+    (`hclsyntax/expression.go`), which at a functy eval site is the scope child (whose
+    `Functions` is nil). So a typo'd qualified call reports *"There are no functions in
+    namespace \"foo::bar::\""* even when the namespace exists and is populated. Pre-existing
+    (the same defect affects name suggestions for unqualified calls), but namespaces make
+    it the default experience for a mistyped call. The fix is upstream in HCL.
+  - **`kind: "namespace"` in `functy symbols`.** The additive `namespace` / `qualified` /
+    `private` fields shipped; a distinct `kind:"namespace"` symbol did **not**, because
+    `vscode-functy`'s `src/symbols.ts` indexes a *total* `Record` by `s.kind` and an
+    unknown kind yields `undefined` where a `vscode.SymbolKind` is required. Land an
+    unknown-kind fallback in the extension first, then emit the new kind.
+  - **REPL namespace context.** The REPL evaluates against the host context, so namespaced
+    functions need qualified names and privates are unreachable from the prompt. Correct by
+    design — the session is not "inside" any namespace — but a `:namespace foo::bar`
+    meta-command that pushed the unit layer onto the session context would make a namespace
+    explorable interactively. Tab completion (`repl/completion.go`) already treats `:` as a
+    word rune, so qualified names prefix-complete correctly today.
 
 ## Annotations
 

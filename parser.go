@@ -34,6 +34,12 @@ type parser struct {
 	allowTopLevelVar   bool
 	allowTopLevelConst bool
 	strict             strictness
+
+	// ns is the file's namespace, from a leading `namespace a::b` declaration
+	// ("" = the global namespace). Every declaration parsed from this file is
+	// stamped with it; it is the only carrier of that provenance, since the
+	// per-file Result is flattened into one merged Result by parseSources.
+	ns string
 }
 
 // enterLoop pushes a loop onto the enclosing-loop stack, consuming any pending
@@ -119,6 +125,18 @@ func (p *parser) skipNewlines() {
 
 func (p *parser) parseFile() *Result {
 	result := &Result{}
+
+	// A namespace declaration, if present, must come first: it governs the name
+	// every following declaration is registered under, so it cannot be discovered
+	// halfway through the file.
+	p.skipTerminators()
+	if p.atNamespaceKeyword() {
+		if nd := p.parseNamespaceDecl(); nd != nil {
+			p.ns = nd.Name
+			result.Namespaces = append(result.Namespaces, *nd)
+		}
+	}
+
 	for {
 		p.skipTerminators()
 		if p.atEOF() {
@@ -142,6 +160,18 @@ func (p *parser) parseFile() *Result {
 			if td := p.parseTestDecl(); td != nil {
 				result.Tests = append(result.Tests, td)
 			}
+		case p.atNamespaceKeyword():
+			// Misplaced: either a second declaration, or one that follows other
+			// declarations. Record it (so an editor outline and fmt still see it)
+			// but do NOT adopt it — declarations parsed before this point are
+			// already stamped with the old namespace, and adopting it now would
+			// leave the file half in one namespace and half in another. The error
+			// makes the file un-formattable and un-compilable anyway.
+			if nd := p.parseNamespaceDecl(); nd != nil {
+				result.Namespaces = append(result.Namespaces, *nd)
+				p.errf(nd.DefRange, "Misplaced namespace declaration",
+					"A namespace declaration must be the first declaration in the file, and a file may declare only one.")
+			}
 		default:
 			p.errf(t.Range, "Expected function declaration",
 				"Top-level functy declarations must be functions (func name(...) { ... }).")
@@ -149,6 +179,52 @@ func (p *parser) parseFile() *Result {
 		}
 	}
 	return result
+}
+
+// atNamespaceKeyword reports whether the parser is sitting on a `namespace`
+// declaration. Like `test` and `type`, `namespace` is a *contextual* keyword —
+// special only at top-level declaration position — so it stays usable as an
+// ordinary identifier everywhere else (`func namespace()`, `var namespace = 1`,
+// a call to `namespace()`), and it is deliberately absent from lexer.go's
+// keywords map.
+func (p *parser) atNamespaceKeyword() bool {
+	t := p.cur()
+	return t.Type == hclsyntax.TokenIdent && string(t.Bytes) == "namespace"
+}
+
+// parseNamespaceDecl parses `namespace Ident ( "::" Ident )*`.
+//
+// A namespace name is one or more `::`-separated identifiers — `namespace foo` is
+// as valid as `namespace foo::bar`, and no depth is implied, because HCL treats a
+// `::` name as one flat lookup key rather than a structure.
+func (p *parser) parseNamespaceDecl() *NamespaceDecl {
+	kw := p.cur()
+	p.advance() // namespace
+
+	var segs []string
+	last := kw
+	for {
+		seg, ok := p.expectIdent("namespace name")
+		if !ok {
+			p.recoverToTopLevel()
+			return nil
+		}
+		segs = append(segs, seg.text)
+		last = seg.tok
+		if p.cur().Type != hclsyntax.TokenDoubleColon {
+			break
+		}
+		p.advance() // ::
+	}
+
+	defRange := hcl.RangeBetween(kw.Range, last.Range)
+	if !isTerminator(p.cur().Type) && !p.atEOF() {
+		p.errf(p.cur().Range, "Extra tokens after namespace declaration",
+			"A namespace declaration names one namespace: `namespace foo` or `namespace foo::bar`.")
+		p.recoverToTopLevel()
+		return nil
+	}
+	return &NamespaceDecl{Name: strings.Join(segs, "::"), DefRange: defRange}
 }
 
 // skipTypeAlias consumes a top-level `type Name = <type>` declaration. The alias
@@ -184,12 +260,26 @@ func (p *parser) recoverToTopLevel() {
 			return
 		}
 		// Also sync on the contextual top-level keywords (idents, not reserved
-		// words) so an error in one block doesn't swallow a following test/type.
-		if t.Type == hclsyntax.TokenIdent && (string(t.Bytes) == "test" || string(t.Bytes) == "type") {
+		// words) so an error in one block doesn't swallow a following
+		// test/type/namespace.
+		if t.Type == hclsyntax.TokenIdent &&
+			(string(t.Bytes) == "test" || string(t.Bytes) == "type" || string(t.Bytes) == "namespace") {
 			return
 		}
 		p.advance()
 	}
+}
+
+// checkDeclName rejects `_` as a declaration name. A leading underscore marks a
+// declaration namespace-local, but a *bare* underscore is the blank identifier
+// (see CaptureAssign) and would leave the declaration with an empty base name.
+func (p *parser) checkDeclName(name string, rng hcl.Range, kind string) bool {
+	if name == "_" {
+		p.errf(rng, "Invalid "+kind+" name",
+			"`_` is the blank identifier and cannot name a declaration. Use a name like `_helper` for a namespace-local "+kind+".")
+		return false
+	}
+	return true
 }
 
 func (p *parser) parseTopLevelDecl(result *Result, isConst bool) {
@@ -212,7 +302,15 @@ func (p *parser) parseTopLevelDecl(result *Result, isConst bool) {
 		p.recoverToTopLevel()
 		return
 	}
-	decl := Decl{Name: name.text, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
+	kindWord := "variable"
+	if isConst {
+		kindWord = "constant"
+	}
+	if !p.checkDeclName(name.text, name.tok.Range, kindWord) {
+		p.recoverToTopLevel()
+		return
+	}
+	decl := Decl{Name: name.text, Namespace: p.ns, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
 	kind := "Variable"
 	if isConst {
 		kind = "Constant"
@@ -246,7 +344,11 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 		p.recoverToTopLevel()
 		return nil
 	}
-	fn := &FuncDecl{Name: name.text, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
+	if !p.checkDeclName(name.text, name.tok.Range, "function") {
+		p.recoverToTopLevel()
+		return nil
+	}
+	fn := &FuncDecl{Name: name.text, Namespace: p.ns, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
 
 	oparen := p.cur().Range
 	if !p.expect(hclsyntax.TokenOParen, "(") {
@@ -323,7 +425,7 @@ func (p *parser) parseTestDecl() *TestDecl {
 	if !ok {
 		return nil // description error already reported; body consumed to avoid cascade
 	}
-	return &TestDecl{Name: name, Body: body, BodyRange: brange, DefRange: hcl.RangeBetween(kw.Range, p.tokens[p.pos-1].Range)}
+	return &TestDecl{Name: name, Namespace: p.ns, Body: body, BodyRange: brange, DefRange: hcl.RangeBetween(kw.Range, p.tokens[p.pos-1].Range)}
 }
 
 func (p *parser) parseParams() ([]Param, hcl.Range) {

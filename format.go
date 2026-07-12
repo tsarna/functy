@@ -221,6 +221,13 @@ func topLevelItems(res *Result) []topItem {
 		a := res.Types[i]
 		items = append(items, topItem{a.DefRange.Start, a.DefRange.End, func(f *formatter) { f.typeAlias(a) }})
 	}
+	// The namespace declaration must be emitted like any other top-level item:
+	// this function is the whole of what fmt renders, so an item missing here is
+	// silently deleted from the reformatted source.
+	for i := range res.Namespaces {
+		n := res.Namespaces[i]
+		items = append(items, topItem{n.DefRange.Start, n.DefRange.End, func(f *formatter) { f.namespaceDecl(n) }})
+	}
 	sort.Slice(items, func(i, j int) bool { return items[i].start.Byte < items[j].start.Byte })
 	return items
 }
@@ -331,6 +338,10 @@ func (f *formatter) topDecl(kw string, d Decl) {
 
 func (f *formatter) typeAlias(a TypeAlias) {
 	f.line("type "+a.Name+" = "+a.TypeSrc, a.DefRange.End)
+}
+
+func (f *formatter) namespaceDecl(n NamespaceDecl) {
+	f.line("namespace "+n.Name, n.DefRange.End)
 }
 
 // ---- statement sequences ----------------------------------------------------

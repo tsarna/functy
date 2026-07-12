@@ -23,12 +23,25 @@ type jsonSymbols struct {
 // a function's rendered signature (empty otherwise); Doc is the leading
 // doc-comment block (omitted when absent). Range is the full definition span (a
 // whole block for func/test), 1-based like the other --json ranges.
+//
+// Name stays the *bare* declared name — it is the outline label and the test
+// identifier, and a consumer that predates namespaces keeps working unchanged.
+// Namespace, Qualified and Private are additive and omitted in the global
+// namespace, so an existing client sees exactly what it saw before.
 type jsonSymbol struct {
-	Kind   string     `json:"kind"`
-	Name   string     `json:"name"`
-	Detail string     `json:"detail,omitempty"`
-	Doc    string     `json:"doc,omitempty"`
-	Range  *jsonRange `json:"range"`
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+	// Namespace is the declaration's namespace; omitted in the global namespace.
+	Namespace string `json:"namespace,omitempty"`
+	// Qualified is the name a function is callable under (`foo::bar::baz`);
+	// omitted in the global namespace, where it equals Name.
+	Qualified string `json:"qualified,omitempty"`
+	// Private marks a namespace-local (`_`-prefixed) declaration: still listed, so
+	// an outline shows the whole file, but never handed to the host.
+	Private bool       `json:"private,omitempty"`
+	Detail  string     `json:"detail,omitempty"`
+	Doc     string     `json:"doc,omitempty"`
+	Range   *jsonRange `json:"range"`
 }
 
 func symbolsCmd() *cobra.Command {
@@ -53,7 +66,7 @@ func symbolsCmd() *cobra.Command {
 			}
 			// Diagnostics are ignored on purpose: symbols is best-effort, so a file
 			// mid-edit still yields whatever top-level declarations parsed.
-			res, _, _, _ := loadProgram(input, baselineFunctions(io.Discard))
+			res, _, _, _, _ := loadProgram(input, baselineFunctions(io.Discard))
 			syms := collectSymbols(res)
 			if jsonOut {
 				writeSymbolsJSON(cmd.OutOrStdout(), syms)
@@ -74,10 +87,13 @@ func collectSymbols(res *functy.Result) []jsonSymbol {
 	if res != nil {
 		for _, fn := range res.Funcs {
 			symbols = append(symbols, jsonSymbol{
-				Kind:   "func",
-				Name:   fn.Name,
-				Detail: funcSignature(fn),
-				Doc:    fn.Doc,
+				Kind:      "func",
+				Name:      fn.Name,
+				Namespace: fn.Namespace,
+				Qualified: qualifiedIfNamespaced(fn.Namespace, fn.Name),
+				Private:   fn.IsPrivate(),
+				Detail:    funcSignature(fn),
+				Doc:       fn.Doc,
 				// DefRange is only the header; extend through the body so the range
 				// spans the whole block (for outline extent, breadcrumbs, sticky scroll).
 				Range: rangeToJSON(hcl.Range{
@@ -89,19 +105,22 @@ func collectSymbols(res *functy.Result) []jsonSymbol {
 		}
 		for _, t := range res.Tests {
 			symbols = append(symbols, jsonSymbol{
-				Kind:  "test",
-				Name:  t.Name,
-				Range: rangeToJSON(t.DefRange),
+				Kind:      "test",
+				Name:      t.Name,
+				Namespace: t.Namespace,
+				Range:     rangeToJSON(t.DefRange),
 			})
 		}
 		for _, d := range res.Consts {
 			symbols = append(symbols, jsonSymbol{
-				Kind: "const", Name: d.Name, Doc: d.Doc, Range: rangeToJSON(d.DefRange),
+				Kind: "const", Name: d.Name, Namespace: d.Namespace, Private: d.IsPrivate(),
+				Doc: d.Doc, Range: rangeToJSON(d.DefRange),
 			})
 		}
 		for _, d := range res.Vars {
 			symbols = append(symbols, jsonSymbol{
-				Kind: "var", Name: d.Name, Doc: d.Doc, Range: rangeToJSON(d.DefRange),
+				Kind: "var", Name: d.Name, Namespace: d.Namespace, Private: d.IsPrivate(),
+				Doc: d.Doc, Range: rangeToJSON(d.DefRange),
 			})
 		}
 		for _, ta := range res.Types {
@@ -132,8 +151,22 @@ func writeSymbolsJSON(w io.Writer, symbols []jsonSymbol) {
 	_ = enc.Encode(jsonSymbols{Symbols: symbols})
 }
 
+// qualifiedIfNamespaced returns the callable name for a namespaced declaration,
+// and "" in the global namespace — where it would merely repeat Name, and where
+// omitting it keeps the JSON byte-identical to what pre-namespace clients saw.
+func qualifiedIfNamespaced(namespace, name string) string {
+	if namespace == "" {
+		return ""
+	}
+	return functy.Qualify(namespace, name)
+}
+
 // writeSymbolsText prints one `file:line: kind name` per symbol — greppable and
 // mirroring how the diagnostic text output names locations.
+//
+// A function is printed under its *qualified* name: that is the name it is
+// callable and greppable by, and the `_` prefix already makes a private one
+// self-evident in the listing.
 func writeSymbolsText(w io.Writer, symbols []jsonSymbol) {
 	for _, s := range symbols {
 		var display string
@@ -141,7 +174,11 @@ func writeSymbolsText(w io.Writer, symbols []jsonSymbol) {
 		case "test":
 			display = fmt.Sprintf("test %q", s.Name)
 		case "func":
-			display = "func " + s.Name + s.Detail
+			name := s.Name
+			if s.Qualified != "" {
+				name = s.Qualified
+			}
+			display = "func " + name + s.Detail
 		default:
 			display = s.Kind + " " + s.Name
 		}

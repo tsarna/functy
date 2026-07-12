@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/tsarna/functy"
@@ -45,7 +48,7 @@ func resolveSourceInput(stdin io.Reader, args []string, filename string) (any, e
 // The input is anything functy.ParseSources understands — typically a []string
 // of paths/directories, but also a functy.Source for in-memory content (e.g. an
 // editor buffer piped to `check -`).
-func loadProgram(input any, baseline map[string]function.Function) (*functy.Result, *hcl.EvalContext, map[string]*hcl.File, hcl.Diagnostics) {
+func loadProgram(input any, baseline map[string]function.Function) (*functy.Result, *functy.Compiled, *hcl.EvalContext, map[string]*hcl.File, hcl.Diagnostics) {
 	sources, diags := functy.ParseSources(input)
 
 	files := make(map[string]*hcl.File, len(sources))
@@ -53,7 +56,7 @@ func loadProgram(input any, baseline map[string]function.Function) (*functy.Resu
 		files[s.Filename] = &hcl.File{Bytes: s.Bytes}
 	}
 	if diags.HasErrors() {
-		return nil, nil, files, diags
+		return nil, nil, nil, files, diags
 	}
 
 	var ctx *hcl.EvalContext
@@ -72,14 +75,14 @@ func loadProgram(input any, baseline map[string]function.Function) (*functy.Resu
 	baseline["doc"] = functy.DocFunc(evalCtxFn)
 	baseline["help"] = functy.HelpFunc(res.Funcs, evalCtxFn)
 
-	funcs, cdiags := res.Compile(evalCtxFn)
+	compiled, cdiags := res.CompileUnits(evalCtxFn)
 	diags = diags.Extend(cdiags)
 
-	all := make(map[string]function.Function, len(baseline)+len(funcs))
+	all := make(map[string]function.Function, len(baseline)+len(compiled.Funcs))
 	for k, v := range baseline {
 		all[k] = v
 	}
-	for k, v := range funcs {
+	for k, v := range compiled.Funcs {
 		if _, reserved := baseline[k]; reserved {
 			diags = diags.Append(&hcl.Diagnostic{
 				Severity: hcl.DiagError,
@@ -90,6 +93,7 @@ func loadProgram(input any, baseline map[string]function.Function) (*functy.Resu
 		}
 		all[k] = v
 	}
+	diags = diags.Extend(shadowWarnings(res, compiled, baseline))
 
 	// The context is shared by reference: functy functions late-bind to it, and
 	// the declaration evaluator below fills its Variables in dependency order.
@@ -100,7 +104,94 @@ func loadProgram(input any, baseline map[string]function.Function) (*functy.Resu
 	decls := append(append([]functy.Decl{}, res.Consts...), res.Vars...)
 	diags = diags.Extend(evalTopLevelDecls(decls, ctx))
 
-	return res, ctx, files, diags
+	return res, compiled, ctx, files, diags
+}
+
+// shadowWarnings reports a namespaced function whose bare name shadows a baseline
+// builtin inside its own namespace.
+//
+// The reserved-name *error* above cannot catch this: a namespaced function reaches
+// the host's map as `foo::upper`, which collides with nothing, while bare `upper`
+// still wins inside `foo`'s bodies because a namespace's unit layer is consulted
+// before the host's context. Namespacing therefore disarms the collision check
+// precisely where the shadowing still happens, so the diagnostic is rebuilt here,
+// where the host's function set is actually known. functy itself cannot do this —
+// its eval context is late-bound and may not exist at compile time — which is why
+// Compiled.Units is exported: a library host can run the same check.
+//
+// A warning, not an error: shadowing a builtin inside your own namespace is legal
+// and occasionally deliberate. Private names cannot trigger it — no baseline
+// function is `_`-prefixed.
+func shadowWarnings(res *functy.Result, compiled *functy.Compiled, baseline map[string]function.Function) hcl.Diagnostics {
+	var diags hcl.Diagnostics
+	for _, fn := range res.Funcs {
+		if fn.Namespace == "" || fn.IsPrivate() {
+			continue
+		}
+		if _, shadows := baseline[fn.Name]; !shadows {
+			continue
+		}
+		diags = diags.Append(&hcl.Diagnostic{
+			Severity: hcl.DiagWarning,
+			Summary:  "Function shadows a built-in inside its namespace",
+			Detail: fmt.Sprintf(
+				"%q is a built-in function. Within namespace %s, a call to %s resolves to this declaration rather than the built-in; elsewhere the built-in is unaffected. Call it as %s, or rename this function.",
+				fn.Name, fn.Namespace, fn.Name, fn.QualifiedName()),
+			Subject: fn.DefRange.Ptr(),
+		})
+	}
+	return diags
+}
+
+// errEntryNotFound distinguishes "no such entry function" from a real resolution
+// failure (an ambiguous bare name), because `run -i` treats a missing default
+// `main` as fine — it just drops into the REPL — while an ambiguous name is still
+// an error the user must resolve.
+var errEntryNotFound = errors.New("entry function not found")
+
+// resolveEntry finds an entry function by name, tolerating namespaces.
+//
+// A file that declares `namespace foo` registers its `main` as `foo::main`, so a
+// plain `functy run file.cty` would otherwise stop working the moment a namespace
+// is added. Resolution, in order:
+//
+//  1. an exact key in the assembled context — a host function, or an exported
+//     functy function under its qualified name;
+//  2. a bare name declared in exactly one namespace — which is what makes the
+//     default `--func main` keep working, and what reaches a private `_helper`,
+//     since neither is in the context at all.
+//
+// A bare name declared in several namespaces is ambiguous and is reported as such
+// rather than guessed at. Returns the resolved (display) name alongside the
+// function, so errors and traces can name what actually ran.
+func resolveEntry(compiled *functy.Compiled, ctx *hcl.EvalContext, name string) (function.Function, string, error) {
+	if ctx != nil {
+		if fn, ok := ctx.Functions[name]; ok {
+			return fn, name, nil
+		}
+	}
+
+	var found function.Function
+	var matches []string
+	if compiled != nil {
+		for ns, table := range compiled.Units {
+			if fn, ok := table[name]; ok {
+				found = fn
+				matches = append(matches, functy.Qualify(ns, name))
+			}
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return function.Function{}, "", fmt.Errorf("%w: %q", errEntryNotFound, name)
+	case 1:
+		return found, matches[0], nil
+	default:
+		sort.Strings(matches)
+		return function.Function{}, "", fmt.Errorf(
+			"entry function %q is declared in more than one namespace (%s); name one of them with --func",
+			name, strings.Join(matches, ", "))
+	}
 }
 
 // evalTopLevelDecls evaluates collected const/var declarations into ctx.Variables.

@@ -106,6 +106,14 @@ Reserved keywords: `func`, `var`, `const`, `return`, `if`, `else`, `for`,
 Type names (`string`, `number`, `bool`, `any`, `list`, `set`, `map`, `object`,
 `tuple`, `optional`) are contextual — reserved only in a type annotation.
 
+`namespace`, `type`, and `test` are likewise contextual — special only at
+top-level declaration position, so each remains usable as an ordinary identifier
+(`func namespace(...)`, `var test = 1`).
+
+A leading underscore marks a declaration as private to its namespace (see
+[Namespaces and visibility](#namespaces-and-visibility)); `_` alone is the blank
+identifier and cannot name a declaration.
+
 ## Types
 
 functy types **are** cty types. Type annotations use the familiar cty
@@ -704,6 +712,106 @@ functy uses lexically nested scopes:
   try/catch/finally body, and bare block introduces a new child scope.
 - Parameters are bound in the function's top scope.
 
+## Namespaces and visibility
+
+A file may open with a `namespace` declaration. Its functions are then registered
+with the host under a **qualified name**, while the file's own functions go on
+calling each other by their bare names:
+
+```functy
+namespace acme::math
+
+// Registered with the host as acme::math::double.
+func double(n: number) -> number {
+    return _twice(n)          // a sibling, by its bare name
+}
+
+// Namespace-local: acme::math can call it; the host never sees it.
+func _twice(n: number) -> number {
+    return n * 2
+}
+```
+
+A namespace name is one or more `::`-separated identifiers. `namespace foo` is as
+valid as `namespace foo::bar` — `::` *subdivides* a name, but no depth is implied.
+
+The declaration must be the **first** declaration in the file, and a file may have
+at most one. A file without one is in the **global namespace**, which is a
+namespace like any other — its functions simply reach the host under their bare
+names, exactly as they always have.
+
+### Private declarations: a leading `_`
+
+A declaration whose name begins with an underscore is **namespace-local**: it is
+compiled and callable from within its namespace, but is never handed to the host.
+This is how a file keeps a helper to itself instead of publishing it into the
+host's shared function namespace, where it might collide with a built-in.
+
+Privacy is spelled as a naming convention rather than a keyword for two reasons.
+It is visible at the **call site** — `_helper(x)` tells you what `helper(x)` cannot
+— and it makes a collision with a host function *structurally impossible*, since
+no host function, cty builtin, or add-on package function is `_`-prefixed.
+
+The convention applies to `var`, `const`, and `type` too. Note `_` alone is the
+blank identifier and cannot name a declaration.
+
+### A namespace spans files
+
+Two files declaring the same namespace share one unit: each can call the other's
+functions — private ones included — by their bare names. This is the Go package
+model, and it is why `_` means *namespace*-local rather than *file*-local.
+
+### Nesting is a naming convention, not containment
+
+`foo::bar` is **not** "inside" `foo` in any sense functy enforces. There is no
+parent-namespace fallback, no partial qualification, and no hierarchy to walk:
+code in `foo::bar` gets no special visibility into `foo`, and must spell
+`foo::helper()` in full — exactly as an unrelated namespace would. A name either
+matches exactly or is not found.
+
+### Calling across namespaces
+
+Use the fully-qualified name. There is no `import`; a namespace is usable the
+moment it exists:
+
+```functy
+namespace acme::report
+
+func summary() -> string {
+    return "total: ${acme::math::double(21)}"
+}
+```
+
+`::` is a **function-call selector** in HCL, so only functions can be qualified —
+there is no `foo::bar::x` for a variable or a type. Namespacing therefore applies
+to functions, which is the namespace that actually gets crowded. A namespaced
+file's top-level `const`/`var` are still collected for the host (with their
+namespace attached), and type aliases remain project-scoped across all sources.
+
+### Shadowing: local wins
+
+Because a namespace's own names are resolved before the host's, a function whose
+bare name matches a host function shadows it **inside that namespace**:
+
+```functy
+namespace acme::text
+
+func upper(s: string) -> string {   // warning: shadows the built-in upper
+    return "SHOUT: ${s}"
+}
+```
+
+Elsewhere the built-in is unaffected, and `acme::text::upper` remains available.
+This is legal and occasionally deliberate, so it is a *warning*, not an error —
+the `functy` CLI reports it, and a library host can do the same by comparing
+`Compiled.Units` against its own registry. In the global namespace the same clash
+is still a hard error, because there the function really would replace the
+built-in.
+
+Note that a private name can never trigger this. The same applies to the
+test-only `skip()` builtin: a namespace that declares its own `skip` shadows it
+for that namespace's tests.
+
 ## Top-level const and var
 
 By default a `.cty` file contains only function declarations. A host may opt in
@@ -773,7 +881,8 @@ test "add is commutative" {
 ## Grammar
 
 ```ebnf
-File        = { FuncDecl | TestDecl } .
+File        = [ NamespaceDecl ] { FuncDecl | TestDecl } .
+NamespaceDecl = "namespace" ident { "::" ident } Term .
 FuncDecl    = "func" ident "(" [ ParamList ] ")" [ "->" Type ] Block .
 TestDecl    = "test" string Block .
 ParamList   = Param { "," Param } [ "," Variadic ] | Variadic .

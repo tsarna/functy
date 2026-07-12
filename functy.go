@@ -123,10 +123,16 @@ func (p *Parser) Parse(src []byte, filename string) (*Result, hcl.Diagnostics) {
 }
 
 // ParseAll parses several sources together and merges their declarations into one
-// Result. The sources share one namespace: type aliases declared in any source
-// are visible to every source (see parseSources), and per-source function/var/
-// const declarations are concatenated in order (duplicate function names across
-// sources are detected later by Result.Compile).
+// Result. Type aliases declared in any source are visible to every source (they
+// are project-scoped — see parseSources), and per-source function/var/const
+// declarations are concatenated in order.
+//
+// Functions are scoped by the *namespace* of the source they were declared in (a
+// source with no `namespace` declaration is in the global namespace). A namespace
+// spans files: two sources declaring `namespace foo` share one unit, and each can
+// call the other's functions — including its private ones — by their bare names.
+// Duplicate function names are detected later by Result.Compile, which keys on the
+// qualified name, so two sources in *different* namespaces may each declare `baz`.
 func (p *Parser) ParseAll(sources []Source) (*Result, hcl.Diagnostics) {
 	return p.parseSources(sources)
 }
@@ -203,6 +209,7 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 		merged.Tests = append(merged.Tests, r.Tests...)
 		merged.Consts = append(merged.Consts, r.Consts...)
 		merged.Vars = append(merged.Vars, r.Vars...)
+		merged.Namespaces = append(merged.Namespaces, r.Namespaces...)
 	}
 	return merged, diags
 }
@@ -216,6 +223,14 @@ type Result struct {
 	Consts []Decl      // top-level const declarations (only when enabled)
 	Vars   []Decl      // top-level var declarations (only when enabled)
 	Types  []TypeAlias // top-level type aliases (project-scoped across all sources)
+
+	// Namespaces holds the `namespace a::b` declaration of each namespaced source
+	// parsed together, in parse order (a source without one is in the global
+	// namespace and contributes nothing here). The namespace a given declaration
+	// belongs to is on the declaration itself (FuncDecl.Namespace and friends);
+	// this slice exists so tooling that renders or lists the source — notably fmt,
+	// which emits from the AST — can see the declaration itself.
+	Namespaces []NamespaceDecl
 
 	// Comments is every comment from every source parsed together, in source
 	// order, retained with position. Declaration doc comments are also surfaced on
@@ -245,6 +260,15 @@ type TypeAlias struct {
 // Expr.Variables() exposes the references needed for that sort.
 type Decl struct {
 	Name string
+	// Namespace is the enclosing namespace of the file the declaration appeared
+	// in ("" = global). functy attaches it and takes no further position: a global
+	// is whatever the host decides it is, so the host may ignore namespaced
+	// globals, reject them, or implement them by a mechanism of its own.
+	//
+	// Note there is no qualified *spelling* for a global: HCL's `::` is a
+	// function-call selector, so `foo::bar::x` as a variable reference is a parse
+	// error. Namespacing therefore applies to functions; this field is metadata.
+	Namespace string
 	// Doc is the rendered leading doc-comment block (`//` or `#` lines directly
 	// above the declaration, directive lines excluded); "" when there is none.
 	Doc      string
@@ -253,3 +277,8 @@ type Decl struct {
 	Expr     hcl.Expression // initializer, lazily evaluated (nil if none)
 	DefRange hcl.Range
 }
+
+// IsPrivate reports whether the declaration is namespace-local (a leading
+// underscore). As with functions, this is advisory for var/const: functy only
+// collects them, so it is the host that decides what to do with a private global.
+func (d *Decl) IsPrivate() bool { return isPrivateName(d.Name) }

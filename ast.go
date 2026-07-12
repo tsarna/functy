@@ -1,12 +1,17 @@
 package functy
 
 import (
+	"strings"
+
 	"github.com/hashicorp/hcl/v2"
 )
 
 // FuncDecl is a top-level function declaration.
 type FuncDecl struct {
 	Name string
+	// Namespace is the enclosing namespace, from the file's `namespace a::b`
+	// declaration; "" is the global namespace. See NamespaceDecl.
+	Namespace string
 	// Doc is the rendered leading doc-comment block (`//` or `#` lines directly
 	// above the declaration, directive lines excluded); "" when there is none.
 	Doc        string
@@ -19,18 +24,69 @@ type FuncDecl struct {
 	DefRange   hcl.Range
 }
 
+// QualifiedName is the name the function is registered under with the host:
+// its namespace and bare name joined by `::`, or just the bare name in the
+// global namespace. Private functions have a qualified name but are never
+// handed to the host (see Compiled).
+func (f *FuncDecl) QualifiedName() string { return Qualify(f.Namespace, f.Name) }
+
+// IsPrivate reports whether the declaration is namespace-local: visible to the
+// other functions of its namespace, never registered with the host.
+//
+// Privacy is a naming convention (a leading underscore) rather than a keyword,
+// so it is a pure function of the name and cannot desync from it. It also makes
+// a private name incapable of colliding with a host function, since no host
+// function, cty builtin, or add-on package function is `_`-prefixed.
+func (f *FuncDecl) IsPrivate() bool { return isPrivateName(f.Name) }
+
+// Qualify joins a namespace ("" = global) and a bare name into the name the
+// function is registered under.
+//
+// HCL parses `a::b::c(x)` natively and resolves it as a single flat map key, so a
+// qualified name needs no structure beyond the string itself: nesting is a naming
+// convention, not a containment relationship, and there is no parent-namespace
+// fallback. Exported so a host that walks Compiled.Units — which is keyed by bare
+// name — can render the callable name without reimplementing the join.
+func Qualify(namespace, name string) string {
+	if namespace == "" {
+		return name
+	}
+	return namespace + "::" + name
+}
+
+func isPrivateName(name string) bool { return strings.HasPrefix(name, "_") }
+
 // TestDecl is a top-level `test "description" { … }` block. Its body is ordinary
 // functy statements; the test passes if the body runs to completion and fails if an
 // error (a failed assert, a throw, an eval error) unwinds out of it. Tests are not
 // registered in the callable function namespace.
 type TestDecl struct {
 	Name      string      // the test description (a string literal)
+	Namespace string      // the namespace of the file the test was declared in ("" = global)
 	Body      []Statement // body statements, like a function body
 	BodyRange hcl.Range   // the `{ ... }` body span, for rendering (fmt)
 	DefRange  hcl.Range   // spans `test` … closing `}`
 }
 
 func (t *TestDecl) srcRange() hcl.Range { return t.DefRange }
+
+// NamespaceDecl is a file's leading `namespace a::b` declaration.
+//
+// A namespace name is one or more `::`-separated identifiers: `namespace foo` is
+// as legitimate as `namespace foo::bar`, and no depth is implied. Nesting is
+// purely a naming convention — `foo::bar` is not "inside" `foo` in any sense
+// functy or HCL enforces, and code in `foo::bar` gets no special visibility into
+// `foo`.
+//
+// The declaration is modeled in the AST (not merely stamped onto the decls it
+// governs) because fmt renders from the AST: an unmodeled top-level item would be
+// silently deleted on reformat.
+type NamespaceDecl struct {
+	Name     string    // "foo" or "foo::bar"
+	DefRange hcl.Range // spans `namespace` … the last segment
+}
+
+func (n *NamespaceDecl) srcRange() hcl.Range { return n.DefRange }
 
 // Param is a single function parameter.
 //

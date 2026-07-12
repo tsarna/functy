@@ -40,28 +40,37 @@ func runCmd() *cobra.Command {
 			}
 
 			baseline := baselineFunctions(cmd.OutOrStdout())
-			_, ctx, fileMap, diags := loadProgram(files, baseline)
+			_, compiled, ctx, fileMap, diags := loadProgram(files, baseline)
 			if diags.HasErrors() {
 				return emitRunError(cmd, jsonOut, fileMap, diags, "compilation failed")
 			}
 
-			fn, ok := ctx.Functions[funcName]
-			if !ok {
-				return emitRunPlainError(cmd, jsonOut, fmt.Errorf("entry function %q not found", funcName))
+			// Non-fatal diagnostics (today: a namespaced function shadowing a
+			// built-in). Text output streams them now, but the --json contract is one
+			// well-formed object on stderr — so in JSON mode they are held and folded
+			// into whichever single report is written, including the success case.
+			pending := carryWarnings(cmd, jsonOut, fileMap, diags)
+
+			fn, funcName, err := resolveEntry(compiled, ctx, funcName)
+			if err != nil {
+				return emitRunPlainError(cmd, jsonOut, pending, err)
 			}
 
 			argVals, adiags := evalArgs(callArgs, ctx)
 			if adiags.HasErrors() {
-				return emitRunError(cmd, jsonOut, fileMap, adiags, "invalid arguments")
+				return emitRunError(cmd, jsonOut, fileMap, pending.Extend(adiags), "invalid arguments")
 			}
 
 			result, err := fn.Call(argVals)
 			if err != nil {
 				var te *functy.ThrownError
 				if errors.As(err, &te) {
-					return emitRunError(cmd, jsonOut, fileMap, te.Diagnostics(), "execution failed")
+					return emitRunError(cmd, jsonOut, fileMap, pending.Extend(te.Diagnostics()), "execution failed")
 				}
-				return emitRunPlainError(cmd, jsonOut, fmt.Errorf("calling %q: %w", funcName, err))
+				return emitRunPlainError(cmd, jsonOut, pending, fmt.Errorf("calling %q: %w", funcName, err))
+			}
+			if len(pending) > 0 {
+				writeDiagsJSON(cmd.ErrOrStderr(), pending)
 			}
 			return printResult(cmd.OutOrStdout(), result, output)
 		},
@@ -88,19 +97,39 @@ func emitRunError(cmd *cobra.Command, jsonOut bool, fileMap map[string]*hcl.File
 	return errors.New(sentinel)
 }
 
+// carryWarnings handles the non-fatal diagnostics from loading.
+//
+// The text path prints them straight away and carries nothing forward: text
+// stderr is already a stream of diagnostics, and reporting a warning before the
+// program runs is the more useful ordering. The --json path must not, because its
+// contract is *one* well-formed object on stderr — writing a warnings report now
+// and an error report later would leave a consumer with two concatenated objects.
+// So it returns them for the caller to fold into whichever single report it emits.
+func carryWarnings(cmd *cobra.Command, jsonOut bool, fileMap map[string]*hcl.File, diags hcl.Diagnostics) hcl.Diagnostics {
+	if len(diags) == 0 {
+		return nil
+	}
+	if jsonOut {
+		return diags
+	}
+	writeDiags(cmd.ErrOrStderr(), fileMap, diags)
+	return nil
+}
+
 // emitRunPlainError reports a CLI-level failure that carries no source location (a
 // missing entry function, a non-thrown call error). When jsonOut it renders as a
-// one-line JSON diagnostic on stderr and returns errSilent; otherwise it returns
-// the error unchanged for main to print, preserving run's original text output for
+// one-line JSON diagnostic on stderr — preceded by any carried warnings, so the
+// report stays a single object — and returns errSilent; otherwise it returns the
+// error unchanged for main to print, preserving run's original text output for
 // these cases.
-func emitRunPlainError(cmd *cobra.Command, jsonOut bool, err error) error {
+func emitRunPlainError(cmd *cobra.Command, jsonOut bool, pending hcl.Diagnostics, err error) error {
 	if !jsonOut {
 		return err
 	}
-	writeDiagsJSON(cmd.ErrOrStderr(), hcl.Diagnostics{{
+	writeDiagsJSON(cmd.ErrOrStderr(), pending.Extend(hcl.Diagnostics{{
 		Severity: hcl.DiagError,
 		Summary:  err.Error(),
-	}})
+	}}))
 	return errSilent
 }
 

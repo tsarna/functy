@@ -1,0 +1,21 @@
+//functy:require param_types
+// A namespaced file: the namespace declaration must survive a reformat, keep its
+// trailing comment, and stay above the declarations it governs.
+
+namespace acme::math  // the math helpers
+
+// double returns twice n.
+func double(n: number) -> number {
+    return _twice(n)
+}
+
+// _twice is namespace-local: acme::math can call it, the host never sees it.
+func _twice(n: number) -> number {
+    return n * 2
+}
+
+const scale = 3
+
+test "double doubles" {
+    assert(double(4) == 8)
+}
