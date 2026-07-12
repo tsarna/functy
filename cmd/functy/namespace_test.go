@@ -135,6 +135,11 @@ func TestSymbolsNamespaceFields(t *testing.T) {
 	if s := byName["double"]; s.Namespace != "acme::math" || s.Qualified != "acme::math::double" || s.Private {
 		t.Errorf("double: got %+v", s)
 	}
+	// The namespace declaration is itself a symbol, first in source order, so a
+	// client can show it (and nest the file's declarations under it).
+	if got.Symbols[0].Kind != "namespace" || got.Symbols[0].Name != "acme::math" {
+		t.Errorf("first symbol should be the namespace declaration, got %+v", got.Symbols[0])
+	}
 	// A private declaration is still listed — an outline shows the whole file —
 	// but is flagged.
 	if s, ok := byName["_twice"]; !ok || !s.Private {

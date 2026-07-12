@@ -19,7 +19,7 @@ type jsonSymbols struct {
 	Symbols []jsonSymbol `json:"symbols"`
 }
 
-// jsonSymbol is one declaration. Kind is func/const/var/type/test. Detail carries
+// jsonSymbol is one declaration. Kind is namespace/func/const/var/type/test. Detail carries
 // a function's rendered signature (empty otherwise); Doc is the leading
 // doc-comment block (omitted when absent). Range is the full definition span (a
 // whole block for func/test), 1-based like the other --json ranges.
@@ -85,6 +85,16 @@ func symbolsCmd() *cobra.Command {
 func collectSymbols(res *functy.Result) []jsonSymbol {
 	symbols := []jsonSymbol{}
 	if res != nil {
+		// The namespace declaration itself. Its range is the declaration line, not
+		// the file: a client that wants to nest the file's declarations under it
+		// (as vscode-functy does) widens the extent itself, rather than having the
+		// CLI report a span the declaration does not actually have.
+		for i := range res.Namespaces {
+			n := res.Namespaces[i]
+			symbols = append(symbols, jsonSymbol{
+				Kind: "namespace", Name: n.Name, Range: rangeToJSON(n.DefRange),
+			})
+		}
 		for _, fn := range res.Funcs {
 			symbols = append(symbols, jsonSymbol{
 				Kind:      "func",

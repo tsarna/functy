@@ -39,9 +39,10 @@ tagged. Until then, everything lives under **Unreleased**.
   - CLI: `run --func` resolves a bare name declared in exactly one namespace (so
     `functy run file.cty` keeps working when a file gains a namespace, and
     `--func _helper` can exercise a private one), and reports an ambiguous name
-    rather than guessing. `symbols` gains additive `namespace` / `qualified` /
-    `private` fields — omitted in the global namespace, so existing consumers see
-    unchanged output.
+    rather than guessing. `symbols` gains a `kind: "namespace"` symbol for the
+    declaration plus additive `namespace` / `qualified` / `private` fields on each
+    declaration — all omitted in the global namespace, so a file without a
+    `namespace` declaration produces byte-identical output to before.
 
 - **Shadowing warning.** A namespaced function whose bare name matches a baseline
   built-in shadows it *inside that namespace* (local wins). Namespacing otherwise

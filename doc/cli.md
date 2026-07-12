@@ -393,12 +393,18 @@ $ functy symbols --json examples/math.cty
 }
 ```
 
-For a namespaced file, three further fields appear. `namespace` is the
-declaration's namespace, `qualified` is the name a function is callable under, and
-`private` marks a `_`-prefixed declaration. All three are omitted in the global
-namespace, so output for a file without a `namespace` declaration is unchanged.
-`name` always stays the **bare** declared name (it is the outline label and the
-test identifier); the text listing prints functions under their qualified name.
+A namespaced file also emits a `kind: "namespace"` symbol for the declaration
+itself, first in source order. Its range is the declaration *line*; a client that
+wants to nest the file's declarations under it (as the VS Code extension does)
+widens that extent itself, rather than having the CLI report a span the
+declaration does not have.
+
+Three further fields appear on the declarations. `namespace` is the declaration's
+namespace, `qualified` is the name a function is callable under, and `private`
+marks a `_`-prefixed declaration. All three are omitted in the global namespace,
+so output for a file without a `namespace` declaration is unchanged. `name` always
+stays the **bare** declared name (it is the outline label and the test
+identifier); the text listing prints functions under their qualified name.
 
 Private declarations *are* listed — an outline should show the whole file — and
 are flagged rather than hidden:
