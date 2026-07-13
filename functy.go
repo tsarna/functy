@@ -38,6 +38,14 @@ type Parser struct {
 	requireDeclaredTypes bool
 
 	resolver *TypeResolver
+
+	// externSources are //functy:extern sources supplied by the *host* (see
+	// RegisterExterns), as opposed to extern files among the parsed sources. They
+	// are parsed lazily and memoized into hostExterns; see loadHostExterns.
+	externSources   []Source
+	hostExterns     []*FuncDecl
+	hostExternDiags hcl.Diagnostics
+	hostExternsRead bool
 }
 
 // NewParser returns a Parser with default options.
@@ -67,6 +75,104 @@ func (p *Parser) RegisterType(name string, ty cty.Type) *Parser {
 func (p *Parser) RegisterOpenType(name string, pred func(cty.Value) error) *Parser {
 	p.types().RegisterOpenType(name, pred)
 	return p
+}
+
+// RegisterExterns registers a //functy:extern source supplied by the host: the
+// bodiless declarations of functions the host itself provides, whose real
+// signatures their cty metadata cannot express. They surface on
+// Result.HostExterns, feed help(), and are checked for collisions — but they are
+// never compiled, and never attributed to the sources being parsed.
+//
+// The source must carry the //functy:extern directive itself; registration
+// verifies it rather than forcing the mode. That keeps one byte string meaning one
+// thing however it is loaded: the same file a leaf package embeds is a valid
+// standalone `.cty` that `functy fmt`, `functy symbols`, and an editor can open.
+//
+// The canonical arrangement, which costs the leaf package no dependency on functy
+// (`embed` is stdlib, and these bytes are opaque to it):
+//
+//	//go:embed externs.cty
+//	var externsCty []byte
+//
+//	func Externs() []byte { return externsCty }
+//
+// and in the host:
+//
+//	parser.RegisterExterns(pkg.Externs(), pkg.ExternsFilename)
+//
+// Returns the Parser for chaining. Parsing is deferred to the first Parse/ParseAll,
+// so registration order relative to RegisterType does not matter.
+func (p *Parser) RegisterExterns(src []byte, filename string) *Parser {
+	p.externSources = append(p.externSources, Source{Filename: filename, Bytes: src})
+	p.hostExternsRead = false // re-parse: a later RegisterType may change resolution
+	return p
+}
+
+// ExternSources returns the sources registered with RegisterExterns. A host uses it
+// to seed its diagnostic file map, so that a diagnostic pointing into an extern file
+// it never read from disk still renders with a source snippet.
+func (p *Parser) ExternSources() []Source {
+	return append([]Source(nil), p.externSources...)
+}
+
+// loadHostExterns parses the registered extern sources, memoizing the result.
+//
+// Each is parsed against its *own* clone of the host's type environment, and only
+// its Externs are kept. Both matter:
+//
+//   - A separate env means a type alias declared in a user's file cannot silently
+//     satisfy a name in a host extern (they are unrelated bodies of source that
+//     merely happen to be parsed together).
+//   - Keeping only Externs is what makes the fmt guarantee hold. A formatter walks
+//     Result.Comments by byte offset into the file it is formatting; a host file's
+//     comments merged into that slice would splice foreign text at offsets belonging
+//     to the user's source. So Comments, Directives, and Types are dropped here, and
+//     the declarations land in Result.HostExterns rather than Result.Externs, which
+//     is what fmt renders.
+func (p *Parser) loadHostExterns() ([]*FuncDecl, hcl.Diagnostics) {
+	if p.hostExternsRead {
+		return p.hostExterns, p.hostExternDiags
+	}
+	p.hostExternsRead = true
+	p.hostExterns, p.hostExternDiags = nil, nil
+
+	for _, s := range p.externSources {
+		tokens, comments, diags := lexAll(s.Bytes, s.Filename)
+		fd, idiags := interpretFunctyDirectives(leadingDirectives(comments, tokens))
+		diags = diags.Extend(idiags)
+
+		if !fd.extern {
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Registered source is not an extern file",
+				Detail: fmt.Sprintf(
+					"%s was registered with RegisterExterns but its leading comment block does not carry the //functy:extern directive. A registered extern source must declare itself one.", s.Filename),
+				Subject: &hcl.Range{Filename: s.Filename, Start: hcl.InitialPos, End: hcl.InitialPos},
+			})
+			p.hostExternDiags = p.hostExternDiags.Extend(diags)
+			continue
+		}
+
+		pr := &parser{
+			src:      s.Bytes,
+			filename: s.Filename,
+			tokens:   tokens,
+			env:      p.types().env.clone(),
+			extern:   true,
+			strict: strictness{
+				paramTypes:    combineReq(p.requireParamTypes, fd.paramTypes),
+				returnType:    combineReq(p.requireReturnType, fd.returnType),
+				declaredTypes: combineReq(p.requireDeclaredTypes, fd.declaredTypes),
+			},
+		}
+		r := pr.parseFile()
+		diags = diags.Extend(pr.diags)
+		attachDocComments(s.Bytes, r, comments)
+
+		p.hostExterns = append(p.hostExterns, r.Externs...)
+		p.hostExternDiags = p.hostExternDiags.Extend(diags)
+	}
+	return p.hostExterns, p.hostExternDiags
 }
 
 // RequireParamTypes, when set, requires every function parameter to carry an
@@ -228,6 +334,13 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 		merged.Vars = append(merged.Vars, r.Vars...)
 		merged.Namespaces = append(merged.Namespaces, r.Namespaces...)
 	}
+	// Host-supplied externs (RegisterExterns) are declarations *about* the host, not
+	// about these sources: they go in their own field, contribute no comments, and
+	// are never rendered by fmt. See loadHostExterns.
+	hostExterns, hostDiags := p.loadHostExterns()
+	merged.HostExterns = hostExterns
+	diags = diags.Extend(hostDiags)
+
 	diags = diags.Extend(checkExternNames(merged))
 	return merged, diags
 }
@@ -248,8 +361,12 @@ func checkExternNames(r *Result) hcl.Diagnostics {
 		funcs[fn.QualifiedName()] = fn
 	}
 
-	seen := make(map[string]*FuncDecl, len(r.Externs))
-	for _, ex := range r.Externs {
+	// One `seen` map across both sets, so a host extern colliding with a file extern
+	// (or with another host's) is caught on the same footing as two file externs.
+	// File externs go first: they are the ones with a source the user can edit, so a
+	// diagnostic is better pointed at the later, host-registered declaration.
+	seen := make(map[string]*FuncDecl, len(r.Externs)+len(r.HostExterns))
+	for _, ex := range append(append([]*FuncDecl(nil), r.Externs...), r.HostExterns...) {
 		name := ex.QualifiedName()
 		if prev, ok := seen[name]; ok {
 			diags = diags.Append(&hcl.Diagnostic{
@@ -301,6 +418,19 @@ type Result struct {
 	// an overload set, so supporting overloads later is a relaxation of
 	// checkExternNames rather than a change to this type.
 	Externs []*FuncDecl
+
+	// HostExterns are the externs the *host* registered with Parser.RegisterExterns,
+	// as opposed to those declared by the parsed sources (Externs). They describe the
+	// host's own functions, so they belong to no source file here.
+	//
+	// The split is what makes fmt safe, and is why this is a separate field rather
+	// than a flag: a tool that renders *a source* — fmt, symbols, an outline — must
+	// iterate Externs and ignore HostExterns, and gets that by default, because it
+	// cannot reach this field without naming it. Merging the two would let `fmt` on a
+	// user's file emit another package's declarations into it.
+	//
+	// Reflection (help()) reads both.
+	HostExterns []*FuncDecl
 
 	// Namespaces holds the `namespace a::b` declaration of each namespaced source
 	// parsed together, in parse order (a source without one is in the global

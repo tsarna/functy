@@ -37,6 +37,13 @@ func render(v cty.Value, indent int) string {
 
 	switch {
 	case t == cty.String:
+		// A multi-line string at top level renders as a heredoc rather than one
+		// backslash-escaped line. It stays valid, round-trippable HCL, and it is the
+		// difference between reading help("f") and decoding it. Nested strings (inside
+		// a list or object) keep quoting: a heredoc cannot appear mid-expression.
+		if indent == 0 && strings.Contains(v.AsString(), "\n") {
+			return heredocHCL(v.AsString())
+		}
 		return quoteHCL(v.AsString())
 	case t == cty.Number:
 		return v.AsBigFloat().Text('f', -1)
@@ -176,4 +183,25 @@ func quoteHCL(s string) string {
 	q = strings.ReplaceAll(q, "${", "$${")
 	q = strings.ReplaceAll(q, "%{", "%%{")
 	return q
+}
+
+// heredocHCL renders a multi-line string as an HCL heredoc, so that its lines are
+// readable as lines. Used only at top level, where a heredoc is grammatical.
+//
+// The `${` / `%{` escaping matches quoteHCL: a heredoc still interpolates, so the
+// sequences have to be neutralized the same way. The delimiter is grown until it
+// does not occur in the body, so a value containing the literal text "EOT" cannot
+// terminate its own heredoc early.
+func heredocHCL(s string) string {
+	delim := "EOT"
+	for strings.Contains(s, delim) {
+		delim += "_"
+	}
+
+	body := strings.ReplaceAll(s, "${", "$${")
+	body = strings.ReplaceAll(body, "%{", "%%{")
+	if !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	return "<<" + delim + "\n" + body + delim
 }

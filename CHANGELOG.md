@@ -87,7 +87,33 @@ tagged. Until then, everything lives under **Unreleased**.
   - CLI: `symbols` gains `kind: "extern"`; `help()` prefers an extern over the
     cty-metadata fallback for the same name; `fmt` round-trips extern files.
 
+- **`Parser.RegisterExterns` — a host loads a package's extern declarations.** A leaf
+  package `go:embed`s its `//functy:extern` file and exposes it as opaque bytes, never
+  importing functy; the host calls
+  `parser.RegisterExterns(pkg.Externs(), pkg.ExternsFilename)`. Zero coupling in both
+  directions, and because the registered bytes are a real `.cty` file, `functy fmt`,
+  `functy symbols`, and an editor can open it standalone. Registration *verifies* the
+  `//functy:extern` directive rather than forcing the mode, so one byte string means one
+  thing however it is loaded.
+
+  - Host externs land on **`Result.HostExterns`**, deliberately separate from
+    `Result.Externs`. A tool that renders *a source* — `fmt`, `symbols`, an outline —
+    iterates `Externs`, and gets the right answer by default because it cannot reach
+    `HostExterns` without naming it. Merging the two would let `fmt` on a user's file emit
+    another package's declarations into it, and (worse) splice the host file's comments at
+    byte offsets belonging to the user's source.
+  - `checkExternNames` now covers both sets, so a host extern colliding with another host's,
+    with a file extern, or with a user's function is reported by name.
+  - `Parser.ExternSources` lets a host seed its diagnostic file map, so a diagnostic pointing
+    into an embedded extern still renders with a source snippet.
+
 ### Fixed
+
+- **The REPL renders a multi-line string as a heredoc** rather than one
+  backslash-escaped line. `help()` returns a multi-line block, so it was previously
+  unreadable in the REPL — the reflection built-in and the REPL disagreed about what a
+  string is for. Nested strings keep quoting, since a heredoc is not grammatical
+  mid-expression.
 
 - **Default-parameter expressions are now evaluated against the same context as the
   function body.** They were evaluated against the host context directly, bypassing

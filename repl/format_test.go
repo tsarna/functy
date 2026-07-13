@@ -7,6 +7,57 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
+// A multi-line string at top level renders as a heredoc: help() returns one, and a
+// backslash-escaped single line is unreadable. Nested strings keep quoting, since a
+// heredoc is not grammatical mid-expression.
+func TestFormatValueMultilineString(t *testing.T) {
+	tests := []struct {
+		name string
+		in   cty.Value
+		want string
+	}{
+		{
+			"top-level multi-line becomes a heredoc",
+			cty.StringVal("get(ctx?: ctx, thing)\n\nRead a value."),
+			"<<EOT\nget(ctx?: ctx, thing)\n\nRead a value.\nEOT",
+		},
+		{
+			"trailing newline is not doubled",
+			cty.StringVal("a\nb\n"),
+			"<<EOT\na\nb\nEOT",
+		},
+		{
+			// The body must not be able to terminate its own heredoc.
+			"delimiter grows to avoid the body",
+			cty.StringVal("a\nEOT\nb"),
+			"<<EOT_\na\nEOT\nb\nEOT_",
+		},
+		{
+			// A heredoc still interpolates, so ${ must be neutralized as in quoteHCL.
+			"interpolation is escaped",
+			cty.StringVal("a\n${x}"),
+			"<<EOT\na\n$${x}\nEOT",
+		},
+		{
+			"single-line string still quotes",
+			cty.StringVal("ada"),
+			`"ada"`,
+		},
+		{
+			"nested multi-line string still quotes",
+			cty.ListVal([]cty.Value{cty.StringVal("a\nb")}),
+			`["a\nb"]`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatValue(tc.in); got != tc.want {
+				t.Fatalf("formatValue() =\n%q\nwant\n%q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFormatValue(t *testing.T) {
 	tests := []struct {
 		name string

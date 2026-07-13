@@ -431,6 +431,36 @@ Rules:
   failing there would make extern files unusable exactly where they are most useful.
   The cost is that a misspelled type resolves instead of failing; hence the warning.
 
+### Shipping externs from a package
+
+A package that provides cty functions ships their declarations alongside them. It
+`go:embed`s the `.cty` file and exposes it as opaque bytes — it never imports functy,
+and nothing on its side parses them:
+
+```go
+//go:embed externs.cty
+var externsCty []byte
+
+const ExternsFilename = "mypkg/externs.cty"
+
+func Externs() []byte { return externsCty }
+```
+
+The host registers them on its parser:
+
+```go
+parser.RegisterExterns(mypkg.Externs(), mypkg.ExternsFilename)
+```
+
+Registered declarations arrive on `Result.HostExterns` (as opposed to `Result.Externs`,
+which holds the externs declared by the *parsed sources*), and `help()` reads both. The
+split is what keeps `fmt` honest: a tool that renders a source iterates `Externs`, so it
+can never emit a host package's declarations into a user's file.
+
+Registration **verifies** the `//functy:extern` directive rather than forcing it, so the
+embedded file is a real, standalone `.cty` — `functy fmt`, `functy symbols`, and an editor
+open it directly, and one byte string means the same thing however it is loaded.
+
 ## Statements
 
 ### Variable declaration — `var`

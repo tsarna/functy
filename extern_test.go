@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/function"
 )
 
 // externSrc prefixes a source with the directive that makes it an extern file.
@@ -363,4 +364,140 @@ func TestExternRegisteredOpenTypeResolves(t *testing.T) {
 // An unknown type outside an extern file stays a hard error.
 func TestUnknownTypeOutsideExternIsError(t *testing.T) {
 	parseErr(t, "func f(a: ctx) {\n    return a\n}\n")
+}
+
+// ---- Host-registered externs (Parser.RegisterExterns) ------------------------
+
+// hostExterns is a stand-in for what a leaf package embeds and registers.
+const hostExterns = "//functy:extern\n\n" +
+	"// A host-provided function.\n" +
+	"func hostget(ctx?: ctx, thing, fallback?) -> any\n"
+
+func hostParser() *Parser {
+	return externParser().RegisterExterns([]byte(hostExterns), "host/externs.cty")
+}
+
+func TestRegisterExterns(t *testing.T) {
+	res, diags := hostParser().Parse([]byte("func f(a) {\n    return a\n}\n"), "user.cty")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected errors:\n%s", allDiags(diags))
+	}
+	if len(res.HostExterns) != 1 {
+		t.Fatalf("expected 1 host extern, got %d", len(res.HostExterns))
+	}
+	if res.HostExterns[0].Name != "hostget" {
+		t.Fatalf("name = %q", res.HostExterns[0].Name)
+	}
+	if res.HostExterns[0].Doc != "A host-provided function." {
+		t.Fatalf("doc = %q — attachDocComments did not run on the host source", res.HostExterns[0].Doc)
+	}
+	// A host extern belongs to no parsed source, so it must NOT appear in Externs —
+	// that is the field fmt renders.
+	if len(res.Externs) != 0 {
+		t.Fatalf("host externs leaked into Result.Externs: %d", len(res.Externs))
+	}
+	if len(res.Funcs) != 1 {
+		t.Fatalf("expected the user's function, got %d", len(res.Funcs))
+	}
+}
+
+// THE HAZARD. Parser.Format calls Parse, and fmt renders Result.Externs. If host
+// externs were merged into that set, formatting a user's file would splice another
+// package's declarations into it.
+func TestRegisteredExternsAreNotFormatted(t *testing.T) {
+	user := "func f(a) {\n    return a\n}\n" // already canonical
+	out, diags := hostParser().Format([]byte(user), "user.cty")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected errors:\n%s", allDiags(diags))
+	}
+	if string(out) != user {
+		t.Fatalf("fmt changed a canonical file:\n%q\nwant\n%q", out, user)
+	}
+	if strings.Contains(string(out), "hostget") {
+		t.Fatalf("the host's declarations were emitted into the user's file:\n%s", out)
+	}
+}
+
+// The subtler half of the same hazard: the formatter walks Result.Comments by byte
+// offset into the file it is formatting, so a host file's comments in that slice
+// would splice foreign text at offsets belonging to the user's source.
+func TestRegisteredExternsDoNotLeakComments(t *testing.T) {
+	res, diags := hostParser().Parse([]byte("// user comment\nfunc f(a) {\n    return a\n}\n"), "user.cty")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected errors:\n%s", allDiags(diags))
+	}
+	for _, c := range res.Comments {
+		if c.Range.Filename != "user.cty" {
+			t.Fatalf("comment from %q leaked into the parsed source's comments", c.Range.Filename)
+		}
+	}
+	for _, d := range res.Directives {
+		if d.Range.Filename != "user.cty" {
+			t.Fatalf("directive from %q leaked into the parsed source's directives", d.Range.Filename)
+		}
+	}
+}
+
+// A registered source must declare itself an extern file. One byte string means one
+// thing however it is loaded: the file a package embeds is also a valid standalone
+// .cty that `functy fmt` and `functy symbols` can open.
+func TestRegisteredExternRequiresDirective(t *testing.T) {
+	p := externParser().RegisterExterns([]byte("func f(a) -> any\n"), "host/bad.cty")
+	_, diags := p.Parse([]byte("func g() {\n    return 1\n}\n"), "user.cty")
+	if !hasSummary(diags, "not an extern file") {
+		t.Fatalf("expected a missing-directive error, got:\n%s", allDiags(diags))
+	}
+}
+
+func TestRegisteredExternCollisions(t *testing.T) {
+	t.Run("with a user function", func(t *testing.T) {
+		_, diags := hostParser().Parse([]byte("func hostget(a) {\n    return a\n}\n"), "user.cty")
+		if !hasSummary(diags, "Extern duplicates a function") {
+			t.Fatalf("expected a collision error, got:\n%s", allDiags(diags))
+		}
+	})
+
+	t.Run("with a file extern", func(t *testing.T) {
+		_, diags := hostParser().Parse([]byte(externSrc("func hostget(a) -> any\n")), "user.cty")
+		if !hasSummary(diags, "Duplicate extern") {
+			t.Fatalf("expected a duplicate error, got:\n%s", allDiags(diags))
+		}
+	})
+
+	t.Run("with another registration", func(t *testing.T) {
+		p := hostParser().RegisterExterns([]byte(hostExterns), "other/externs.cty")
+		_, diags := p.Parse([]byte("func f() {\n    return 1\n}\n"), "user.cty")
+		if !hasSummary(diags, "Duplicate extern") {
+			t.Fatalf("expected a duplicate error across two registrations, got:\n%s", allDiags(diags))
+		}
+	})
+}
+
+// The payoff: a host extern beats the cty-metadata fallback for a function that IS
+// registered in the eval context. Its cty shape is the collapsed VarParam lie the
+// extern exists to replace, so if the context won the lookup the feature would do
+// nothing.
+func TestHelpFuncHostExternBeatsCtyFallback(t *testing.T) {
+	hostFn := function.New(&function.Spec{
+		Description: "Host-registered.",
+		Params:      []function.Parameter{{Name: "thing", Type: cty.DynamicPseudoType}},
+		VarParam:    &function.Parameter{Name: "args", Type: cty.DynamicPseudoType},
+		Type:        function.StaticReturnType(cty.DynamicPseudoType),
+		Impl:        func([]cty.Value, cty.Type) (cty.Value, error) { return cty.NullVal(cty.DynamicPseudoType), nil },
+	})
+	ctx := &hcl.EvalContext{Functions: map[string]function.Function{"hostget": hostFn}}
+
+	res, diags := hostParser().Parse([]byte("func f() {\n    return 1\n}\n"), "user.cty")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected errors:\n%s", allDiags(diags))
+	}
+	help := HelpFunc(res, func() *hcl.EvalContext { return ctx })
+
+	got, err := help.Call([]cty.Value{cty.StringVal("hostget")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	if !strings.HasPrefix(got.AsString(), "hostget(ctx?: ctx, thing, fallback?) -> any") {
+		t.Fatalf("the cty fallback shadowed the host extern:\n%s", got.AsString())
+	}
 }

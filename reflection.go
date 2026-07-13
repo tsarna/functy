@@ -89,7 +89,14 @@ func DocFunc(evalCtxFn func() *hcl.EvalContext) function.Function {
 func HelpFunc(res *Result, evalCtxFn func() *hcl.EvalContext) function.Function {
 	var funcs, externs []*FuncDecl
 	if res != nil {
-		funcs, externs = res.Funcs, res.Externs
+		funcs = res.Funcs
+		// Both extern sets are equally real to reflection: one was declared by the
+		// parsed sources, the other registered by the host (RegisterExterns). They are
+		// separate fields only so that tools which render *a source* can't emit the
+		// host's declarations into it. File externs go first, so that on a duplicate
+		// — which checkExternNames has already reported as an error — the one with an
+		// editable source wins the index.
+		externs = append(append([]*FuncDecl(nil), res.Externs...), res.HostExterns...)
 	}
 	funcByName, funcByBare := indexDecls(funcs)
 	externByName, externByBare := indexDecls(externs)
