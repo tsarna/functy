@@ -51,28 +51,53 @@ type strictness struct {
 	declaredTypes reqSource
 }
 
-// interpretFunctyDirectives reads the file's directives for functy's own strict
-// typing requests. functy:strict enables all three; functy:require enables the
-// named ones (param_types, return_type, declared_types). Unknown functy: names and
-// bad require flags are warnings (forward-compatible), and every non-functy
-// directive is ignored here (it is still collected into Result.Directives).
-func interpretFunctyDirectives(dirs []Directive) (param, ret, decl bool, diags hcl.Diagnostics) {
+// fileDirectives is what functy itself takes from a file's leading directive
+// block: its strict-typing requests, and whether the file is an extern file.
+type fileDirectives struct {
+	paramTypes    bool
+	returnType    bool
+	declaredTypes bool
+
+	// extern is set by //functy:extern. The file then holds only bodiless func
+	// declarations (see Result.Externs), which changes what the parser accepts —
+	// so it must be known before the file is parsed, and indeed before type
+	// aliases are collected from it.
+	extern bool
+}
+
+// interpretFunctyDirectives reads the file's directives for functy's own use.
+// functy:strict enables all three type requirements; functy:require enables the
+// named ones (param_types, return_type, declared_types); functy:extern marks the
+// file as declarations-only. Unknown functy: names and bad require flags are
+// warnings (forward-compatible), and every non-functy directive is ignored here
+// (it is still collected into Result.Directives).
+func interpretFunctyDirectives(dirs []Directive) (fd fileDirectives, diags hcl.Diagnostics) {
 	for _, d := range dirs {
 		if d.Namespace != "functy" {
 			continue
 		}
 		switch d.Name {
 		case "strict":
-			param, ret, decl = true, true, true
+			fd.paramTypes, fd.returnType, fd.declaredTypes = true, true, true
+		case "extern":
+			fd.extern = true
+			if strings.TrimSpace(d.Args) != "" {
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagWarning,
+					Summary:  "functy:extern takes no arguments",
+					Detail:   fmt.Sprintf("//functy:extern marks the whole file as declarations-only; %q is ignored.", d.Args),
+					Subject:  d.Range.Ptr(),
+				})
+			}
 		case "require":
 			for _, f := range strings.Fields(d.Args) {
 				switch f {
 				case "param_types":
-					param = true
+					fd.paramTypes = true
 				case "return_type":
-					ret = true
+					fd.returnType = true
 				case "declared_types":
-					decl = true
+					fd.declaredTypes = true
 				default:
 					diags = diags.Append(&hcl.Diagnostic{
 						Severity: hcl.DiagWarning,
@@ -91,5 +116,5 @@ func interpretFunctyDirectives(dirs []Directive) (param, ret, decl bool, diags h
 			})
 		}
 	}
-	return param, ret, decl, diags
+	return fd, diags
 }

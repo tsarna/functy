@@ -373,7 +373,7 @@ func TestNamespaceHelp(t *testing.T) {
 	}
 	ctx = &hcl.EvalContext{Functions: all, Variables: map[string]cty.Value{}}
 
-	help := HelpFunc(res.Funcs, evalCtxFn)
+	help := HelpFunc(res, evalCtxFn)
 	str := func(args ...cty.Value) string {
 		v, err := help.Call(args)
 		if err != nil {

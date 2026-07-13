@@ -101,6 +101,26 @@ func (c predicateConstraint) Coerce(v cty.Value) (cty.Value, error) {
 func (c predicateConstraint) Cty() cty.Type  { return cty.DynamicPseudoType }
 func (c predicateConstraint) String() string { return c.name }
 
+// opaqueConstraint stands for a named type an extern declaration mentions that
+// nobody registered here — it carries the *name* and enforces nothing.
+//
+// An extern names the types of the host that provides the functions it documents
+// (`ctx`, `time`, `bytes`, …). Whoever reads the extern often is not that host: the
+// functy CLI registers no types at all, so `functy check`, `functy symbols` and
+// `functy fmt` would otherwise fail with "Unknown type" on exactly the files the
+// feature exists to produce — and fmt refuses to reformat a file with any error at
+// all, so an extern file could not even be formatted. Since an extern is never
+// compiled and never called, the constraint is only ever *rendered*; standing in an
+// unenforced name loses nothing and keeps extern files self-contained.
+//
+// The cost is that a mistyped name resolves instead of failing, so resolveType
+// pairs this with a warning.
+type opaqueConstraint struct{ name string }
+
+func (c opaqueConstraint) Coerce(v cty.Value) (cty.Value, error) { return v, nil }
+func (c opaqueConstraint) Cty() cty.Type                         { return cty.DynamicPseudoType }
+func (c opaqueConstraint) String() string                        { return c.name }
+
 // TypeResolver is functy's type system as a standalone, reusable component. It
 // resolves functy type annotations (the same grammar used in `.cty` source) into
 // TypeConstraints, against the built-in types plus any host-registered named
@@ -208,6 +228,15 @@ func (e *typeEnv) registerOpenType(name string, pred func(cty.Value) error) {
 // allowNull permits the `null` (void) return type; where it is false (var/const/
 // parameter annotations), `null` as a type is an error.
 func (e *typeEnv) resolveType(expr hcl.Expression, allowNull bool) (TypeConstraint, hcl.Diagnostics) {
+	return e.resolveTypeOpaque(expr, allowNull, false)
+}
+
+// resolveTypeOpaque is resolveType with control over what an unregistered named
+// type means. With allowOpaque set — the extern-file case — an unknown *bare* name
+// stands in as an opaqueConstraint plus a warning, rather than being an error; see
+// opaqueConstraint for why. Nested positions (`list(ctx)`) are unaffected: they
+// resolve through resolveCtyType, which knows only the built-in grammar.
+func (e *typeEnv) resolveTypeOpaque(expr hcl.Expression, allowNull, allowOpaque bool) (TypeConstraint, hcl.Diagnostics) {
 	if kw := hcl.ExprAsKeyword(expr); kw != "" {
 		switch kw {
 		case "any":
@@ -227,6 +256,15 @@ func (e *typeEnv) resolveType(expr hcl.Expression, allowNull bool) (TypeConstrai
 		}
 		if c, ok := e.named[kw]; ok {
 			return c, nil
+		}
+		if allowOpaque {
+			return opaqueConstraint{name: kw}, hcl.Diagnostics{&hcl.Diagnostic{
+				Severity: hcl.DiagWarning,
+				Summary:  "Unregistered type in extern declaration",
+				Detail: fmt.Sprintf(
+					"%q is not a type known here, so it is treated as an opaque name and not enforced. That is expected when the host that provides these functions registers it; check the spelling if not.", kw),
+				Subject: expr.Range().Ptr(),
+			}}
 		}
 		return nil, typeDiag(expr, "Unknown type", fmt.Sprintf("%q is not a known type.", kw))
 	}

@@ -1,6 +1,7 @@
 package functy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2"
@@ -81,7 +82,7 @@ func TestHelpFuncFunctyFunction(t *testing.T) {
 	if diags.HasErrors() {
 		t.Fatalf("parse: %s", diags.Error())
 	}
-	help := HelpFunc(res.Funcs, nil)
+	help := HelpFunc(res, nil)
 
 	got, err := help.Call([]cty.Value{cty.StringVal("add")})
 	if err != nil {
@@ -128,6 +129,95 @@ func TestHelpFuncUnknown(t *testing.T) {
 	}
 	if !got.IsNull() {
 		t.Fatalf("help(\"nope\") = %#v, want null", got)
+	}
+}
+
+// An extern renders like any other declaration, with `?` marking a parameter that
+// is optional but has no default — including a *leading* one, which is the shape
+// cty cannot express and the reason externs exist.
+func TestHelpFuncExtern(t *testing.T) {
+	src := "//functy:extern\n\n" +
+		"// Read a value from a thing.\n" +
+		"func get(\n" +
+		"    ctx?: ctx,        // optional context\n" +
+		"    thing,            // the thing to read\n" +
+		"    fallback = null,  // returned when absent\n" +
+		") -> any\n"
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("parse: %s", diags.Error())
+	}
+	help := HelpFunc(res, nil)
+
+	got, err := help.Call([]cty.Value{cty.StringVal("get")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	want := "get(ctx?: ctx, thing, fallback = null) -> any\n\n" +
+		"Read a value from a thing.\n\n" +
+		"Parameters:\n" +
+		"  ctx?      optional context\n" +
+		"  thing     the thing to read\n" +
+		"  fallback  returned when absent"
+	if got.AsString() != want {
+		t.Fatalf("help(\"get\") =\n%q\nwant\n%q", got.AsString(), want)
+	}
+}
+
+// The extern must beat the cty-metadata fallback for a name that is also in the
+// eval context. That is the entire point: the host function *is* registered, and
+// its cty signature is the collapsed required-plus-VarParam shape the extern exists
+// to replace. If the context won the lookup, the feature would do nothing.
+func TestHelpFuncExternBeatsCtyFallback(t *testing.T) {
+	// A host function faking an optional argument with a VarParam — exactly the
+	// pattern that cannot be rendered honestly from cty metadata.
+	hostGet := function.New(&function.Spec{
+		Description: "Host-registered get.",
+		Params:      []function.Parameter{{Name: "thing", Type: cty.DynamicPseudoType}},
+		VarParam:    &function.Parameter{Name: "args", Type: cty.DynamicPseudoType},
+		Type:        function.StaticReturnType(cty.DynamicPseudoType),
+		Impl:        func([]cty.Value, cty.Type) (cty.Value, error) { return cty.NullVal(cty.DynamicPseudoType), nil },
+	})
+	ctx := &hcl.EvalContext{Functions: map[string]function.Function{"get": hostGet}}
+
+	src := "//functy:extern\n\n// The real signature.\nfunc get(ctx?: ctx, thing) -> any\n"
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("parse: %s", diags.Error())
+	}
+	help := HelpFunc(res, func() *hcl.EvalContext { return ctx })
+
+	got, err := help.Call([]cty.Value{cty.StringVal("get")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	if !strings.HasPrefix(got.AsString(), "get(ctx?: ctx, thing) -> any") {
+		t.Fatalf("the cty fallback shadowed the extern:\n%s", got.AsString())
+	}
+}
+
+// An extern is by definition absent from the eval context under its own machinery,
+// so the no-arg listing has to union the declarations in unconditionally — anything
+// weaker drops externs the moment a context exists, which in the CLI is always.
+func TestHelpFuncNoArgIncludesExterns(t *testing.T) {
+	stub := function.New(&function.Spec{
+		Type: function.StaticReturnType(cty.String),
+		Impl: func([]cty.Value, cty.Type) (cty.Value, error) { return cty.StringVal(""), nil },
+	})
+	ctx := &hcl.EvalContext{Functions: map[string]function.Function{"upper": stub}}
+
+	res, diags := NewParser().Parse([]byte("//functy:extern\n\nfunc parsetime(s: string) -> string\n"), "test")
+	if diags.HasErrors() {
+		t.Fatalf("parse: %s", diags.Error())
+	}
+	help := HelpFunc(res, func() *hcl.EvalContext { return ctx })
+
+	got, err := help.Call(nil)
+	if err != nil {
+		t.Fatalf("help() call: %s", err)
+	}
+	if got.AsString() != "parsetime\nupper" {
+		t.Fatalf("help() = %q, want the extern unioned with the context", got.AsString())
 	}
 }
 

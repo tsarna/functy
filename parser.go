@@ -35,6 +35,19 @@ type parser struct {
 	allowTopLevelConst bool
 	strict             strictness
 
+	// extern marks a //functy:extern file: it holds only bodiless func
+	// declarations documenting functions the host provides. A bodiless func is a
+	// hard error in every other file — deliberately, so that a half-typed
+	// declaration (signature written, brace not yet opened) stays a syntax error
+	// rather than silently becoming a valid one.
+	extern bool
+
+	// opaqueWarned records the unregistered type names already warned about in this
+	// extern file, so each is reported once rather than once per use. An extern
+	// names its host's types on nearly every line (`ctx` especially), and a warning
+	// per occurrence would bury anything else the file has to say.
+	opaqueWarned map[string]bool
+
 	// ns is the file's namespace, from a leading `namespace a::b` declaration
 	// ("" = the global namespace). Every declaration parsed from this file is
 	// stamped with it; it is the only carrier of that provenance, since the
@@ -146,17 +159,34 @@ func (p *parser) parseFile() *Result {
 		switch {
 		case t.isKeyword("func"):
 			if fn := p.parseFuncDecl(); fn != nil {
-				result.Funcs = append(result.Funcs, fn)
+				if p.extern {
+					fn.Extern = true
+					result.Externs = append(result.Externs, fn)
+				} else {
+					result.Funcs = append(result.Funcs, fn)
+				}
 			}
 		case t.isKeyword("const"):
+			if p.rejectInExtern(t.Range, "const") {
+				continue
+			}
 			p.parseTopLevelDecl(result, true)
 		case t.isKeyword("var"):
+			if p.rejectInExtern(t.Range, "var") {
+				continue
+			}
 			p.parseTopLevelDecl(result, false)
 		case t.Type == hclsyntax.TokenIdent && string(t.Bytes) == "type":
+			if p.rejectInExtern(t.Range, "type") {
+				continue
+			}
 			// Type aliases are collected and resolved before this parse (see
 			// parseSources); here we just consume the declaration.
 			p.skipTypeAlias()
 		case t.Type == hclsyntax.TokenIdent && string(t.Bytes) == "test":
+			if p.rejectInExtern(t.Range, "test") {
+				continue
+			}
 			if td := p.parseTestDecl(); td != nil {
 				result.Tests = append(result.Tests, td)
 			}
@@ -173,12 +203,34 @@ func (p *parser) parseFile() *Result {
 					"A namespace declaration must be the first declaration in the file, and a file may declare only one.")
 			}
 		default:
-			p.errf(t.Range, "Expected function declaration",
-				"Top-level functy declarations must be functions (func name(...) { ... }).")
+			if p.extern {
+				p.errf(t.Range, "Expected extern declaration",
+					"An extern file (//functy:extern) holds only bodiless function declarations (func name(...) -> T).")
+			} else {
+				p.errf(t.Range, "Expected function declaration",
+					"Top-level functy declarations must be functions (func name(...) { ... }).")
+			}
 			p.recoverToTopLevel()
 		}
 	}
 	return result
+}
+
+// rejectInExtern reports a declaration that an extern file may not contain, and
+// reports whether it did so (in which case the caller must not parse it).
+//
+// An extern file documents the functions a *host* provides, so it holds no functy
+// code of its own: var, const, test and type have nothing to describe there. The
+// var/const rejection has to fire even when the host set AllowTopLevelVar/Const —
+// as the CLI does — so it is checked before parseTopLevelDecl, not inside it.
+func (p *parser) rejectInExtern(rng hcl.Range, keyword string) bool {
+	if !p.extern {
+		return false
+	}
+	p.errf(rng, "Declaration not allowed in an extern file",
+		fmt.Sprintf("An extern file (//functy:extern) may contain only bodiless func declarations; move the %s declaration to a regular functy file.", keyword))
+	p.recoverToTopLevel()
+	return true
 }
 
 // atNamespaceKeyword reports whether the parser is sitting on a `namespace`
@@ -348,6 +400,12 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 		p.recoverToTopLevel()
 		return nil
 	}
+	if p.extern && isPrivateName(name.text) {
+		p.errf(name.tok.Range, "Private extern function",
+			"An extern declares a function the host provides, so it is global by definition; a `_`-prefixed (namespace-local) name is not allowed in an extern file.")
+		p.recoverToTopLevel()
+		return nil
+	}
 	fn := &FuncDecl{Name: name.text, Namespace: p.ns, DefRange: hcl.RangeBetween(kw.Range, name.tok.Range)}
 
 	oparen := p.cur().Range
@@ -358,6 +416,7 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 	var cparen hcl.Range
 	fn.Params, cparen = p.parseParams()
 	fn.ParenRange = hcl.RangeBetween(oparen, cparen)
+	sigEnd := cparen
 
 	// The rest of the signature may continue on later lines: newlines before the
 	// return-type arrow, its type, and the body brace are insignificant.
@@ -369,11 +428,28 @@ func (p *parser) parseFuncDecl() *FuncDecl {
 		p.advance()
 		p.skipNewlines()
 		fn.RetType, fn.RetTypeSrc = p.parseType(true)
+		// Take the end of the signature before skipping newlines, which would carry
+		// it onto the next line. An extern has no body, so this is the only end
+		// position it has (see FuncDecl.SigRange).
+		sigEnd = p.tokens[p.pos-1].Range
 		p.skipNewlines()
 	} else if p.strict.returnType.on() {
 		p.errf(fn.DefRange, "Missing return type",
 			fmt.Sprintf("Function %q must declare a return type (%s); use `-> any` for a dynamic return or `-> null` for void.",
 				fn.Name, p.strict.returnType.reason()))
+	}
+	fn.SigRange = hcl.RangeBetween(kw.Range, sigEnd)
+
+	if p.extern {
+		if p.cur().Type == hclsyntax.TokenOBrace {
+			p.errf(p.cur().Range, "Extern function cannot have a body",
+				"In an extern file (//functy:extern) a func declaration is a signature only; remove the { ... } body.")
+			// Consume the body rather than recovering: recoverToTopLevel resyncs on
+			// `var`/`const`/`test`, so a `var` *inside* the body would be mistaken for
+			// a top-level declaration and cascade.
+			p.parseBlockBody()
+		}
+		return fn
 	}
 
 	if p.cur().Type != hclsyntax.TokenOBrace {
@@ -470,7 +546,24 @@ func (p *parser) parseParams() ([]Param, hcl.Range) {
 			continue
 		}
 		prm.Name = name.text
+		// DefRange stays name-only: it is what the doc-comment attachment pass keys
+		// on, and what a diagnostic about this parameter should point at.
 		prm.DefRange = hcl.RangeBetween(start, name.tok.Range)
+
+		// `name?` — optional with no default. The `?` is consumed here, before any
+		// type or default is parsed, so no expression scan ever begins on it.
+		if p.cur().Type == hclsyntax.TokenQuestion {
+			if !p.extern {
+				p.errf(p.cur().Range, "Optional parameter marker not allowed here",
+					"`name?` (optional with no default) may only be used in an extern file (//functy:extern), where it is never compiled. Give the parameter a default instead: `name = null`.")
+			}
+			if prm.Variadic {
+				p.errf(p.cur().Range, "Variadic parameter cannot be optional",
+					"A *rest parameter already accepts zero arguments, so the `?` marker is redundant and not allowed on it.")
+			}
+			prm.Optional = true
+			p.advance()
+		}
 
 		if p.cur().Type == hclsyntax.TokenColon {
 			p.advance()
@@ -484,6 +577,10 @@ func (p *parser) parseParams() ([]Param, hcl.Range) {
 			if prm.Variadic {
 				p.errf(p.cur().Range, "Variadic parameter cannot have a default",
 					"A *rest parameter collects all remaining arguments and cannot declare a default value.")
+			}
+			if prm.Optional {
+				p.errf(p.cur().Range, "Optional parameter cannot have a default",
+					"`name?` already marks the parameter optional with no default. Write either `name?` or `name = <default>`, not both.")
 			}
 			p.advance()
 			prm.Default = p.parseExprStop(stopArg, "default value")
@@ -500,11 +597,15 @@ func (p *parser) parseParams() ([]Param, hcl.Range) {
 		if sawVariadic {
 			p.errf(prm.DefRange, "Parameter after variadic", "The variadic (*rest) parameter must be last.")
 		}
-		if prm.Variadic {
+		switch {
+		case prm.Variadic:
 			sawVariadic = true
-		} else if prm.Default != nil {
+		case prm.Default != nil || prm.Optional:
 			sawOptional = true
-		} else if sawOptional {
+		case sawOptional && !p.extern:
+			// Relaxed for externs: an extern transcribes a host function's real
+			// shape, which may take optional arguments at the *head* as well as the
+			// tail — the `get([ctx,] thing)` convention that `?` exists to spell.
 			p.errf(prm.DefRange, "Required parameter after optional",
 				"Required parameters must precede optional (defaulted) parameters.")
 		}
@@ -1441,7 +1542,30 @@ func (p *parser) parseType(allowNull bool) (TypeConstraint, string) {
 		p.errf(p.cur().Range, "Expected type", "Expected a type annotation here.")
 		return nil, ""
 	}
-	return p.resolveTypeSpanAllowNull(sb, eb, sp, allowNull), strings.TrimSpace(string(p.src[sb:eb]))
+	// Resolve from the full span (HCL ignores comments), but slice the *source
+	// text* only as far as the last real token: scanSpan's end runs to the stopping
+	// token, and comments are not tokens, so a comment between the type and the stop
+	// would otherwise be captured into the rendered annotation — and then emitted a
+	// second time by fmt as a trailing comment. Latent for a function body (whose
+	// stop is `{` on the same line); reached every time by an extern, whose signature
+	// stops at the newline.
+	return p.resolveTypeSpanAllowNull(sb, eb, sp, allowNull), strings.TrimSpace(string(p.src[sb:p.spanTextEnd(sb, eb)]))
+}
+
+// spanTextEnd is the end byte for source text captured from a scanSpan: the end of
+// the last non-newline token consumed, clamped into [startByte, endByte].
+func (p *parser) spanTextEnd(startByte, endByte int) int {
+	for i := p.pos - 1; i >= 0; i-- {
+		if p.tokens[i].Type == hclsyntax.TokenNewline {
+			continue
+		}
+		end := p.tokens[i].Range.End.Byte
+		if end < startByte || end > endByte {
+			break
+		}
+		return end
+	}
+	return endByte
 }
 
 // resolveTypeSpan parses the given source byte span as a type annotation and
@@ -1462,7 +1586,20 @@ func (p *parser) resolveTypeSpanAllowNull(startByte, endByte int, startPos hcl.P
 	if diags.HasErrors() {
 		return nil
 	}
-	tc, rdiags := p.env.resolveType(expr, allowNull)
+	// In an extern file an unregistered named type stands in as an opaque name
+	// rather than failing: an extern names its *host's* types, and the reader (the
+	// functy CLI, an editor) generally is not that host. See opaqueConstraint.
+	tc, rdiags := p.env.resolveTypeOpaque(expr, allowNull, p.extern)
+	if oc, ok := tc.(opaqueConstraint); ok {
+		if p.opaqueWarned[oc.name] {
+			rdiags = nil // already reported this name once for this file
+		} else {
+			if p.opaqueWarned == nil {
+				p.opaqueWarned = make(map[string]bool)
+			}
+			p.opaqueWarned[oc.name] = true
+		}
+	}
 	p.diags = p.diags.Extend(rdiags)
 	return tc
 }

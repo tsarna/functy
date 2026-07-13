@@ -71,9 +71,11 @@ func loadProgram(input any, baseline map[string]function.Function) (*functy.Resu
 	// Reflection builtins need the parsed declarations and the assembled context,
 	// so they join the baseline (and its reserved-name set) here rather than in the
 	// static baselineFunctions. help() renders functy functions from res.Funcs and
-	// falls back to cty metadata for host functions; doc() reads descriptions.
+	// falls back to cty metadata for host functions; doc() reads descriptions. The
+	// whole Result is passed so help() also sees res.Externs — a declared signature
+	// beats the cty-metadata fallback, which is the reason externs exist.
 	baseline["doc"] = functy.DocFunc(evalCtxFn)
-	baseline["help"] = functy.HelpFunc(res.Funcs, evalCtxFn)
+	baseline["help"] = functy.HelpFunc(res, evalCtxFn)
 
 	compiled, cdiags := res.CompileUnits(evalCtxFn)
 	diags = diags.Extend(cdiags)

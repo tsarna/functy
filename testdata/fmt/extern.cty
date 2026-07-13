@@ -1,0 +1,18 @@
+//functy:extern
+
+// Read a value from a thing.
+// An optional leading context is the shape cty cannot express.
+func get(
+      ctx?: ctx,   // the context, when the call is scoped to one
+      thing,       // the thing to read
+    // Returned when the key is absent.
+    // Defaults to null.
+      fallback = null,
+) -> any   // the value, or the fallback
+
+// Join path elements onto a base URL.
+func urljoinpath(base: string, *elem: string) -> string
+
+func now() -> time   // no parameters, and a trailing comment
+
+func moon_phase(t?: time) -> number

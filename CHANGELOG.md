@@ -51,12 +51,56 @@ tagged. Until then, everything lives under **Unreleased**.
   is known. A library host can do the same by comparing `Compiled.Units` against its
   own registry. The equivalent clash in the global namespace remains a hard error.
 
+- **Extern declarations — real signatures for host-provided functions.** A `.cty`
+  file whose leading comment block carries `//functy:extern` holds bodiless `func`
+  declarations describing functions the *host* provides. They are never compiled and
+  never callable; they exist so `help()`, `functy symbols`, and editor tooling can
+  show a host function's true signature — which its cty metadata generally cannot.
+  See [doc/language.md](doc/language.md#extern-declarations).
+
+  A cty function fakes optional and defaulted arguments with a trailing `VarParam`,
+  erasing their names and defaults; and since a cty optional parameter may only sit
+  at the *tail*, the common `f([ctx,] x)` convention (a leading context sniffed out
+  of `args[0]`) cannot be expressed at all. Such a function reflects as
+  `f(x, ...args)`. An extern says what it actually is.
+
+  - New parameter syntax **`name?`** — optional with *no* default, the only way to
+    spell an optional *leading* parameter. Legal only in an extern file (where
+    nothing is compiled), mutually exclusive with `= default`, and it relaxes the
+    required-before-optional ordering rule there.
+  - `//functy:extern` is a **file-level directive rather than a keyword**,
+    deliberately: it keeps a bodiless `func` a hard error in every other file, so a
+    half-typed declaration stays a syntax error instead of silently becoming a valid
+    one.
+  - An extern file may hold a `namespace` declaration and nothing else but externs:
+    `var`, `const`, `test`, `type`, `_`-prefixed names, and bodies are all rejected.
+  - A named type an extern mentions that the reader has not registered (`ctx`,
+    `time`, …) resolves to an **opaque** name — carried for rendering, unenforced,
+    and warned about once per file. An extern names its *host's* types, and whoever
+    reads it (the CLI, an editor) usually is not that host, so failing there would
+    make extern files unusable exactly where they are most useful.
+  - Declaring one name twice (an overload set) is not supported yet and is an error.
+    `Result.Externs` is a **slice**, not a map, precisely so that allowing it later
+    is a relaxation of that check rather than an API change.
+  - New API: `Result.Externs []*FuncDecl`, `FuncDecl.Extern`, `FuncDecl.SigRange`
+    (an extern has no body, so this is its only end position), `Param.Optional`.
+  - CLI: `symbols` gains `kind: "extern"`; `help()` prefers an extern over the
+    cty-metadata fallback for the same name; `fmt` round-trips extern files.
+
 ### Fixed
 
 - **Default-parameter expressions are now evaluated against the same context as the
   function body.** They were evaluated against the host context directly, bypassing
   the interpreter's context construction; a default like `= _helper()` could not see
   the function's own namespace. Fixed as a consequence of the namespace work.
+
+- **A comment after a type annotation is no longer captured into it.** The source
+  text recorded for a type ran to the *stopping token*, and comments are not tokens,
+  so a comment between the annotation and the end of the line was swallowed into the
+  rendered annotation — and then emitted a second time by `fmt` as a trailing
+  comment, growing by one copy per run. Latent for a function with a body (whose
+  signature stops at `{` on the same line); found by the extern work, whose
+  signatures end at the newline.
 
 ### Changed
 
@@ -67,6 +111,11 @@ tagged. Until then, everything lives under **Unreleased**.
 - **BREAKING (library):** keys in `(*Result).Compile`'s map may now contain `::`, for
   functions declared in a namespace. HCL resolves such a name as a single flat map
   key, so a host that merges the map into an eval context needs no change.
+- **BREAKING (library):** `HelpFunc` takes the whole `*Result` rather than
+  `[]*FuncDecl`, so that it sees `Result.Externs` as well as `Result.Funcs` — and so
+  that any future set added to `Result` needs no further signature change. Update
+  `functy.HelpFunc(res.Funcs, evalCtxFn)` to `functy.HelpFunc(res, evalCtxFn)`;
+  passing `nil` remains valid.
 
 ## [0.9.0] - 2026-07-11
 

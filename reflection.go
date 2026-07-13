@@ -70,41 +70,30 @@ func DocFunc(evalCtxFn func() *hcl.EvalContext) function.Function {
 // drawn from the assembled eval context so it spans host- and functy-defined
 // functions alike.
 //
-// funcs (typically Result.Funcs) supplies the functy declarations, which help
-// renders from directly: functy's optional and variadic parameters collapse into a
-// single VarParam in the cty calling convention, so the declaration is the only
-// accurate source of the real signature. evalCtxFn provides a best-effort fallback
-// for non-functy functions, rendered from their cty metadata (parameter names,
-// types, and descriptions). A host wires both reflection builtins in:
+// res (the parse Result) supplies the functy declarations, which help renders from
+// directly: functy's optional and variadic parameters collapse into a single
+// VarParam in the cty calling convention, so the declaration is the only accurate
+// source of the real signature. Result.Externs is consulted the same way, and is
+// the *point* of that set — an extern declares what a host function's cty metadata
+// cannot express. evalCtxFn provides a best-effort fallback for anything neither
+// declares, rendered from its cty metadata (parameter names, types, descriptions).
+// A host wires both reflection builtins in:
 //
 //	ctx.Functions["doc"]  = functy.DocFunc(evalCtxFn)
-//	ctx.Functions["help"] = functy.HelpFunc(result.Funcs, evalCtxFn)
+//	ctx.Functions["help"] = functy.HelpFunc(result, evalCtxFn)
 //
 // Note: a non-functy Go builtin that emulates optional/defaulted parameters through
 // its VarParam cannot be rendered with its intended signature — that structure is
 // not recoverable from cty — so the fallback shows the raw required-plus-variadic
-// shape.
-func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Function {
-	// Keyed by qualified name — the name the function is actually callable under.
-	// Private functions are included: they are not host-visible, but help() is a
-	// developer tool and `help("foo::_helper")` is exactly what you want when
-	// debugging one.
-	byName := make(map[string]*FuncDecl, len(funcs))
-	// byBare backs a last-resort fallback so help("baz") still works in the common
-	// single-namespace project. Names declared in more than one namespace are
-	// ambiguous and dropped from it rather than guessed at.
-	byBare := make(map[string]*FuncDecl, len(funcs))
-	ambiguous := make(map[string]bool)
-	for _, fn := range funcs {
-		byName[fn.QualifiedName()] = fn
-		if _, dup := byBare[fn.Name]; dup {
-			ambiguous[fn.Name] = true
-		}
-		byBare[fn.Name] = fn
+// shape. Declaring an extern for it is how that is fixed.
+func HelpFunc(res *Result, evalCtxFn func() *hcl.EvalContext) function.Function {
+	var funcs, externs []*FuncDecl
+	if res != nil {
+		funcs, externs = res.Funcs, res.Externs
 	}
-	for name := range ambiguous {
-		delete(byBare, name)
-	}
+	funcByName, funcByBare := indexDecls(funcs)
+	externByName, externByBare := indexDecls(externs)
+
 	return function.New(&function.Spec{
 		Description: `Return a human-readable help summary for a function by name: help("f"). Includes its signature, description, and per-parameter docs; null if there is no such function. Called with no argument, help() lists the names of all available functions.`,
 		Params:      []function.Parameter{},
@@ -112,7 +101,7 @@ func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 		Type:        function.StaticReturnType(cty.String),
 		Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
 			if len(args) == 0 {
-				return cty.StringVal(renderFuncList(byName, evalCtxFn)), nil
+				return cty.StringVal(renderFuncList(funcByName, externByName, evalCtxFn)), nil
 			}
 			if !args[0].IsKnown() {
 				return cty.UnknownVal(cty.String), nil
@@ -121,7 +110,14 @@ func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 				return cty.NullVal(cty.String), nil
 			}
 			name := args[0].AsString()
-			if fn, ok := byName[name]; ok {
+			if fn, ok := funcByName[name]; ok {
+				return cty.StringVal(renderFuncHelp(fn)), nil
+			}
+			// Externs are consulted *before* the eval context, because an extern names
+			// a function that is in the context: the whole reason it exists is that the
+			// cty metadata there renders the collapsed VarParam shape instead of the
+			// real signature. Letting the context win would defeat the feature.
+			if fn, ok := externByName[name]; ok {
 				return cty.StringVal(renderFuncHelp(fn)), nil
 			}
 			if evalCtxFn != nil {
@@ -133,7 +129,10 @@ func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 			}
 			// Last: a bare name that is unambiguous across the namespaces. Ordered
 			// after the eval-context lookup so it can never shadow a host function.
-			if fn, ok := byBare[name]; ok {
+			if fn, ok := funcByBare[name]; ok {
+				return cty.StringVal(renderFuncHelp(fn)), nil
+			}
+			if fn, ok := externByBare[name]; ok {
 				return cty.StringVal(renderFuncHelp(fn)), nil
 			}
 			return cty.NullVal(cty.String), nil // no such function
@@ -141,15 +140,45 @@ func HelpFunc(funcs []*FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 	})
 }
 
+// indexDecls keys declarations by qualified name, and — for a last-resort fallback
+// so help("baz") still works in the common single-namespace project — by bare name.
+// A bare name declared in more than one namespace is ambiguous and dropped rather
+// than guessed at.
+//
+// Private functions are included: they are not host-visible, but help() is a
+// developer tool and `help("foo::_helper")` is exactly what you want when debugging
+// one.
+func indexDecls(decls []*FuncDecl) (byName, byBare map[string]*FuncDecl) {
+	byName = make(map[string]*FuncDecl, len(decls))
+	byBare = make(map[string]*FuncDecl, len(decls))
+	ambiguous := make(map[string]bool)
+	for _, fn := range decls {
+		byName[fn.QualifiedName()] = fn
+		if _, dup := byBare[fn.Name]; dup {
+			ambiguous[fn.Name] = true
+		}
+		byBare[fn.Name] = fn
+	}
+	for name := range ambiguous {
+		delete(byBare, name)
+	}
+	return byName, byBare
+}
+
 // renderFuncList returns the sorted, newline-separated names of every available
-// function, for the no-argument help() form. It prefers the assembled eval context
-// (which holds host- and functy-defined functions in one flat map) and falls back
-// to the functy declarations when no context is available.
+// function, for the no-argument help() form: the assembled eval context (which
+// holds host- and functy-defined functions in one flat map), unioned with the
+// declarations.
+//
+// The union is unconditional, and must be: an extern is by definition *not* in the
+// eval context (it names a function the host registered under its own machinery, or
+// one help simply cannot see), so anything short of a union would drop externs the
+// moment a context exists — which, in the CLI, is always.
 //
 // Private functions never appear. From the eval context that is structural rather
-// than filtered — they were never put in the host's map — and the declaration
-// fallback below skips them to match.
-func renderFuncList(byName map[string]*FuncDecl, evalCtxFn func() *hcl.EvalContext) string {
+// than filtered — they were never put in the host's map — and the declarations are
+// filtered below to match.
+func renderFuncList(funcByName, externByName map[string]*FuncDecl, evalCtxFn func() *hcl.EvalContext) string {
 	names := make(map[string]struct{})
 	if evalCtxFn != nil {
 		if ctx := evalCtxFn(); ctx != nil {
@@ -158,8 +187,8 @@ func renderFuncList(byName map[string]*FuncDecl, evalCtxFn func() *hcl.EvalConte
 			}
 		}
 	}
-	if len(names) == 0 {
-		for n, fn := range byName {
+	for _, decls := range []map[string]*FuncDecl{funcByName, externByName} {
+		for n, fn := range decls {
 			if fn.IsPrivate() {
 				continue
 			}
@@ -208,15 +237,22 @@ func renderFuncHelp(fn *FuncDecl) string {
 
 // paramDisplayName is the parameter's name as it appears in a signature (a
 // variadic parameter carries its leading `*`).
+// paramDisplayName is the parameter's name carrying whatever marker its surface
+// syntax puts *on the name* — the variadic star, or the optional-without-default
+// `?`. Both the signature line and the aligned "Parameters:" column key on it, so
+// they stay consistent with each other.
 func paramDisplayName(p Param) string {
 	if p.Variadic {
 		return "*" + p.Name
+	}
+	if p.Optional {
+		return p.Name + "?"
 	}
 	return p.Name
 }
 
 // renderParam renders one parameter in functy signature syntax:
-// [*]name[: T][ = default].
+// [*]name[?][: T][ = default].
 func renderParam(p Param) string {
 	var b strings.Builder
 	b.WriteString(paramDisplayName(p))

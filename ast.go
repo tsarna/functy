@@ -7,6 +7,11 @@ import (
 )
 
 // FuncDecl is a top-level function declaration.
+//
+// An extern (see Result.Externs) is a FuncDecl with Extern true: it declares the
+// signature of a function the *host* provides, so it has no Body and a zero
+// BodyRange. SigRange is therefore the only end position an extern has, and every
+// consumer that would reach for BodyRange.End must use it instead.
 type FuncDecl struct {
 	Name string
 	// Namespace is the enclosing namespace, from the file's `namespace a::b`
@@ -19,9 +24,13 @@ type FuncDecl struct {
 	ParenRange hcl.Range      // the (…) parameter-list span, for fmt
 	RetType    TypeConstraint // nil when no return type is annotated (dynamic)
 	RetTypeSrc string         // source text of the return-type annotation, for rendering (fmt)
-	Body       []Statement
-	BodyRange  hcl.Range // the `{ ... }` body span, for rendering (fmt)
-	DefRange   hcl.Range
+	SigRange   hcl.Range      // spans `func` … the last signature token (`)` or the return type)
+	// Extern marks a declaration from a //functy:extern file: a signature only,
+	// never compiled and never callable. See Result.Externs.
+	Extern    bool
+	Body      []Statement
+	BodyRange hcl.Range // the `{ ... }` body span, for rendering (fmt); zero for an extern
+	DefRange  hcl.Range
 }
 
 // QualifiedName is the name the function is registered under with the host:
@@ -90,10 +99,11 @@ func (n *NamespaceDecl) srcRange() hcl.Range { return n.DefRange }
 
 // Param is a single function parameter.
 //
-// A parameter is required unless it has a Default or is Variadic. A typed
-// parameter (Type != cty.NilType) converts its argument to that type. For a
-// variadic parameter, Type is the *element* type: `*rest: T` collects the extra
-// arguments into a list(T), while an untyped `*rest` collects them into a tuple.
+// A parameter is required unless it has a Default, is marked Optional, or is
+// Variadic. A typed parameter (Type != cty.NilType) converts its argument to that
+// type. For a variadic parameter, Type is the *element* type: `*rest: T` collects
+// the extra arguments into a list(T), while an untyped `*rest` collects them into a
+// tuple.
 type Param struct {
 	Name string
 	// Doc is the parameter's documentation: a trailing comment on its line
@@ -102,11 +112,22 @@ type Param struct {
 	Doc        string
 	Type       TypeConstraint // nil when unannotated (dynamic)
 	TypeSrc    string         // source text of the type annotation, for rendering (fmt)
-	Default    hcl.Expression // non-nil for an optional parameter
+	Default    hcl.Expression // non-nil for a defaulted parameter
 	DefaultSrc string         // source text of the default expression, for rendering (help()/fmt)
-	Variadic   bool           // true for the trailing *rest parameter
-	DefRange   hcl.Range
-	FullRange  hcl.Range // spans the whole parameter (name … type/default), for fmt
+	// Optional marks `name?`: optional with *no* default, and mutually exclusive
+	// with Default. It exists because it is the only way to spell an optional
+	// *leading* parameter — the `get([ctx,] thing)` convention that host libraries
+	// implement by sniffing args[0], and that cty's parameter list cannot express
+	// (an optional cty param may only sit at the tail).
+	//
+	// Legal only in an extern file, where it is never compiled: BuildFunction
+	// classifies a param with no Default as *required*, so an Optional param
+	// reaching it would be silently mis-compiled. The compile path guards on
+	// FuncDecl.Extern to keep that unreachable.
+	Optional  bool
+	Variadic  bool // true for the trailing *rest parameter
+	DefRange  hcl.Range
+	FullRange hcl.Range // spans the whole parameter (name … type/default), for fmt
 }
 
 // Statement is implemented by every functy statement node.

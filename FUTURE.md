@@ -67,31 +67,17 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
 
 ## Functions
 
-- **`extern` declarations — signatures and docs for host-provided functions.** A function
-  registered by a Go host (e.g. a cty function from `rich-cty-types`) has no functy
-  source, so `help()` / generated docs / LSP hovers have nothing to show for it — and
-  `check` cannot type-check calls into the host library at all, since a host function is
-  an opaque cty value. Let a package ship an **extern declaration file** — normal functy
-  declaration syntax with **no bodies** — carrying the full signature and the usual
-  doc-comment metadata (function doc, per-parameter docs, `@warn`/directive lines,
-  defaults, param types). The parser reuses the ordinary declaration path but routes these
-  decls into a **separate map** (`Result.Externs`) — they are declaration records, never
-  compiled or callable. `help()` and doc generation consult that map after the real
-  function set.
+- **`extern` declarations** — *shipped*; see `doc/language.md`, *Extern declarations*. The
+  `//functy:extern` file directive, bodiless `func` declarations routed to `Result.Externs`,
+  the `name?` optional-without-default marker, relaxed parameter ordering in externs, opaque
+  unregistered types, and `help()` / `symbols` / `fmt` support all landed together. What
+  remains of the original entry is below: `RegisterExterns`, overload sets, the
+  documented-vs-registered lint, and `?` outside extern files.
 
-  ```functy
-  //functy:extern
-
-  // Parse a CIDR block into a network object.
-  // @warn Panics on malformed input at call sites without try().
-  func cidr(
-      s,              // the CIDR string, e.g. "10.0.0.0/8"
-  )
-  ```
-
-  The point is **zero coupling in both directions**: the leaf package exports its extern
-  block as an opaque `var Externs = []byte(…)` (a raw-string literal) and never imports
-  functy; functy never
+- **`RegisterExterns([]byte)` — shipping an extern file from a leaf package.** Parsing an
+  extern file is shipped; *distributing* one is not. The point is **zero coupling in both
+  directions**: the leaf package exports its extern block as an opaque
+  `var Externs = []byte(…)` (a raw-string literal) and never imports functy; functy never
   imports the leaf package; the glue that already knows about both (the consuming program,
   or a `RegisterFunctyType`-style hook) calls `functy.RegisterExterns(pkg.Externs)`. This
   beats the obvious alternative — a shared `functydoc` struct package both sides import —
@@ -99,76 +85,119 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
   of reusing functy's own source as the single source of truth. Recorded so the `[]byte`
   choice isn't re-litigated.
 
-  Design points to settle when built:
-  - **A file-level directive (`//functy:extern`), not an `extern` keyword.** Extern-ness is
-    a property of the **file**, not of a declaration: `private extern` is meaningless (extern
-    means global-and-defined-elsewhere by definition), and in practice an extern file is
-    *only* declarations — it is shipped by a package documenting its Go functions, so it
-    holds no real functy code. A package that also wants to contribute a functy-written
-    function puts it in a separate file. Spelling the mode at the level it actually lives at
-    costs no new keyword, and it composes with the `_` convention below (which is spelled at
-    the declaration level, where *it* lives) rather than competing with it — so the two
-    features are consistent, not arbitrarily different.
+  Purely additive: `Result.Externs` already exists, so this adds a registration path, not a
+  shape. Cost, stated honestly: no *runtime* cost unless `RegisterExterns` is called
+  (parsing is deferred to registration); binary-size cost is at most the literal bytes, and
+  only if the linker doesn't dead-code-eliminate the unreferenced `var`. The trade-off of
+  the bytes format is that a malformed extern block fails at **registration time
+  (runtime)**, not compile time.
 
-    The directive is also what makes the "no body" marker safe. The obvious alternative —
-    letting a bodiless `func` mean extern anywhere, C-header style, with no marker at all —
-    is a trap: a half-typed function (signature written, brace not yet opened) would silently
-    become a valid extern declaration instead of a syntax error, which is directly hostile to
-    the mid-edit tooling resilience the parser/lexer recovery work exists to protect. Gating
-    bodiless decls on an opted-in file keeps them an error everywhere else, and a directive
-    line is not something one typos into existence. In extern mode the parser stops expecting
-    bodies and rejects `var` / `const` / `test`; `type` aliases are also rejected until a case
-    for them appears (an extern signature names types the host registered via `RegisterType`,
-    not aliases). A `_`-prefixed name in an extern file is an error — extern means global.
-  - **Spelling.** `//functy:extern` keeps the term already used throughout this document and
-    names the construct rather than one of its uses. Avoid `doc_only`-style names: docs are
-    only the *first* consumer, and the bigger long-run payoff is that real signatures for
-    host functions let `check` type-check calls into the host library — a name built around
-    "doc" would be a lie by then. `//functy:declarations` is the runner-up (the TypeScript
-    `.d.ts` framing) if a less C-flavored word is wanted, or if such a file might later carry
-    non-function declarations.
-  - **The three-set `Result` (shared with visibility below).** Between externs and `_`
-    privates, `Result` carries three name sets rather than one — **exported** (goes into the
-    map handed to the host), **private** (goes only into the interpreter's child context),
-    and **extern-declared** (goes nowhere executable, but feeds reflection). Every consumer
-    then has to answer *which set*: `symbols` wants all three for the outline, no-arg `help()`
-    wants exported + extern, the host's merged map wants exported only, and the
-    documented-but-unimplemented lint below is precisely a diff between extern and the host's
-    registry. Worth building the three-set `Result` once rather than bolting the second
-    feature onto a one-set design later.
-  - **Cost, stated honestly.** No *runtime* cost unless `RegisterExterns` is called
-    (parsing is deferred to registration). Binary-size cost is at most the literal bytes,
-    and only if the linker doesn't dead-code-eliminate the unreferenced `var` — never a
-    parse. The trade-off of the bytes format: malformed extern blocks fail at
-    **registration time (runtime)**, not compile time.
-  - **Precedence + collisions.** A real function shadows an extern of the same name (or
-    warn); two packages registering the same extern name collide and are reported, mirroring
-    the host's existing transform/type collision detection.
-  - **Optional leading `ctx` — currently unspellable, and a reason extern is the right home.**
-    Some host functions (the rich-cty-types `get`/`set`/`count`/`call…` family) take an
-    **optional leading context**: `get([ctx,] thing, …)`. This is not a real cty parameter —
-    it is implemented as a `VarParam` first-argument sniff (a `contextAndThing`-style helper
-    that consumes `args[0]` iff it is a context capsule/object, else treats it as the first
-    real arg). So cty's `function.Parameter` list can neither express nor *reflect* it: an
-    optional param can only sit at the tail, never the head, and the ctx slot has been erased
-    into the varargs. functy has no way to spell it in a signature or render it in help today.
-    That reflection-blindness is precisely why an author-written **extern** is the right place
-    to declare it — the human states what the cty function's metadata cannot reveal. Proposed
-    spelling: reuse the already-registered **`ctx` open type** (`IsContextObject` /
-    `RegisterOpenType`) — a *leading* parameter typed `ctx` and marked optional is understood
-    as the `[ctx,]` convention and rendered bracketed by `help()`. This needs one independent
-    primitive: an **optional parameter without a default** (a bare `?` marker, e.g.
-    `ctx?: ctx`), since a context has no spellable default value the way trailing `= 0` params
-    do — useful on its own beyond ctx. `?` can be **limited to extern initially**: externs are
-    docs-only and never compiled, so the marker just feeds signature rendering and carries no
-    runtime semantics to pin down. Extending it to real functy functions (what an absent,
-    default-less optional arg *evaluates* to — `null`? a distinct "unset"?) is a separable,
-    later decision.
-  - **Optional lint payoff.** Because externs name real registered functions, a host (or
-    `functy check`) can cross-check them and flag *documented-but-unimplemented* and
-    *implemented-but-undocumented*. A leaf package can take a **build-time-only** dependency
-    on functy to run this validation over its own extern block in CI (optionally a
-    `--externs-only` mode) without pulling functy into its runtime graph.
+  **How much is actually broken (audited 2026-07).** Across the eight sibling cty packages
+  that export functions, **37 of 80 functions (46%) use `VarParam`, and only 2 of those 37 are
+  honest variadics** (`urljoinpath`, and arguably `call`). The other 35 are `VarParam` abused
+  to fake something cty cannot express, so their registered `function.Parameter` list is a lie
+  and nothing can be generated from it. Counting vinculum's own functions too, it is 62
+  `VarParam` functions out of the 192 it registers, 54 of them fakes. The 35 break down as:
+
+  | kind | count | example |
+  | --- | --- | --- |
+  | optional trailing arg | 9 | `barcode(type, data [, opts])` |
+  | defaulted trailing arg | 8 | `fromunix(n [, unit="s"])` |
+  | optional leading `ctx` | 11 | the whole rich-cty-types `get`/`set`/`count` family |
+  | genuine overload | 7 | `duration("5m")` vs `duration(5, "m")` |
+
+  The first three groups — 28 of the 35 — are what the shipped extern covers. The fourth
+  needs overload sets, below.
+
+  (Genuine variadics needed nothing: a homogeneous unbounded tail is `*rest: T`, which the
+  grammar already spelled. The `VarParam` problem was never that functy couldn't express
+  variadics — it is that cty functions use `VarParam` for things that *aren't* variadic.)
+
+- **Documented-vs-registered lint.** Because externs name real registered functions, a host
+  (or `functy check`) can cross-check them and flag *documented-but-unimplemented* and
+  *implemented-but-undocumented* — precisely a diff between `Result.Externs` and the host's
+  registry. A leaf package can take a **build-time-only** dependency on functy to run this
+  over its own extern block in CI (optionally a `--externs-only` mode) without pulling functy
+  into its runtime graph. Wants `RegisterExterns` first.
+- **Type-checking calls into externs.** An extern is a real signature, so `check` could
+  verify calls into the host library, which it cannot do today (a host function is an opaque
+  cty value). This is the reason the construct is named `extern` rather than something built
+  around "doc": docs are only its *first* consumer, and a doc-flavored name would become a lie
+  here. Wants overload sets first, since a call must be checked against *any* of a name's
+  forms.
+- **Overload sets — the one primitive that unlocks the rest.** Seven sibling functions (and
+  vinculum's `http_redirect`, `mcp_image`) are genuinely overloaded: different arities mean
+  different *shapes*, not omitted tails. `parsetime(s)` / `(format, s)` / `(format, s, tz)`
+  re-purposes `args[0]` per arity; `duration("5m")` vs `duration(5, "m")` flips the first
+  param's type; `base64decode(s) -> string` vs `base64decode(s, ct) -> bytes` changes the
+  **return** type with arity. No optional-parameter feature can express any of these.
+
+  The fix needs **no new syntax and no new API**: let an extern file declare the same name
+  more than once, each decl a distinct form. `Result.Externs` is a *slice*, so two decls of
+  one name are already just two elements — the work is to relax `checkExternNames` (which
+  rejects a duplicate today, and says so in its own comment) and to teach `help()` to render
+  a set. That is exactly why it is a slice and not a map. A later `check` accepts a call if it
+  matches **any** form; each form carries its own `->`, so the varying return type falls out
+  free.
+
+  ```functy
+  //functy:extern
+
+  // Parse a time from a string.
+  func parsetime(s: string) -> time
+  func parsetime(format: string, s: string) -> time
+  func parsetime(format: string, s: string, tz: string) -> time
+  ```
+
+  This is how a human describes these functions anyway — the audit's "true signature" column
+  came out as an overload list unprompted, which is a good sign the construct fits the domain.
+
+  - **Union types are the trap here — do not reach for them.** `duration(val: string|number,
+    unit?: string)` looks like the tidier fix and is a lie: the constraint is *correlated
+    across parameters* (a number **requires** the unit, a string **forbids** it), and a union
+    under-specifies exactly the thing the signature exists to state. Overload sets express the
+    correlation; unions erase it. Recorded so it isn't re-litigated.
+  - **It also solves the per-receiver dispatch functions**, which are otherwise out of reach
+    entirely. `get`/`set`/`call`/`delete` are registered *once* but their real signature is
+    defined per receiver capsule, by `args []cty.Value` handlers inside each host type
+    (vinculum's `types/baggage.go`, `types/metric.go`, `types/httprequest.go`, …). One name
+    cannot carry N receiver-dependent signatures — unless overloads discriminate on a
+    parameter's type:
+
+    ```functy
+    func get(bg: baggage, key: string, default = null) -> any
+    func get(m: metric, labels = null) -> number
+    func get(req: httprequest, name: string, default = null) -> any
+    ```
+
+    That is a large payoff from one small primitive — and it is why `Result.Externs` shipped as
+    a slice, a shape that already admits more than one decl per name, rather than a map that
+    would have to change to allow it.
+  - **Collision detection must be relaxed, precisely.** Same name + different signature *within
+    one package* becomes legal (that's an overload); the same name registered by *two* packages
+    stays an error. Overload sets live inside a namespace, so the check is per-namespace.
+  - **Named arguments are the real long-run fix for the ugly tail.** The geo solar functions
+    (`sunrise(point [, offset] [, t])`) dispatch their trailing args on capsule type and accept
+    them **in either order**, so an overload set can only enumerate the four forms. If functy
+    ever grows named arguments, `sunrise(point, offset: 5m)` collapses that family outright —
+    so the answer there is named args, not more signature syntax.
+- **Patterned varargs — knowingly out of scope.** A few functions have a tail that is a
+  *shape* rather than a homogeneous list, which `*rest: T` cannot describe: `cond(c1, r1, c2,
+  r2, …, else)` (repeating pairs plus a trailing required arg — odd arity), `switch(on, v1,
+  r1, …, [default])` (repeating pairs where a trailing optional is signalled by arity
+  *parity*), and the `log_*` family (either N positional values **or** exactly one map — a
+  disguised overload, so an overload set actually covers that one).
+
+  A repeating-group syntax would express them — `func cond(*(condition: bool, result: any),
+  else: any)`, with a required param permitted *after* the variadic since externs are never
+  compiled — but this is not worth a grammar extension: it is ~3 functions, all in functy's
+  own stdlib rather than in the host packages extern exists to serve, and `switch`'s
+  parity-encoded optional is arguably a smell in `switch` rather than a gap in the signature
+  language. The cheap alternative — a `//functy:signature cond(c1, r1, …, else)` escape hatch
+  supplying a hand-written rendering — is **not currently cheap either**: it depends on
+  **per-function directives**, which aren't implemented (only file-scope directives are
+  collected today; see *Directive comments* in `doc/language.md`). Until one of those lands,
+  a prose doc comment is the proportionate answer.
 - **Declaration visibility (`_` prefix)** — *shipped*, as one feature with namespacing; see
   **Namespaces + `_` visibility** under *Top-level constructs* for what remains, and
   `doc/language.md` for the feature itself.

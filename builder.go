@@ -56,6 +56,9 @@ func (r *Result) Compile(evalCtxFn func() *hcl.EvalContext) (map[string]function
 // differ, so they are distinct functions. The host remains responsible for
 // detecting collisions against its own built-in functions when it merges Funcs
 // into its registry.
+//
+// Result.Externs is deliberately not compiled: an extern declares a function the
+// *host* provides, so there is no body to compile and nothing to register.
 func (r *Result) CompileUnits(evalCtxFn func() *hcl.EvalContext) (*Compiled, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
 
@@ -78,6 +81,20 @@ func (r *Result) CompileUnits(evalCtxFn func() *hcl.EvalContext) (*Compiled, hcl
 	seen := make(map[string]bool, len(r.Funcs))
 	for _, fn := range r.Funcs {
 		qualified := fn.QualifiedName()
+		// The parser routes externs into Result.Externs, so this is unreachable from
+		// a parsed Result — it defends the invariant against a hand-assembled one.
+		// It matters because BuildFunction treats a parameter with no default as
+		// *required*, so an extern's `name?` parameter would compile to the wrong
+		// signature rather than failing.
+		if fn.Extern {
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Extern function cannot be compiled",
+				Detail:   fmt.Sprintf("Extern %q declares a function the host provides; it has no body. It belongs in Result.Externs, not Result.Funcs.", qualified),
+				Subject:  fn.DefRange.Ptr(),
+			})
+			continue
+		}
 		if seen[qualified] {
 			diags = diags.Append(&hcl.Diagnostic{
 				Severity: hcl.DiagError,

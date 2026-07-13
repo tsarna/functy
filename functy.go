@@ -12,6 +12,8 @@
 package functy
 
 import (
+	"fmt"
+
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
 )
@@ -144,6 +146,8 @@ type lexedSource struct {
 	src      []byte
 	tokens   []token
 	comments []Comment
+	dirs     []Directive
+	fd       fileDirectives
 }
 
 // parseSources is the shared core of Parse/ParseAll. It lexes every source,
@@ -154,11 +158,22 @@ type lexedSource struct {
 func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
 
+	// Lex every source and read its leading directive block. Directives are read
+	// here — before aliases are collected — because //functy:extern decides whether
+	// a file contributes aliases at all: the parser rejects a `type` declaration in
+	// an extern file, so collecting its aliases first would leak them project-wide
+	// in spite of that rejection.
 	lexed := make([]lexedSource, 0, len(sources))
 	for _, s := range sources {
 		tokens, comments, ldiags := lexAll(s.Bytes, s.Filename)
 		diags = diags.Extend(ldiags)
-		lexed = append(lexed, lexedSource{filename: s.Filename, src: s.Bytes, tokens: tokens, comments: comments})
+		dirs := leadingDirectives(comments, tokens)
+		fd, idiags := interpretFunctyDirectives(dirs)
+		diags = diags.Extend(idiags)
+		lexed = append(lexed, lexedSource{
+			filename: s.Filename, src: s.Bytes, tokens: tokens,
+			comments: comments, dirs: dirs, fd: fd,
+		})
 	}
 
 	// Collect aliases from every source first, then resolve them into a per-parse
@@ -167,6 +182,9 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	env := p.types().env.clone()
 	var aliases []aliasDecl
 	for _, ls := range lexed {
+		if ls.fd.extern {
+			continue // extern files declare no aliases; the parser rejects `type` there
+		}
 		ad, cdiags := collectTypeAliases(ls.tokens, ls.src, ls.filename)
 		diags = diags.Extend(cdiags)
 		aliases = append(aliases, ad...)
@@ -183,11 +201,8 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	for _, ls := range lexed {
 		// Directives are collected per file (file-scope), drive that file's strict
 		// typing, and are passed through to the host via Result.Directives.
-		dirs := leadingDirectives(ls.comments, ls.tokens)
-		merged.Directives = append(merged.Directives, dirs...)
+		merged.Directives = append(merged.Directives, ls.dirs...)
 		merged.Comments = append(merged.Comments, ls.comments...)
-		fParam, fRet, fDecl, idiags := interpretFunctyDirectives(dirs)
-		diags = diags.Extend(idiags)
 
 		pr := &parser{
 			src:                ls.src,
@@ -196,22 +211,71 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 			env:                env,
 			allowTopLevelVar:   p.allowTopLevelVar,
 			allowTopLevelConst: p.allowTopLevelConst,
+			extern:             ls.fd.extern,
 			strict: strictness{
-				paramTypes:    combineReq(p.requireParamTypes, fParam),
-				returnType:    combineReq(p.requireReturnType, fRet),
-				declaredTypes: combineReq(p.requireDeclaredTypes, fDecl),
+				paramTypes:    combineReq(p.requireParamTypes, ls.fd.paramTypes),
+				returnType:    combineReq(p.requireReturnType, ls.fd.returnType),
+				declaredTypes: combineReq(p.requireDeclaredTypes, ls.fd.declaredTypes),
 			},
 		}
 		r := pr.parseFile()
 		diags = diags.Extend(pr.diags)
 		attachDocComments(ls.src, r, ls.comments)
 		merged.Funcs = append(merged.Funcs, r.Funcs...)
+		merged.Externs = append(merged.Externs, r.Externs...)
 		merged.Tests = append(merged.Tests, r.Tests...)
 		merged.Consts = append(merged.Consts, r.Consts...)
 		merged.Vars = append(merged.Vars, r.Vars...)
 		merged.Namespaces = append(merged.Namespaces, r.Namespaces...)
 	}
+	diags = diags.Extend(checkExternNames(merged))
 	return merged, diags
+}
+
+// checkExternNames rejects an extern name that is declared twice, or that is also
+// declared as a real functy function. It runs on the *merged* result so it catches
+// collisions across sources parsed together, not just within one file.
+//
+// Duplicates are an error only because overload sets are not implemented yet: an
+// overloaded host function (parsetime(s) / parsetime(format, s)) is exactly a name
+// with several signatures, and Result.Externs is a slice precisely so allowing that
+// later is a relaxation of this check rather than a change of shape.
+func checkExternNames(r *Result) hcl.Diagnostics {
+	var diags hcl.Diagnostics
+
+	funcs := make(map[string]*FuncDecl, len(r.Funcs))
+	for _, fn := range r.Funcs {
+		funcs[fn.QualifiedName()] = fn
+	}
+
+	seen := make(map[string]*FuncDecl, len(r.Externs))
+	for _, ex := range r.Externs {
+		name := ex.QualifiedName()
+		if prev, ok := seen[name]; ok {
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Duplicate extern",
+				Detail: fmt.Sprintf(
+					"Extern %q is already declared at %s. Declaring one name with several signatures (an overload set) is not supported yet.",
+					name, prev.DefRange),
+				Subject: ex.DefRange.Ptr(),
+			})
+			continue
+		}
+		seen[name] = ex
+
+		if fn, ok := funcs[name]; ok {
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Extern duplicates a function",
+				Detail: fmt.Sprintf(
+					"Extern %q is also declared as a functy function at %s. An extern documents a function the host provides, so it cannot also be defined here.",
+					name, fn.DefRange),
+				Subject: ex.DefRange.Ptr(),
+			})
+		}
+	}
+	return diags
 }
 
 // Result is the outcome of parsing one or more functy sources. It is a struct
@@ -223,6 +287,20 @@ type Result struct {
 	Consts []Decl      // top-level const declarations (only when enabled)
 	Vars   []Decl      // top-level var declarations (only when enabled)
 	Types  []TypeAlias // top-level type aliases (project-scoped across all sources)
+
+	// Externs are the bodiless declarations from //functy:extern sources, in source
+	// order. They declare the signatures of functions the *host* provides, so they
+	// are never compiled and never callable — Compile and CompileUnits ignore them
+	// entirely. They exist so help(), `functy symbols`, and editor tooling can show
+	// a host function's real signature, which its cty metadata cannot express: a cty
+	// function fakes optional and defaulted arguments with a trailing VarParam, which
+	// erases their names, their defaults, and (for the `f([ctx,] x)` convention) the
+	// leading parameter itself.
+	//
+	// A slice, not a map, and deliberately: two declarations of one name is exactly
+	// an overload set, so supporting overloads later is a relaxation of
+	// checkExternNames rather than a change to this type.
+	Externs []*FuncDecl
 
 	// Namespaces holds the `namespace a::b` declaration of each namespaced source
 	// parsed together, in parse order (a source without one is in the global

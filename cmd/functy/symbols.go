@@ -19,10 +19,11 @@ type jsonSymbols struct {
 	Symbols []jsonSymbol `json:"symbols"`
 }
 
-// jsonSymbol is one declaration. Kind is namespace/func/const/var/type/test. Detail carries
-// a function's rendered signature (empty otherwise); Doc is the leading
-// doc-comment block (omitted when absent). Range is the full definition span (a
-// whole block for func/test), 1-based like the other --json ranges.
+// jsonSymbol is one declaration. Kind is namespace/func/extern/const/var/type/test.
+// Detail carries a function's rendered signature (empty otherwise); Doc is the
+// leading doc-comment block (omitted when absent). Range is the full definition span
+// (a whole block for func/test, the signature for an extern, which has no body),
+// 1-based like the other --json ranges.
 //
 // Name stays the *bare* declared name — it is the outline label and the test
 // identifier, and a consumer that predates namespaces keeps working unchanged.
@@ -50,7 +51,7 @@ func symbolsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "symbols [--json] [--filename NAME] [FILE|DIR ... | -]",
 		Short: "List top-level declarations and tests",
-		Long: "List every top-level declaration (func, const, var, type) and test block, in " +
+		Long: "List every top-level declaration (func, extern, const, var, type) and test block, in " +
 			"source order — a `file:line: kind name` listing by default, or a machine-readable " +
 			"JSON object with --json (each symbol carries kind, name, a function's signature, any " +
 			"doc comment, and its 1-based range), for editor tooling such as an outline or test " +
@@ -110,6 +111,23 @@ func collectSymbols(res *functy.Result) []jsonSymbol {
 					Filename: fn.DefRange.Filename,
 					Start:    fn.DefRange.Start,
 					End:      fn.BodyRange.End,
+				}),
+			})
+		}
+		// Externs are bodiless, so the range ends at the signature. They are never
+		// private (the parser rejects a `_` name in an extern file).
+		for _, fn := range res.Externs {
+			symbols = append(symbols, jsonSymbol{
+				Kind:      "extern",
+				Name:      fn.Name,
+				Namespace: fn.Namespace,
+				Qualified: qualifiedIfNamespaced(fn.Namespace, fn.Name),
+				Detail:    funcSignature(fn),
+				Doc:       fn.Doc,
+				Range: rangeToJSON(hcl.Range{
+					Filename: fn.DefRange.Filename,
+					Start:    fn.DefRange.Start,
+					End:      fn.SigRange.End,
 				}),
 			})
 		}
@@ -183,12 +201,12 @@ func writeSymbolsText(w io.Writer, symbols []jsonSymbol) {
 		switch s.Kind {
 		case "test":
 			display = fmt.Sprintf("test %q", s.Name)
-		case "func":
+		case "func", "extern":
 			name := s.Name
 			if s.Qualified != "" {
 				name = s.Qualified
 			}
-			display = "func " + name + s.Detail
+			display = s.Kind + " " + name + s.Detail
 		default:
 			display = s.Kind + " " + s.Name
 		}
@@ -197,7 +215,8 @@ func writeSymbolsText(w io.Writer, symbols []jsonSymbol) {
 }
 
 // funcSignature renders a function's parameters and return type as they appear in
-// source, e.g. "(a: number, b: number = 0, *rest: string) -> number".
+// source, e.g. "(a: number, b: number = 0, *rest: string) -> number". An extern may
+// also carry `name?` — optional with no default.
 func funcSignature(fn *functy.FuncDecl) string {
 	var b strings.Builder
 	b.WriteByte('(')
@@ -209,6 +228,9 @@ func funcSignature(fn *functy.FuncDecl) string {
 			b.WriteByte('*')
 		}
 		b.WriteString(p.Name)
+		if p.Optional {
+			b.WriteByte('?')
+		}
 		if p.TypeSrc != "" {
 			b.WriteString(": ")
 			b.WriteString(p.TypeSrc)

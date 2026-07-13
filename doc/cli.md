@@ -364,8 +364,8 @@ therefore not reachable from the prompt; that is by design, since the REPL is no
 
 ## symbols
 
-List every top-level declaration (`func`, `const`, `var`, `type`) and `test`
-block, in source order — for editor tooling such as an outline view or test
+List every top-level declaration (`func`, `extern`, `const`, `var`, `type`) and
+`test` block, in source order — for editor tooling such as an outline view or test
 discovery. The default output is a greppable `file:line: kind name` listing:
 
 ```console
@@ -374,10 +374,18 @@ examples/math.cty:2: func add(a: number, b: number) -> number
 examples/math.cty:6: func main() -> number
 ```
 
+A bodiless declaration from an [extern file](language.md#extern-declarations) is
+listed as `extern`:
+
+```console
+$ functy symbols richcty.cty
+richcty.cty:4: extern get(ctx?: ctx, thing, fallback?) -> any
+```
+
 With `--json`, emit a machine-readable object instead — each symbol carries its
 `kind`, `name`, a function's rendered signature (`detail`), any leading doc comment
 (`doc`), and its 1-based `range` (the full definition span — a whole block for
-`func`/`test`):
+`func`/`test`, the signature for an `extern`, which has no body):
 
 ```console
 $ functy symbols --json examples/math.cty

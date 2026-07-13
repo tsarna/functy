@@ -171,6 +171,38 @@ func TestDirectivesOnlyFromLeadingBlock(t *testing.T) {
 	}
 }
 
+// //functy:extern is a directive functy acts on, so it must not fall through to
+// the unknown-directive warning it used to produce.
+func TestExternDirectiveIsRecognized(t *testing.T) {
+	_, diags := NewParser().Parse([]byte("//functy:extern\n\nfunc f(a: string) -> string\n"), "test")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected errors: %s", diags.Error())
+	}
+	for _, d := range diags {
+		if strings.Contains(d.Summary, "Unknown functy directive") {
+			t.Fatal("functy:extern warned as an unknown directive")
+		}
+	}
+}
+
+// A space after `//` makes a directive ordinary prose. That is what stops a comment
+// from silently switching a file into extern mode — so the bodiless func below is
+// still a syntax error.
+func TestExternDirectiveNeedsNoSpace(t *testing.T) {
+	_, diags := NewParser().Parse([]byte("// functy:extern\n\nfunc f(a: string) -> string\n"), "test")
+	if !diags.HasErrors() {
+		t.Fatal("expected `// functy:extern` (with a space) to be prose, leaving a bodiless func an error")
+	}
+}
+
+// strict and extern compose: an extern file may require its declarations be typed.
+func TestExternWithStrict(t *testing.T) {
+	_, diags := NewParser().Parse([]byte("//functy:extern\n//functy:strict\n\nfunc f(a) -> string\n"), "test")
+	if !diags.HasErrors() {
+		t.Fatal("expected strict to require a parameter type in an extern file")
+	}
+}
+
 func TestUnknownFunctyDirectiveWarns(t *testing.T) {
 	res, diags := NewParser().Parse([]byte("//functy:bogus\nfunc f(a: number) -> number { return a }"), "test")
 	_ = res

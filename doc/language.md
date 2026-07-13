@@ -263,9 +263,9 @@ requirement.
 
 A directive comment is a line comment with **no space** after `//`, of the form
 `//<namespace>:<name> [args]` (a space, `// functy: …`, is ordinary prose). functy
-acts only on its own `functy:` namespace (`strict`, `require`); every other
-namespace is collected into `Result.Directives` and passed through untouched for
-the host to interpret:
+acts only on its own `functy:` namespace (`strict`, `require`,
+[`extern`](#extern-declarations)); every other namespace is collected into
+`Result.Directives` and passed through untouched for the host to interpret:
 
 ```functy
 //vinculum:cache 5m
@@ -316,11 +316,18 @@ name                 // dynamic, required
 name: T              // typed, required
 name = default       // dynamic, optional
 name: T = default    // typed, optional
+name?                // optional, no default — extern files only
+name?: T             // typed, optional, no default — extern files only
 *rest                // variadic, collects extras into a tuple
 *rest: T             // variadic, collects extras into list(T)
 ```
 
-- Required parameters must precede optional ones.
+- Required parameters must precede optional ones — except in an
+  [extern file](#extern-declarations), where the declaration transcribes a host
+  function that may take optional arguments at the head as well as the tail.
+- `name?` (optional with no default) may only be written in an extern file, where
+  it is never compiled. It exists because a *leading* optional parameter has no
+  spellable default, and is mutually exclusive with `= default`.
 - An optional parameter's default is an HCL expression evaluated in a minimal
   context (host functions and globals, no other parameters).
 - A typed parameter converts its argument (or default) to `T`.
@@ -366,6 +373,63 @@ func divmod(a: number, b: number) -> object({ q = number, r = number }) {
 }
 // caller:  var result = divmod(17, 5); result.q   // 3
 ```
+
+## Extern declarations
+
+A function the **host** provides has no functy source, so `help()`, generated docs,
+and editor hovers have nothing to show for it — and its cty metadata usually cannot
+even describe it honestly. A cty function fakes optional and defaulted arguments
+with a trailing `VarParam`, which erases their names and defaults; and because a cty
+optional parameter may only sit at the *tail*, the widespread `f([ctx,] x)`
+convention (a leading context sniffed out of `args[0]`) is not expressible at all.
+Such a function reflects as `f(x, ...args)` — true, and useless.
+
+An **extern file** states the real signature. It is an ordinary `.cty` file whose
+leading comment block carries the `//functy:extern` directive, holding `func`
+declarations with **no bodies**:
+
+```functy
+//functy:extern
+
+// Read a value from a thing.
+func get(
+    ctx?: ctx,        // the context, when the call is scoped to one
+    thing,            // the gettable thing
+    fallback = null,  // returned when the value is absent
+) -> any
+
+// Parse a time from a string.
+func parsetime(format: string, s: string) -> time
+```
+
+Externs are **never compiled and never callable** — they are declarations, not code.
+They surface on `Result.Externs`, in `functy symbols` (as `kind: "extern"`), and in
+`help()`, which prefers an extern over the cty-metadata fallback for the same name:
+that preference is the entire point, since the host function *is* registered and its
+cty shape is exactly what the extern exists to replace.
+
+Rules:
+
+- **`//functy:extern` is a file-level directive, not a keyword.** Extern-ness is a
+  property of the file, and spelling it there is what keeps a bodiless `func` a hard
+  error *everywhere else*: a half-typed declaration (signature written, brace not yet
+  opened) must stay a syntax error rather than silently becoming a valid one.
+- An extern file holds **only** bodiless functions. `var`, `const`, `test`, and
+  `type` are rejected — an extern file documents someone else's Go functions, so it
+  carries no functy code of its own. A leading `namespace` declaration *is* allowed,
+  and qualifies the externs like any other declaration.
+- A `_`-prefixed name is rejected: an extern is global-and-defined-elsewhere by
+  definition, so a namespace-local extern is a contradiction.
+- `name?` marks a parameter optional with no default, and only here. It is the only
+  way to spell a *leading* optional, and the required-before-optional ordering rule is
+  relaxed accordingly.
+- Declaring one name twice (an overload set) is not supported yet, and is an error.
+- A named type an extern mentions that the reader has not registered — `ctx` and
+  `time` above — resolves to an **opaque** name: carried for rendering, enforced not
+  at all, and reported once per file as a warning. An extern names *its host's* types,
+  and whoever reads it (the `functy` CLI, an editor) generally is not that host, so
+  failing there would make extern files unusable exactly where they are most useful.
+  The cost is that a misspelled type resolves instead of failing; hence the warning.
 
 ## Statements
 
@@ -881,12 +945,15 @@ test "add is commutative" {
 ## Grammar
 
 ```ebnf
-File        = [ NamespaceDecl ] { FuncDecl | TestDecl } .
+File        = [ NamespaceDecl ] ( { FuncDecl | TestDecl } | ExternFile ) .
+ExternFile  = (* a file whose leading block has //functy:extern *)
+              { ExternDecl } .
 NamespaceDecl = "namespace" ident { "::" ident } Term .
 FuncDecl    = "func" ident "(" [ ParamList ] ")" [ "->" Type ] Block .
+ExternDecl  = "func" ident "(" [ ParamList ] ")" [ "->" Type ] Term .
 TestDecl    = "test" string Block .
 ParamList   = Param { "," Param } [ "," Variadic ] | Variadic .
-Param       = ident [ ":" Type ] [ "=" Expr ] .
+Param       = ident [ "?" ] [ ":" Type ] [ "=" Expr ] .   (* "?" only in an extern file *)
 Variadic    = "*" ident [ ":" Type ] .
 
 Block       = "{" { Stmt } "}" .

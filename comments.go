@@ -60,22 +60,32 @@ func leadingDirectives(comments []Comment, tokens []token) []Directive {
 // into a merged Result.
 func attachDocComments(src []byte, r *Result, comments []Comment) {
 	for _, fn := range r.Funcs {
-		fn.Doc = docComment(src, fn.DefRange, comments)
-		for i := range fn.Params {
-			// A leading block above the parameter wins (it supports multi-line
-			// descriptions); otherwise a trailing comment on the parameter's line.
-			if lead := docComment(src, fn.Params[i].DefRange, comments); lead != "" {
-				fn.Params[i].Doc = lead
-			} else {
-				fn.Params[i].Doc = trailingParamDoc(src, fn.Params, i, comments)
-			}
-		}
+		attachFuncDoc(src, fn, comments)
+	}
+	// Externs carry documentation for exactly the same reason a func does — more so,
+	// since documenting the host's functions is their whole purpose.
+	for _, fn := range r.Externs {
+		attachFuncDoc(src, fn, comments)
 	}
 	for i := range r.Consts {
 		r.Consts[i].Doc = docComment(src, r.Consts[i].DefRange, comments)
 	}
 	for i := range r.Vars {
 		r.Vars[i].Doc = docComment(src, r.Vars[i].DefRange, comments)
+	}
+}
+
+// attachFuncDoc sets a function declaration's Doc and its parameters' Docs.
+func attachFuncDoc(src []byte, fn *FuncDecl, comments []Comment) {
+	fn.Doc = docComment(src, fn.DefRange, comments)
+	for i := range fn.Params {
+		// A leading block above the parameter wins (it supports multi-line
+		// descriptions); otherwise a trailing comment on the parameter's line.
+		if lead := docComment(src, fn.Params[i].DefRange, comments); lead != "" {
+			fn.Params[i].Doc = lead
+		} else {
+			fn.Params[i].Doc = trailingParamDoc(src, fn.Params, i, comments)
+		}
 	}
 }
 

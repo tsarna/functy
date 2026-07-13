@@ -205,6 +205,14 @@ func topLevelItems(res *Result) []topItem {
 		fn := fn
 		items = append(items, topItem{fn.DefRange.Start, fn.BodyRange.End, func(f *formatter) { f.funcDecl(fn) }})
 	}
+	// An extern has no body, so SigRange — not BodyRange — is its end. Using the
+	// zero BodyRange here would put the item's end at line 0, which silently
+	// suppresses every blank line after it (see gapBefore) and drops a comment
+	// trailing its signature.
+	for _, fn := range res.Externs {
+		fn := fn
+		items = append(items, topItem{fn.DefRange.Start, fn.SigRange.End, func(f *formatter) { f.externDecl(fn) }})
+	}
 	for _, td := range res.Tests {
 		td := td
 		items = append(items, topItem{td.DefRange.Start, td.BodyRange.End, func(f *formatter) { f.testDecl(td) }})
@@ -240,23 +248,9 @@ func declEnd(d Decl) hcl.Pos {
 }
 
 func (f *formatter) funcDecl(fn *FuncDecl) {
-	ret := ""
-	if fn.RetTypeSrc != "" {
-		ret = " -> " + fn.RetTypeSrc
-	}
+	ret := f.retString(fn)
 	if f.multilineParams(fn) {
-		f.writeLine("func " + fn.Name + "(")
-		f.suppressGap = true
-		f.indent++
-		for i := range fn.Params {
-			p := fn.Params[i]
-			f.flushBefore(p.DefRange.Start.Byte) // a leading comment block above the param
-			f.writeLine(f.paramString(p) + "," + f.trailing(p.FullRange.End))
-			f.lastLine = p.FullRange.End.Line
-		}
-		f.flushBefore(fn.ParenRange.End.Byte) // dangling comments before `)`
-		f.suppressGap = false
-		f.indent--
+		f.emitParamsMultiline(fn)
 		f.openBlock(")"+ret, fn.BodyRange)
 	} else {
 		f.openBlock("func "+fn.Name+"("+f.params(fn.Params)+")"+ret, fn.BodyRange)
@@ -264,6 +258,45 @@ func (f *formatter) funcDecl(fn *FuncDecl) {
 	f.emitSeq(fn.Body, fn.BodyRange.End.Byte)
 	f.indent--
 	f.writeLine("}" + f.trailing(fn.BodyRange.End))
+}
+
+// externDecl renders a bodiless declaration from a //functy:extern file. It is
+// funcDecl without the body: the signature terminates the line rather than opening
+// a block, so the trailing comment is taken at SigRange.End.
+func (f *formatter) externDecl(fn *FuncDecl) {
+	ret := f.retString(fn)
+	if f.multilineParams(fn) {
+		f.emitParamsMultiline(fn)
+		f.writeLine(")" + ret + f.trailing(fn.SigRange.End))
+	} else {
+		f.writeLine("func " + fn.Name + "(" + f.params(fn.Params) + ")" + ret + f.trailing(fn.SigRange.End))
+	}
+	f.lastLine = fn.SigRange.End.Line
+}
+
+func (f *formatter) retString(fn *FuncDecl) string {
+	if fn.RetTypeSrc == "" {
+		return ""
+	}
+	return " -> " + fn.RetTypeSrc
+}
+
+// emitParamsMultiline writes the `func name(` line and then one parameter per line,
+// leaving the cursor just past the closing paren for the caller to terminate (with
+// a body, or — for an extern — with nothing).
+func (f *formatter) emitParamsMultiline(fn *FuncDecl) {
+	f.writeLine("func " + fn.Name + "(")
+	f.suppressGap = true
+	f.indent++
+	for i := range fn.Params {
+		p := fn.Params[i]
+		f.flushBefore(p.DefRange.Start.Byte) // a leading comment block above the param
+		f.writeLine(f.paramString(p) + "," + f.trailing(p.FullRange.End))
+		f.lastLine = p.FullRange.End.Line
+	}
+	f.flushBefore(fn.ParenRange.End.Byte) // dangling comments before `)`
+	f.suppressGap = false
+	f.indent--
 }
 
 // multilineParams reports whether the parameter list should be rendered one per
@@ -285,13 +318,16 @@ func (f *formatter) multilineParams(fn *FuncDecl) bool {
 	return false
 }
 
-// paramString renders one parameter: [*]name[: T][ = default].
+// paramString renders one parameter: [*]name[?][: T][ = default].
 func (f *formatter) paramString(p Param) string {
 	var b strings.Builder
 	if p.Variadic {
 		b.WriteByte('*')
 	}
 	b.WriteString(p.Name)
+	if p.Optional {
+		b.WriteByte('?')
+	}
 	if p.TypeSrc != "" {
 		b.WriteString(": ")
 		b.WriteString(p.TypeSrc)
