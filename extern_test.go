@@ -268,23 +268,92 @@ func TestExternVariadicMustStillBeLast(t *testing.T) {
 	}
 }
 
-func TestDuplicateExternIsError(t *testing.T) {
-	t.Run("same file", func(t *testing.T) {
-		diags := parseExternErr(t, "func f(a) -> string\n\nfunc f(a, b) -> string\n")
-		if !strings.Contains(diags[0].Summary, "Duplicate extern") {
-			t.Fatalf("unexpected error: %s", diags[0].Summary)
-		}
-	})
+// ---- Overload sets -----------------------------------------------------------
 
-	t.Run("across files", func(t *testing.T) {
-		_, diags := externParser().ParseAll([]Source{
-			{Filename: "a", Bytes: []byte(externSrc("func f(a) -> string\n"))},
-			{Filename: "b", Bytes: []byte(externSrc("func f(a, b) -> string\n"))},
-		})
-		if !hasSummary(diags, "Duplicate extern") {
-			t.Fatalf("expected a duplicate error, got:\n%s", allDiags(diags))
+// One name with several *forms* is an overload set: a host function whose argument
+// shapes differ per arity is not a function with optional parameters, and one
+// signature cannot describe it honestly.
+func TestOverloadSetIsLegal(t *testing.T) {
+	res := parseExtern(t, `
+// Parse a timestamp.
+func parsetime(s: string) -> string
+func parsetime(format: string, s: string) -> string
+func parsetime(format: string, s: string, tz: string) -> string
+`)
+	if len(res.Externs) != 3 {
+		t.Fatalf("expected 3 forms, got %d", len(res.Externs))
+	}
+	for i, want := range []int{1, 2, 3} {
+		if got := len(res.Externs[i].Params); got != want {
+			t.Errorf("form %d has %d params, want %d", i, got, want)
 		}
+	}
+}
+
+// Forms may differ by *type* at the same arity — that is `duration(s)` vs
+// `duration(n, unit)`, and `timeadd`, whose return type flips with its arguments.
+func TestOverloadSetDistinguishedByType(t *testing.T) {
+	res := parseExtern(t, `
+func timeadd(ts: string, dur: string) -> string
+func timeadd(ts: string, dur: number) -> string
+`)
+	if len(res.Externs) != 2 {
+		t.Fatalf("expected 2 forms, got %d", len(res.Externs))
+	}
+}
+
+// Two forms of the same shape are a copy-paste, not an overload. Names and docs do
+// not distinguish a call, so they do not distinguish a form.
+func TestDuplicateOverloadShapeIsError(t *testing.T) {
+	diags := parseExternErr(t, "func f(a: string) -> string\n\nfunc f(b: string) -> string\n")
+	if !hasSummary(diags, "Duplicate extern signature") {
+		t.Fatalf("expected a duplicate-shape error, got:\n%s", allDiags(diags))
+	}
+}
+
+// One name across two *files* is a collision, not an overload — it is what happens
+// when two packages both claim `get`. An overload set is written together, by one
+// author, in one file.
+func TestDuplicateExternAcrossFilesIsError(t *testing.T) {
+	_, diags := externParser().ParseAll([]Source{
+		{Filename: "a", Bytes: []byte(externSrc("func f(a) -> string\n"))},
+		{Filename: "b", Bytes: []byte(externSrc("func f(a, b) -> string\n"))},
 	})
+	if !hasSummary(diags, "Duplicate extern") {
+		t.Fatalf("expected a duplicate error, got:\n%s", allDiags(diags))
+	}
+}
+
+// help() lists every form, each with its own return type, then the documentation and
+// a "Parameters:" section unioned across the forms.
+func TestHelpRendersAnOverloadSet(t *testing.T) {
+	src := "//functy:extern\n\n" +
+		"// Parse a timestamp.\n" +
+		"func parsetime(\n" +
+		"    s: string,  // the timestamp to parse\n" +
+		") -> time\n" +
+		"func parsetime(\n" +
+		"    format: string,  // a Go reference layout\n" +
+		"    s: string,\n" +
+		") -> time\n"
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("parse: %s", diags.Error())
+	}
+
+	got, err := HelpFunc(res, nil).Call([]cty.Value{cty.StringVal("parsetime")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	want := "parsetime(s: string) -> time\n" +
+		"parsetime(format: string, s: string) -> time\n\n" +
+		"Parse a timestamp.\n\n" +
+		"Parameters:\n" +
+		"  s       the timestamp to parse\n" +
+		"  format  a Go reference layout"
+	if got.AsString() != want {
+		t.Fatalf("help(\"parsetime\") =\n%q\nwant\n%q", got.AsString(), want)
+	}
 }
 
 // An extern documents a function the *host* provides, so it cannot also be a

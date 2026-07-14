@@ -423,13 +423,53 @@ Rules:
 - `name?` marks a parameter optional with no default, and only here. It is the only
   way to spell a *leading* optional, and the required-before-optional ordering rule is
   relaxed accordingly.
-- Declaring one name twice (an overload set) is not supported yet, and is an error.
+- A name may be declared more than once: see **Overload sets** below.
 - A named type an extern mentions that the reader has not registered — `ctx` and
   `time` above — resolves to an **opaque** name: carried for rendering, enforced not
   at all, and reported once per file as a warning. An extern names *its host's* types,
   and whoever reads it (the `functy` CLI, an editor) generally is not that host, so
   failing there would make extern files unusable exactly where they are most useful.
   The cost is that a misspelled type resolves instead of failing; hence the warning.
+
+### Overload sets
+
+Some host functions are not one function with optional parameters — they are several
+functions sharing a name, and no single signature describes them honestly. Declare each
+form:
+
+```functy
+//functy:extern
+
+// Parse a timestamp.
+func parsetime(s: string) -> time
+func parsetime(format: string, s: string) -> time
+func parsetime(format: string, s: string, tz: string) -> time
+```
+
+`parsetime(s)` parses a timestamp; `parsetime(format, s)` parses a *format* and then a
+timestamp. Written as `parsetime(format?, s)` it would be a lie, because the sole
+argument of the one-argument form is not a format.
+
+Each form carries its own return type, which is what makes a function whose result type
+depends on its arguments sayable at all:
+
+```functy
+func timeadd(ts: string, dur: string) -> string   // the stdlib-compatible path
+func timeadd(ts: time, dur: duration) -> time
+```
+
+Rules:
+
+- The forms of one name must live in **one file**. The same name in two files is a
+  collision — two packages both claiming `get` — not an overload set, and is an error.
+- Two forms must differ in their **parameters**: arity, types, or optionality. Two forms
+  of the same shape are a copy-paste, and an error; names and docs do not distinguish a
+  call, so they do not distinguish a form.
+- `help()` lists every form, then the documentation, then one `Parameters:` section
+  unioned across the forms. Document the family once, above the first form.
+
+Overload sets are an extern-only construct: a real functy `func` still declares one
+signature, and a duplicate name is still a duplicate function.
 
 ### Shipping externs from a package
 

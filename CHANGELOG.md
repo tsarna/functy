@@ -107,7 +107,50 @@ tagged. Until then, everything lives under **Unreleased**.
   - `Parser.ExternSources` lets a host seed its diagnostic file map, so a diagnostic pointing
     into an embedded extern still renders with a source snippet.
 
+- **Overload sets — one extern name, several signatures.** Some host functions are not one
+  function with optional parameters; they are several functions sharing a name, and no single
+  signature describes them honestly. `parsetime(s)` parses a timestamp while
+  `parsetime(format, s)` parses a *format* and then a timestamp — written as
+  `parsetime(format?, s)` it would be a lie. Declare each form instead:
+
+  ```functy
+  // Parse a timestamp.
+  func parsetime(s: string) -> time
+  func parsetime(format: string, s: string) -> time
+  func parsetime(format: string, s: string, tz: string) -> time
+  ```
+
+  Each form carries its own return type, which is what makes a function whose result type
+  depends on its arguments (`timeadd`, `timesub`) sayable at all — cty cannot express that
+  even in principle.
+
+  - This needed **no new syntax and no API change**: `Result.Externs` was made a slice for
+    exactly this, so two declarations of one name were already two elements.
+  - The forms of one name must live in **one file**. The same name across two files is a
+    collision — two packages both claiming `get` — not an overload set. Two forms of the same
+    *shape* (arity, parameter types, optionality) are a copy-paste, and an error; names and
+    docs do not distinguish a call, so they do not distinguish a form.
+  - `help()` lists every form, then the documentation, then one `Parameters:` section unioned
+    across the forms.
+  - Extern-only: a real functy `func` still declares one signature, and a duplicate name is
+    still a duplicate function.
+
 ### Fixed
+
+- **A single-line function's parameters no longer take the function's doc comment.**
+  `docComment` looks for a block directly above a declaration, and on a single-line
+  signature every parameter shares the `func` line — so each parameter was documented with
+  the *function's* doc, repeating the whole comment once per argument in `help()`. Parameter
+  docs are a feature of the multi-line layout, and now say so: a parameter takes
+  documentation only when it starts its own line, which is the rule trailing param comments
+  already followed.
+
+- **`help()` renders a host function's return type.** It asks the cty function what it
+  returns when called with its declared parameter types, so a Go builtin with complete
+  metadata now renders as fully as a declared one (`durationround(d: duration, m: duration) ->
+  duration`). Best-effort by nature: a function whose return type is computed from its
+  *arguments* cannot answer without them — and that is exactly the kind that needs an extern,
+  where each form states its own return type.
 
 - **The REPL renders a multi-line string as a heredoc** rather than one
   backslash-escaped line. `help()` returns a multi-line block, so it was previously

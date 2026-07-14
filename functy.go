@@ -13,6 +13,7 @@ package functy
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
@@ -345,14 +346,24 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	return merged, diags
 }
 
-// checkExternNames rejects an extern name that is declared twice, or that is also
-// declared as a real functy function. It runs on the *merged* result so it catches
-// collisions across sources parsed together, not just within one file.
+// checkExternNames validates extern names against each other and against the real
+// functy functions. It runs on the *merged* result, so it sees every source parsed
+// together, not just one file.
 //
-// Duplicates are an error only because overload sets are not implemented yet: an
-// overloaded host function (parsetime(s) / parsetime(format, s)) is exactly a name
-// with several signatures, and Result.Externs is a slice precisely so allowing that
-// later is a relaxation of this check rather than a change of shape.
+// Declaring a name more than once **in one file** is an overload set, and legal: a
+// host function whose argument shapes differ per arity is not a function with
+// optional parameters, and cannot honestly be described by one signature.
+// `parsetime(s)` parses a timestamp, while `parsetime(format, s)` parses a format
+// and *then* a timestamp; `timeadd`'s return type is a string or a time depending on
+// what it was handed. Each form is its own declaration, carrying its own return type.
+//
+// Declaring one name across *different files* is an error, not an overload: it is
+// what happens when two packages both claim `get`, and silently merging them into
+// one set would bury that. An overload set is written adjacently, in one file, by
+// one author.
+//
+// Two forms with the same shape are an error wherever they appear — that is a
+// copy-paste, not an overload.
 func checkExternNames(r *Result) hcl.Diagnostics {
 	var diags hcl.Diagnostics
 
@@ -361,38 +372,91 @@ func checkExternNames(r *Result) hcl.Diagnostics {
 		funcs[fn.QualifiedName()] = fn
 	}
 
-	// One `seen` map across both sets, so a host extern colliding with a file extern
-	// (or with another host's) is caught on the same footing as two file externs.
-	// File externs go first: they are the ones with a source the user can edit, so a
-	// diagnostic is better pointed at the later, host-registered declaration.
-	seen := make(map[string]*FuncDecl, len(r.Externs)+len(r.HostExterns))
+	// One pass across both sets, so a host extern colliding with a file extern (or
+	// with another host's) is caught on the same footing as two file externs. File
+	// externs go first: they have a source the user can edit, so a diagnostic reads
+	// better pointed at the later, host-registered declaration.
+	type externSet struct {
+		decls  []*FuncDecl
+		shapes map[string]*FuncDecl // signature shape -> the form that claimed it
+	}
+	seen := make(map[string]*externSet, len(r.Externs)+len(r.HostExterns))
+
 	for _, ex := range append(append([]*FuncDecl(nil), r.Externs...), r.HostExterns...) {
 		name := ex.QualifiedName()
-		if prev, ok := seen[name]; ok {
+
+		set, ok := seen[name]
+		if !ok {
+			seen[name] = &externSet{decls: []*FuncDecl{ex}, shapes: map[string]*FuncDecl{externShape(ex): ex}}
+
+			if fn, ok := funcs[name]; ok {
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Extern duplicates a function",
+					Detail: fmt.Sprintf(
+						"Extern %q is also declared as a functy function at %s. An extern documents a function the host provides, so it cannot also be defined here.",
+						name, fn.DefRange),
+					Subject: ex.DefRange.Ptr(),
+				})
+			}
+			continue
+		}
+
+		prev := set.decls[0]
+		if prev.DefRange.Filename != ex.DefRange.Filename {
 			diags = diags.Append(&hcl.Diagnostic{
 				Severity: hcl.DiagError,
 				Summary:  "Duplicate extern",
 				Detail: fmt.Sprintf(
-					"Extern %q is already declared at %s. Declaring one name with several signatures (an overload set) is not supported yet.",
+					"Extern %q is already declared at %s. Two files declaring one name is a collision, not an overload set — the forms of an overloaded function belong together, in one file.",
 					name, prev.DefRange),
 				Subject: ex.DefRange.Ptr(),
 			})
 			continue
 		}
-		seen[name] = ex
 
-		if fn, ok := funcs[name]; ok {
+		shape := externShape(ex)
+		if dup, ok := set.shapes[shape]; ok {
 			diags = diags.Append(&hcl.Diagnostic{
 				Severity: hcl.DiagError,
-				Summary:  "Extern duplicates a function",
+				Summary:  "Duplicate extern signature",
 				Detail: fmt.Sprintf(
-					"Extern %q is also declared as a functy function at %s. An extern documents a function the host provides, so it cannot also be defined here.",
-					name, fn.DefRange),
+					"This form of %q is already declared at %s. The forms of an overload set must differ in their parameters.",
+					name, dup.DefRange),
 				Subject: ex.DefRange.Ptr(),
 			})
+			continue
 		}
+		set.shapes[shape] = ex
+		set.decls = append(set.decls, ex)
 	}
 	return diags
+}
+
+// externShape is a key for "these two forms are the same signature", used to reject
+// a copy-pasted duplicate inside an overload set.
+//
+// It is keyed on what distinguishes one *call* from another — the arity, and each
+// parameter's type and optionality — and deliberately not on parameter names or
+// docs: two forms that differ only in what they call their arguments are the same
+// form, and one of them is a mistake.
+func externShape(fn *FuncDecl) string {
+	var b strings.Builder
+	for _, p := range fn.Params {
+		if p.Variadic {
+			b.WriteByte('*')
+		}
+		if p.Optional || p.Default != nil {
+			b.WriteByte('?')
+		}
+		if p.Type != nil {
+			b.WriteString(p.Type.String())
+		} else {
+			b.WriteString("any")
+		}
+		b.WriteByte(',')
+	}
+	return b.String()
 }
 
 // Result is the outcome of parsing one or more functy sources. It is a struct

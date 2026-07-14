@@ -106,8 +106,8 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
   | optional leading `ctx` | 11 | the whole rich-cty-types `get`/`set`/`count` family |
   | genuine overload | 7 | `duration("5m")` vs `duration(5, "m")` |
 
-  The first three groups — 28 of the 35 — are what the shipped extern covers. The fourth
-  needs overload sets, below.
+  All four groups are now expressible: the first three by the extern's optional/defaulted
+  parameters and the `?` marker, the fourth by overload sets.
 
   (Genuine variadics needed nothing: a homogeneous unbounded tail is `*rest: T`, which the
   grammar already spelled. The `VarParam` problem was never that functy couldn't express
@@ -125,62 +125,40 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
   around "doc": docs are only its *first* consumer, and a doc-flavored name would become a lie
   here. Wants overload sets first, since a call must be checked against *any* of a name's
   forms.
-- **Overload sets — the one primitive that unlocks the rest.** Seven sibling functions (and
-  vinculum's `http_redirect`, `mcp_image`) are genuinely overloaded: different arities mean
-  different *shapes*, not omitted tails. `parsetime(s)` / `(format, s)` / `(format, s, tz)`
-  re-purposes `args[0]` per arity; `duration("5m")` vs `duration(5, "m")` flips the first
-  param's type; `base64decode(s) -> string` vs `base64decode(s, ct) -> bytes` changes the
-  **return** type with arity. No optional-parameter feature can express any of these.
+- **Overload sets** — *shipped*; see `doc/language.md`, *Overload sets*. An extern file may
+  declare one name more than once, each decl a distinct form, each carrying its own return
+  type — which is what makes a function whose result type depends on its arguments (`timeadd`,
+  `timesub`) sayable at all. It needed no new syntax and no API change, because
+  `Result.Externs` was made a slice for exactly this. What remains of the original entry:
 
-  The fix needs **no new syntax and no new API**: let an extern file declare the same name
-  more than once, each decl a distinct form. `Result.Externs` is a *slice*, so two decls of
-  one name are already just two elements — the work is to relax `checkExternNames` (which
-  rejects a duplicate today, and says so in its own comment) and to teach `help()` to render
-  a set. That is exactly why it is a slice and not a map. A later `check` accepts a call if it
-  matches **any** form; each form carries its own `->`, so the varying return type falls out
-  free.
-
-  ```functy
-  //functy:extern
-
-  // Parse a time from a string.
-  func parsetime(s: string) -> time
-  func parsetime(format: string, s: string) -> time
-  func parsetime(format: string, s: string, tz: string) -> time
-  ```
-
-  This is how a human describes these functions anyway — the audit's "true signature" column
-  came out as an overload list unprompted, which is a good sign the construct fits the domain.
-
-  - **Union types are the trap here — do not reach for them.** `duration(val: string|number,
+  - **Union types are still the trap — do not reach for them.** `duration(val: string|number,
     unit?: string)` looks like the tidier fix and is a lie: the constraint is *correlated
     across parameters* (a number **requires** the unit, a string **forbids** it), and a union
     under-specifies exactly the thing the signature exists to state. Overload sets express the
     correlation; unions erase it. Recorded so it isn't re-litigated.
-  - **It also solves the per-receiver dispatch functions**, which are otherwise out of reach
-    entirely. `get`/`set`/`call`/`delete` are registered *once* but their real signature is
-    defined per receiver capsule, by `args []cty.Value` handlers inside each host type
-    (vinculum's `types/baggage.go`, `types/metric.go`, `types/httprequest.go`, …). One name
-    cannot carry N receiver-dependent signatures — unless overloads discriminate on a
-    parameter's type:
+  - **The per-receiver dispatch functions are now reachable, but not yet reached.**
+    `get`/`set`/`call`/`delete` are registered *once*, but their real signature is defined per
+    receiver capsule, by `args []cty.Value` handlers inside each host type (vinculum's
+    `types/baggage.go`, `types/metric.go`, `types/httprequest.go`, …). Overloads discriminating
+    on a parameter's type would say it:
 
     ```functy
-    func get(bg: baggage, key: string, default = null) -> any
+    func get(bg: baggage, key: string, fallback = null) -> any
     func get(m: metric, labels = null) -> number
-    func get(req: httprequest, name: string, default = null) -> any
+    func get(req: httprequest, name: string, fallback = null) -> any
     ```
 
-    That is a large payoff from one small primitive — and it is why `Result.Externs` shipped as
-    a slice, a shape that already admits more than one decl per name, rather than a map that
-    would have to change to allow it.
-  - **Collision detection must be relaxed, precisely.** Same name + different signature *within
-    one package* becomes legal (that's an overload); the same name registered by *two* packages
-    stays an error. Overload sets live inside a namespace, so the check is per-namespace.
+    rich-cty-types' extern currently declares the *generic* form (`get(ctx?: ctx, thing, …)`)
+    instead, which is honest but coarse. Writing the per-receiver forms means the declarations
+    would have to live with the receivers (in vinculum), not with the dispatcher (in
+    rich-cty-types) — and the one-file rule for an overload set says they cannot then be split.
+    Worth solving; not yet solved.
   - **Named arguments are the real long-run fix for the ugly tail.** The geo solar functions
     (`sunrise(point [, offset] [, t])`) dispatch their trailing args on capsule type and accept
     them **in either order**, so an overload set can only enumerate the four forms. If functy
     ever grows named arguments, `sunrise(point, offset: 5m)` collapses that family outright —
     so the answer there is named args, not more signature syntax.
+
 - **Patterned varargs — knowingly out of scope.** A few functions have a tail that is a
   *shape* rather than a homogeneous list, which `*rest: T` cannot describe: `cond(c1, r1, c2,
   r2, …, else)` (repeating pairs plus a trailing required arg — odd arity), `switch(on, v1,

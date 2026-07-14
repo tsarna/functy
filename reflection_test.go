@@ -98,6 +98,31 @@ func TestHelpFuncFunctyFunction(t *testing.T) {
 	}
 }
 
+// On a single-line signature every parameter shares the `func` line, so the block
+// above that line is the *function's* doc, not any parameter's. Attributing it to
+// each parameter repeated the whole doc comment once per argument.
+func TestSingleLineParamsTakeNoDoc(t *testing.T) {
+	src := "// Adds two numbers.\nfunc add(a: number, b: number) -> number { return a + b }\n"
+	res, diags := NewParser().Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("parse: %s", diags.Error())
+	}
+	for _, p := range res.Funcs[0].Params {
+		if p.Doc != "" {
+			t.Errorf("param %q took the function's doc comment: %q", p.Name, p.Doc)
+		}
+	}
+
+	got, err := HelpFunc(res, nil).Call([]cty.Value{cty.StringVal("add")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	want := "add(a: number, b: number) -> number\n\nAdds two numbers."
+	if got.AsString() != want {
+		t.Fatalf("help(\"add\") =\n%q\nwant\n%q", got.AsString(), want)
+	}
+}
+
 func TestHelpFuncCtyFallback(t *testing.T) {
 	greet := function.New(&function.Spec{
 		Description: "A host greeting.",
@@ -114,7 +139,9 @@ func TestHelpFuncCtyFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("help call: %s", err)
 	}
-	want := "greet(who: string)\n\nA host greeting.\n\nParameters:\n  who  who to greet"
+	// The return type is asked of the cty function itself, so a host function with
+	// complete metadata renders as fully as a declared one.
+	want := "greet(who: string) -> string\n\nA host greeting.\n\nParameters:\n  who  who to greet"
 	if got.AsString() != want {
 		t.Fatalf("help(\"greet\") =\n%q\nwant\n%q", got.AsString(), want)
 	}

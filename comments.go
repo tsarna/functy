@@ -79,6 +79,14 @@ func attachDocComments(src []byte, r *Result, comments []Comment) {
 func attachFuncDoc(src []byte, fn *FuncDecl, comments []Comment) {
 	fn.Doc = docComment(src, fn.DefRange, comments)
 	for i := range fn.Params {
+		// Parameter docs are a feature of the multi-line layout: a parameter only has
+		// documentation of its own when it starts its own line. On a single-line
+		// signature every parameter shares the `func` line, and the block above that
+		// line is the *function's* doc — attributing it to each parameter in turn
+		// would repeat the whole doc comment once per argument.
+		if !precededOnlyByWhitespace(src, fn.Params[i].DefRange.Start.Byte) {
+			continue
+		}
 		// A leading block above the parameter wins (it supports multi-line
 		// descriptions); otherwise a trailing comment on the parameter's line.
 		if lead := docComment(src, fn.Params[i].DefRange, comments); lead != "" {

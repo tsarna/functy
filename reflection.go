@@ -2,6 +2,7 @@ package functy
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -155,19 +156,31 @@ func HelpFunc(res *Result, evalCtxFn func() *hcl.EvalContext) function.Function 
 // Private functions are included: they are not host-visible, but help() is a
 // developer tool and `help("foo::_helper")` is exactly what you want when debugging
 // one.
-func indexDecls(decls []*FuncDecl) (byName, byBare map[string]*FuncDecl) {
-	byName = make(map[string]*FuncDecl, len(decls))
-	byBare = make(map[string]*FuncDecl, len(decls))
-	ambiguous := make(map[string]bool)
+// Each entry is a *set* of declarations, because one extern name may carry several
+// signatures (an overload set). For an ordinary function the set has one member.
+func indexDecls(decls []*FuncDecl) (byName, byBare map[string][]*FuncDecl) {
+	byName = make(map[string][]*FuncDecl, len(decls))
 	for _, fn := range decls {
-		byName[fn.QualifiedName()] = fn
-		if _, dup := byBare[fn.Name]; dup {
-			ambiguous[fn.Name] = true
-		}
-		byBare[fn.Name] = fn
+		q := fn.QualifiedName()
+		byName[q] = append(byName[q], fn)
 	}
-	for name := range ambiguous {
-		delete(byBare, name)
+
+	// A bare name is usable only when it resolves to exactly one *qualified* name.
+	// Several overloads of that one name are not ambiguity — they are the point —
+	// so the check counts distinct namespaces, not declarations.
+	qualifiedNames := make(map[string]map[string]bool, len(decls))
+	for _, fn := range decls {
+		if qualifiedNames[fn.Name] == nil {
+			qualifiedNames[fn.Name] = make(map[string]bool)
+		}
+		qualifiedNames[fn.Name][fn.QualifiedName()] = true
+	}
+	byBare = make(map[string][]*FuncDecl, len(decls))
+	for _, fn := range decls {
+		if len(qualifiedNames[fn.Name]) != 1 {
+			continue // declared in more than one namespace: ambiguous, not guessed at
+		}
+		byBare[fn.Name] = append(byBare[fn.Name], fn)
 	}
 	return byName, byBare
 }
@@ -185,7 +198,7 @@ func indexDecls(decls []*FuncDecl) (byName, byBare map[string]*FuncDecl) {
 // Private functions never appear. From the eval context that is structural rather
 // than filtered — they were never put in the host's map — and the declarations are
 // filtered below to match.
-func renderFuncList(funcByName, externByName map[string]*FuncDecl, evalCtxFn func() *hcl.EvalContext) string {
+func renderFuncList(funcByName, externByName map[string][]*FuncDecl, evalCtxFn func() *hcl.EvalContext) string {
 	names := make(map[string]struct{})
 	if evalCtxFn != nil {
 		if ctx := evalCtxFn(); ctx != nil {
@@ -194,9 +207,11 @@ func renderFuncList(funcByName, externByName map[string]*FuncDecl, evalCtxFn fun
 			}
 		}
 	}
-	for _, decls := range []map[string]*FuncDecl{funcByName, externByName} {
-		for n, fn := range decls {
-			if fn.IsPrivate() {
+	for _, decls := range []map[string][]*FuncDecl{funcByName, externByName} {
+		for n, set := range decls {
+			// An overload set's members share a name, so privacy is a property of the
+			// name and any member answers for all of them.
+			if len(set) == 0 || set[0].IsPrivate() {
 				continue
 			}
 			names[n] = struct{}{}
@@ -215,35 +230,77 @@ type paramDoc struct{ name, doc string }
 
 // renderFuncHelp renders help for a functy function from its declaration: an exact
 // signature, the function's doc, and a per-parameter section for documented params.
-func renderFuncHelp(fn *FuncDecl) string {
+//
+// fns is a *set*, because an extern name may carry several signatures — an overload
+// set (see checkExternNames). A host function whose argument shapes differ per arity
+// is not a function with optional parameters, and rendering it as one would lie:
+// parsetime(s) reads a timestamp, while parsetime(format, s) reads a format and then
+// a timestamp. So every form is listed, each with its own return type — which is also
+// how a form whose return type depends on its arguments (timeadd) becomes sayable at
+// all.
+//
+// The forms are rendered together rather than as separate blocks: the signatures
+// first, then the documentation, then one "Parameters:" section unioned across the
+// forms (first occurrence of a name wins). Documenting the family once, above the
+// first form, is the expected style; if several forms carry distinct docs, each is
+// kept, in order.
+func renderFuncHelp(fns []*FuncDecl) string {
+	if len(fns) == 0 {
+		return ""
+	}
+
 	var b strings.Builder
-	b.WriteString(fn.QualifiedName()) // the name it is callable under
-	b.WriteByte('(')
 	var docs []paramDoc
+	seenParam := make(map[string]bool)
+	var seenDoc []string
+
+	for i, fn := range fns {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(renderSignature(fn))
+
+		for _, p := range fn.Params {
+			name := paramDisplayName(p)
+			if p.Doc == "" || seenParam[name] {
+				continue
+			}
+			seenParam[name] = true
+			docs = append(docs, paramDoc{name, p.Doc})
+		}
+		if fn.Doc != "" && !slices.Contains(seenDoc, fn.Doc) {
+			seenDoc = append(seenDoc, fn.Doc)
+		}
+	}
+
+	if len(seenDoc) > 0 {
+		b.WriteString("\n\n")
+		b.WriteString(strings.Join(seenDoc, "\n\n"))
+	}
+	b.WriteString(renderParamDocs(docs))
+	return b.String()
+}
+
+// renderSignature renders one form: the name it is callable under, its parameters,
+// and its return type.
+func renderSignature(fn *FuncDecl) string {
+	var b strings.Builder
+	b.WriteString(fn.QualifiedName())
+	b.WriteByte('(')
 	for i, p := range fn.Params {
 		if i > 0 {
 			b.WriteString(", ")
 		}
 		b.WriteString(renderParam(p))
-		if p.Doc != "" {
-			docs = append(docs, paramDoc{paramDisplayName(p), p.Doc})
-		}
 	}
 	b.WriteByte(')')
 	if fn.RetType != nil {
 		b.WriteString(" -> ")
 		b.WriteString(fn.RetType.String())
 	}
-	if fn.Doc != "" {
-		b.WriteString("\n\n")
-		b.WriteString(fn.Doc)
-	}
-	b.WriteString(renderParamDocs(docs))
 	return b.String()
 }
 
-// paramDisplayName is the parameter's name as it appears in a signature (a
-// variadic parameter carries its leading `*`).
 // paramDisplayName is the parameter's name carrying whatever marker its surface
 // syntax puts *on the name* — the variadic star, or the optional-without-default
 // `?`. Both the signature line and the aligned "Parameters:" column key on it, so
@@ -316,12 +373,38 @@ func renderCtyHelp(name string, f function.Function) string {
 		}
 	}
 	b.WriteByte(')')
+	if ret, ok := ctyReturnType(f); ok {
+		b.WriteString(" -> ")
+		b.WriteString(ret.FriendlyName())
+	}
 	if d := f.Description(); d != "" {
 		b.WriteString("\n\n")
 		b.WriteString(d)
 	}
 	b.WriteString(renderParamDocs(docs))
 	return b.String()
+}
+
+// ctyReturnType asks a cty function what it returns when called with exactly its
+// declared parameter types and no variadic arguments — which for the common case (a
+// static return type) is simply what it always returns.
+//
+// It is best-effort by nature: a function whose return type is computed from its
+// *arguments* cannot answer without them, and reports back dynamic or an error. That
+// is not a failure to report — a function whose result type depends on what it is
+// handed is exactly the kind that needs an extern, where each form states its own
+// return type.
+func ctyReturnType(f function.Function) (cty.Type, bool) {
+	params := f.Params()
+	argTypes := make([]cty.Type, len(params))
+	for i, p := range params {
+		argTypes[i] = p.Type
+	}
+	ret, err := f.ReturnType(argTypes)
+	if err != nil || ret == cty.NilType || ret == cty.DynamicPseudoType {
+		return cty.NilType, false
+	}
+	return ret, true
 }
 
 // ctyParamString renders a cty parameter as name[: type], omitting the type when it
