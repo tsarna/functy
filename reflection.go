@@ -375,7 +375,7 @@ func renderCtyHelp(name string, f function.Function) string {
 	b.WriteByte(')')
 	if ret, ok := ctyReturnType(f); ok {
 		b.WriteString(" -> ")
-		b.WriteString(ret.FriendlyName())
+		b.WriteString(typeString(ret))
 	}
 	if d := f.Description(); d != "" {
 		b.WriteString("\n\n")
@@ -408,12 +408,15 @@ func ctyReturnType(f function.Function) (cty.Type, bool) {
 }
 
 // ctyParamString renders a cty parameter as name[: type], omitting the type when it
-// is dynamic (any).
+// is dynamic (any). The type is rendered in functy's own grammar — object({ … }),
+// list(string) — the same round-trippable syntax a declaration uses, rather than cty's
+// prose FriendlyName, which flattens every object to bare "object" and so hides the
+// attributes that are often the whole point of a structural return.
 func ctyParamString(name string, ty cty.Type) string {
 	if ty == cty.NilType || ty == cty.DynamicPseudoType {
 		return name
 	}
-	return name + ": " + ty.FriendlyName()
+	return name + ": " + typeString(ty)
 }
 
 // renderParamDocs renders the aligned "Parameters:" section, or "" when no

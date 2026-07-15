@@ -147,6 +147,42 @@ func TestHelpFuncCtyFallback(t *testing.T) {
 	}
 }
 
+// A host function whose parameter or return type is structural — an object, a list of
+// objects — must render that shape in functy's own grammar, not cty's FriendlyName,
+// which flattens every object to bare "object" and so hides the attributes that are
+// usually the whole point of the value.
+func TestHelpFuncCtyStructuralTypes(t *testing.T) {
+	inverse := function.New(&function.Spec{
+		Description: "Distance and bearing between two points.",
+		Params: []function.Parameter{
+			{Name: "a", Type: cty.List(cty.Object(map[string]cty.Type{"lat": cty.Number, "lon": cty.Number})), Description: "the route"},
+		},
+		Type: function.StaticReturnType(cty.Object(map[string]cty.Type{
+			"distance": cty.Number,
+			"bearing":  cty.Number,
+		})),
+		Impl: func([]cty.Value, cty.Type) (cty.Value, error) { return cty.NilVal, nil },
+	})
+	ctx := &hcl.EvalContext{Functions: map[string]function.Function{"inverse": inverse}}
+	help := HelpFunc(nil, func() *hcl.EvalContext { return ctx })
+
+	got, err := help.Call([]cty.Value{cty.StringVal("inverse")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	s := got.AsString()
+	// The list-of-object parameter and the object return both render their full shape.
+	if !strings.Contains(s, "a: list(object({ lat = number, lon = number }))") {
+		t.Errorf("structural parameter type not rendered in functy grammar:\n%s", s)
+	}
+	if !strings.Contains(s, "-> object({ bearing = number, distance = number })") {
+		t.Errorf("structural return type not rendered in functy grammar:\n%s", s)
+	}
+	if strings.Contains(s, "list of object") || strings.Contains(s, "> object\n") {
+		t.Errorf("cty FriendlyName leaked into the rendering:\n%s", s)
+	}
+}
+
 func TestHelpFuncUnknown(t *testing.T) {
 	ctx := &hcl.EvalContext{Functions: map[string]function.Function{}}
 	help := HelpFunc(nil, func() *hcl.EvalContext { return ctx })

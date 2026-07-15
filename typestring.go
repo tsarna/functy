@@ -71,7 +71,15 @@ func typeString(ty cty.Type) string {
 		sort.Strings(names)
 		parts := make([]string, len(names))
 		for i, name := range names {
-			parts[i] = name + " = " + typeString(ats[name])
+			at := typeString(ats[name])
+			// Optional attributes exist only in a type *constraint* (a declaration), not
+			// in the type of a value, so this branch is dead for typeof() and live for
+			// rendering a signature — where dropping the marker would misreport a
+			// wholly optional object as one that demands every attribute.
+			if ty.AttributeOptional(name) {
+				at = "optional(" + at + ")"
+			}
+			parts[i] = name + " = " + at
 		}
 		return "object({ " + strings.Join(parts, ", ") + " })"
 	case ty.IsTupleType():

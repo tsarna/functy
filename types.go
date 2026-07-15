@@ -40,7 +40,12 @@ type convertConstraint struct{ ty cty.Type }
 
 func (c convertConstraint) Coerce(v cty.Value) (cty.Value, error) { return convert.Convert(v, c.ty) }
 func (c convertConstraint) Cty() cty.Type                         { return c.ty }
-func (c convertConstraint) String() string                        { return c.ty.FriendlyName() }
+
+// String renders the constraint in functy's own type-annotation grammar, the syntax it
+// was written in — `list(string)`, `object({ a = string })` — rather than cty's prose
+// FriendlyName, which says "list of string" and flattens every object to bare "object".
+// This is what a signature shows, so it has to round-trip back through the resolver.
+func (c convertConstraint) String() string { return typeString(c.ty) }
 
 // anyConstraint is the explicit `any` annotation: every value passes through.
 type anyConstraint struct{}
@@ -120,6 +125,57 @@ type opaqueConstraint struct{ name string }
 func (c opaqueConstraint) Coerce(v cty.Value) (cty.Value, error) { return v, nil }
 func (c opaqueConstraint) Cty() cty.Type                         { return cty.DynamicPseudoType }
 func (c opaqueConstraint) String() string                        { return c.name }
+
+// nestedOpaqueSummary marks the two errors resolveCtyType raises for a named type it
+// cannot place in a nested position: an unregistered one, and a registered *open* one.
+// In an extern — which documents rather than enforces — both degrade to an opaque
+// rendering of the annotation from its source, the composite analogue of a bare
+// unregistered name (see resolveTypeSpanAllowNull). Keyed on Summary so the parser can
+// tell these apart from a genuinely malformed constructor ("Invalid type").
+var nestedOpaqueSummary = map[string]bool{
+	"Unknown type":               true,
+	"Open type cannot be nested": true,
+}
+
+// diagsHaveSummary reports whether any error diagnostic in diags carries the given
+// Summary.
+func diagsHaveSummary(diags hcl.Diagnostics, summary string) bool {
+	for _, d := range diags {
+		if d.Severity == hcl.DiagError && d.Summary == summary {
+			return true
+		}
+	}
+	return false
+}
+
+// allNestedOpaque reports whether diags is non-empty and every error in it is a
+// nested-name resolution failure (see nestedOpaqueSummary) rather than a structural one,
+// so an extern can safely take the whole annotation opaquely instead.
+func allNestedOpaque(diags hcl.Diagnostics) bool {
+	saw := false
+	for _, d := range diags {
+		if d.Severity != hcl.DiagError {
+			continue
+		}
+		if !nestedOpaqueSummary[d.Summary] {
+			return false
+		}
+		saw = true
+	}
+	return saw
+}
+
+// opaqueTypeWarning is the diagnostic paired with an opaqueConstraint: a mistyped name
+// resolves instead of failing, so the reader is told it was taken as an opaque name.
+func opaqueTypeWarning(name string, subject hcl.Range) *hcl.Diagnostic {
+	return &hcl.Diagnostic{
+		Severity: hcl.DiagWarning,
+		Summary:  "Unregistered type in extern declaration",
+		Detail: fmt.Sprintf(
+			"%q is not a type known here, so it is treated as an opaque name and not enforced. That is expected when the host that provides these functions registers it; check the spelling if not.", name),
+		Subject: subject.Ptr(),
+	}
+}
 
 // TypeResolver is functy's type system as a standalone, reusable component. It
 // resolves functy type annotations (the same grammar used in `.cty` source) into
@@ -258,13 +314,7 @@ func (e *typeEnv) resolveTypeOpaque(expr hcl.Expression, allowNull, allowOpaque 
 			return c, nil
 		}
 		if allowOpaque {
-			return opaqueConstraint{name: kw}, hcl.Diagnostics{&hcl.Diagnostic{
-				Severity: hcl.DiagWarning,
-				Summary:  "Unregistered type in extern declaration",
-				Detail: fmt.Sprintf(
-					"%q is not a type known here, so it is treated as an opaque name and not enforced. That is expected when the host that provides these functions registers it; check the spelling if not.", kw),
-				Subject: expr.Range().Ptr(),
-			}}
+			return opaqueConstraint{name: kw}, hcl.Diagnostics{opaqueTypeWarning(kw, expr.Range())}
 		}
 		return nil, typeDiag(expr, "Unknown type", fmt.Sprintf("%q is not a known type.", kw))
 	}
