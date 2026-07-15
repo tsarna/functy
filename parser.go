@@ -1590,6 +1590,28 @@ func (p *parser) resolveTypeSpanAllowNull(startByte, endByte int, startPos hcl.P
 	// rather than failing: an extern names its *host's* types, and the reader (the
 	// functy CLI, an editor) generally is not that host. See opaqueConstraint.
 	tc, rdiags := p.env.resolveTypeOpaque(expr, allowNull, p.extern)
+	// resolveTypeOpaque only softens a *bare* unknown name. A host type nested inside a
+	// constructor — list(geopoint), object({ p = geopoint }) — still fails there, because
+	// a nested position resolves to a concrete cty type an open or unregistered name has
+	// none of. An extern documents rather than enforces, so rather than reject the whole
+	// declaration, take the annotation opaquely from its source text: it renders as
+	// written and enforces nothing, exactly like the bare-name case. A genuinely
+	// malformed constructor ("Invalid type") is left to fail.
+	if p.extern && rdiags.HasErrors() && allNestedOpaque(rdiags) {
+		name := strings.TrimSpace(string(p.src[startByte:endByte]))
+		// Warn only when a nested name is genuinely *unknown* — the composite analogue of
+		// a bare unregistered name, where the warning catches a typo. A nested name the
+		// host *did* register, which merely cannot enforce inside a collection (an open
+		// predicate type has no concrete cty type to nest), is known and correct, so it
+		// degrades to opaque rendering silently.
+		warn := diagsHaveSummary(rdiags, "Unknown type")
+		tc = opaqueConstraint{name: name}
+		if warn {
+			rdiags = hcl.Diagnostics{opaqueTypeWarning(name, expr.Range())}
+		} else {
+			rdiags = nil
+		}
+	}
 	if oc, ok := tc.(opaqueConstraint); ok {
 		if p.opaqueWarned[oc.name] {
 			rdiags = nil // already reported this name once for this file

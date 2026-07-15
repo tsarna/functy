@@ -435,6 +435,64 @@ func TestUnknownTypeOutsideExternIsError(t *testing.T) {
 	parseErr(t, "func f(a: ctx) {\n    return a\n}\n")
 }
 
+// A host type nested inside a constructor — list(geopoint), object({ p = geopoint }) —
+// resolves to an opaque rendering from source in an extern, exactly as a bare unknown
+// name does. A nested position otherwise demands a concrete cty type, which an open or
+// unregistered name has none of; but an extern documents rather than enforces, so it need
+// not. Without this, a leaf package could not declare `func geo_area(polygon: list(geopoint))`.
+func TestExternNestedUnknownTypeIsOpaque(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{"func area(polygon: list(geopoint)) -> number\n", "list(geopoint)"},
+		{"func label(p: object({ at = geopoint, name = string })) -> string\n", "object({ at = geopoint, name = string })"},
+		{"func pair(ps: list(list(geopoint))) -> number\n", "list(list(geopoint))"},
+	} {
+		res, diags := externParser().Parse([]byte(externSrc(tc.src)), "test")
+		if diags.HasErrors() {
+			t.Fatalf("%s: unexpected errors:\n%s", tc.src, diags.Error())
+		}
+		var warned bool
+		for _, d := range diags {
+			if d.Severity == hcl.DiagWarning && strings.Contains(d.Summary, "Unregistered type") {
+				warned = true
+			}
+		}
+		if !warned {
+			t.Errorf("%s: expected an unregistered-type warning", tc.src)
+		}
+		if got := res.Externs[0].Params[0].Type.String(); got != tc.want {
+			t.Errorf("%s: nested opaque type rendered as %q, want %q", tc.src, got, tc.want)
+		}
+	}
+}
+
+// The same, against a host that registered the open type: the extern still resolves (open
+// types cannot yet nest as enforced constraints, so it renders opaquely from source), and
+// crucially with *no warning* — the name is known, so there is no typo to flag. This is the
+// vinculum shape for list(geopoint); a spurious "unregistered type" warning here would
+// surface in `check` output for a perfectly correct declaration.
+func TestExternNestedRegisteredOpenTypeResolves(t *testing.T) {
+	p := externParser().RegisterOpenType("geopoint", func(cty.Value) error { return nil })
+	res, diags := p.Parse([]byte(externSrc("func area(polygon: list(geopoint)) -> number\n")), "test")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected errors:\n%s", diags.Error())
+	}
+	for _, d := range diags {
+		if d.Severity == hcl.DiagWarning {
+			t.Fatalf("registered open type must not warn when nested, got: %s", d.Summary)
+		}
+	}
+	if got := res.Externs[0].Params[0].Type.String(); got != "list(geopoint)" {
+		t.Fatalf("rendered as %q, want %q", got, "list(geopoint)")
+	}
+}
+
+// The opaque fallback is scoped to *unknown-name* failures. A genuinely malformed
+// constructor is still a hard error, even in an extern — it is not a host type we are
+// choosing to trust, it is wrong.
+func TestExternMalformedNestedTypeStillErrors(t *testing.T) {
+	parseExternErr(t, "func f(a: list(number, string)) -> number\n")
+}
+
 // ---- Host-registered externs (Parser.RegisterExterns) ------------------------
 
 // hostExterns is a stand-in for what a leaf package embeds and registers.
