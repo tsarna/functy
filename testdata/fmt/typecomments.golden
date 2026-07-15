@@ -1,0 +1,28 @@
+// Comments written *inside* a parameter's type annotation or default expression.
+//
+// These are rendered as part of the parameter's source text, so the comment cursor
+// must treat them as consumed. It did not: they were emitted a second time as dangling
+// comments before the `)`, and the file grew by one copy of each on every run of fmt.
+
+func sized(
+    opts: object({
+        scale  = optional(number),  // a multiplier
+        width  = optional(number),  // pixels
+        height = optional(number),
+    }),
+    // A leading block above the next parameter still belongs to it.
+    label: string = "x",  // and a trailing comment still belongs to this line
+) -> number {
+    return 1
+}
+
+// The same, with a trailing comment on the parameter whose type holds the comments —
+// the cursor has to get past the interior ones to find it.
+func trailingAfterInterior(
+    o: object({
+        a = number,  // interior
+    }),  // trailing
+    b: string,
+) -> string {
+    return b
+}

@@ -291,7 +291,15 @@ func (f *formatter) emitParamsMultiline(fn *FuncDecl) {
 	for i := range fn.Params {
 		p := fn.Params[i]
 		f.flushBefore(p.DefRange.Start.Byte) // a leading comment block above the param
-		f.writeLine(f.paramString(p) + "," + f.trailing(p.FullRange.End))
+		s := f.paramString(p)
+		// A parameter's type annotation and default are rendered from their source
+		// text, so any comment written *inside* them — `object({ a = number, // count
+		// })` — is already in s. Drop those from the cursor, or flushBefore(`)`) would
+		// emit them a second time, appended to the parameter list, growing the file by
+		// one copy on every run. Dropping them also unsticks the cursor, so the
+		// parameter's own trailing comment is still found below.
+		f.consumeWithin(p.DefRange.Start.Byte, p.FullRange.End.Byte)
+		f.writeLine(s + "," + f.trailing(p.FullRange.End))
 		f.lastLine = p.FullRange.End.Line
 	}
 	f.flushBefore(fn.ParenRange.End.Byte) // dangling comments before `)`
