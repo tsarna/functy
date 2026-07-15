@@ -231,8 +231,11 @@ declaration annotations, nested *open* types, ...) are recorded in
 [FUTURE.md](FUTURE.md); designs that were worked out and then *declined*, with the
 reasoning, are in [REJECTED.md](REJECTED.md). The design for a functy provider for
 OpenTofu — buildable today, since OpenTofu lets a configured provider define functions
-dynamically — is in [OPENTOFU.md](OPENTOFU.md), and the analysis of everything that is
-*blocked* on Terraform (and why) is in [TERRAFORM.md](TERRAFORM.md). The design rationale
+dynamically — is in [OPENTOFU-PROVIDER.md](OPENTOFU-PROVIDER.md); a separate proposal to make
+functy `.cty` the authoring language for OpenTofu's in-draft *symbol libraries* feature (all
+three of types, values, and functions) is in [OPENTOFU-SYMBOLS.md](OPENTOFU-SYMBOLS.md); and
+the analysis of everything that is *blocked* on Terraform (and why) is in
+[TERRAFORM.md](TERRAFORM.md). The design rationale
 ("why a language, not an embedded
 one") is in [DESIGN.md](DESIGN.md), and the internal architecture is in
 [CONTRIBUTING.md](CONTRIBUTING.md).

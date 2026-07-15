@@ -6,7 +6,7 @@ functy as a library and is free to shape its own configuration language, these t
 governed projects whose extension points are deliberately narrow, and whose maintainers
 have already ruled on most of what functy would want to ask for.
 
-> **Read [`OPENTOFU.md`](OPENTOFU.md) first.** There *is* a route that works — a provider
+> **Read [`OPENTOFU-PROVIDER.md`](OPENTOFU-PROVIDER.md) first.** There *is* a route that works — a provider
 > for OpenTofu, buildable today with no core change and nobody's permission. It has its own
 > file because it is a live design, while everything here is settled and blocked.
 >
@@ -44,7 +44,7 @@ as it can be put, closing #27696:
 > foreseeable future.**"*
 
 That sentence is why Routes 2 and 3 below (which ask for language surface) are recorded
-rather than pursued — and why the OpenTofu provider (`OPENTOFU.md`), which asks for nothing
+rather than pursued — and why the OpenTofu provider (`OPENTOFU-PROVIDER.md`), which asks for nothing
 and lives entirely inside the RPC layer they endorse, is the live one. The maintainers did
 not merely tolerate the provider channel; they named it as the *only* one.
 
@@ -54,7 +54,7 @@ See `REJECTED.md`.
 
 ## Route 1: stock Terraform — a provider binding (speculative — low priority)
 
-The OpenTofu provider (`OPENTOFU.md`) depends on an OpenTofu-only protocol feature. On
+The OpenTofu provider (`OPENTOFU-PROVIDER.md`) depends on an OpenTofu-only protocol feature. On
 **Terraform**, the function list is fixed before the provider is configured, so a provider
 cannot learn about your `.cty` files at all. That leaves two shapes, and neither is good:
 
@@ -119,7 +119,7 @@ Two constraints shape the design:
   `*.cty` in the working directory when the schema is requested — is not merely
   inadvisable but *unavailable*: the schema RPC carries no knowledge of the configuration
   directory, and no project in the wild attempts it. That leaves the compiled catalog and
-  the generic `eval` described above. OpenTofu removes the crux entirely (`OPENTOFU.md`); on
+  the generic `eval` described above. OpenTofu removes the crux entirely (`OPENTOFU-PROVIDER.md`); on
   Terraform it is load-bearing and unfixable from outside.
 
 The call-site verbosity (`provider::functy::add(2, 3)`) is inherent and inescapable on

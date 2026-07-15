@@ -274,6 +274,20 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
     Doing this properly needs a functy-internal qualified-type syntax, or per-namespace
     `typeEnv` layers with bare-then-qualified resolution. Consequence today: two files in
     different namespaces still collide on `type Id = …`.
+  - **`_` visibility is not wired to type aliases.** The leading-underscore convention is
+    enforced for functions (private ones withheld from the exported map in `builder.go`) and
+    is advisory for `var`/`const` (`Decl.IsPrivate()` exists; the host decides), but
+    **`TypeAlias` has no `IsPrivate()` at all** — `isPrivateName` is never consulted for
+    types. `parseAliasAt` even accepts a bare `_` as an alias name, unlike the
+    `checkDeclName` guard on `func`/`const`/`var`. This is harmless today because there is no
+    type-*export* path to withhold an alias from: aliases are compile-time, project-scoped,
+    and inlined at resolve time, so a `_`-prefixed alias is an ordinary alias that merely
+    reads as private. It stops being harmless once a projection *does* export types — e.g.
+    the OpenTofu symbol-library use (`OPENTOFU-SYMBOLS.md`), whose "unexported symbols"
+    story relies on `_spec` being skipped on export. That wants, together: an `IsPrivate()`
+    accessor on `TypeAlias`, the `checkDeclName` guard extended to aliases, and the export
+    filter itself — which lands with the namespace-scoped-alias and type-export work above,
+    not before it.
   - **HCL's "no functions in namespace" diagnostic is misleading inside functy bodies.**
     HCL builds its available-names list from the *innermost* context only
     (`hclsyntax/expression.go`), which at a functy eval site is the scope child (whose
@@ -399,7 +413,7 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
 - **Execution limits (step / time budget).** functy permits unbounded `for` / `while`
   over a tree-walking interpreter, so a single `.cty` file can wedge the process.
   Worth knowing: this is the **one unclaimed safety property** among the embedded-language
-  Terraform providers (see `OPENTOFU.md`). None of them bounds execution — the Starlark
+  Terraform providers (see `OPENTOFU-PROVIDER.md`). None of them bounds execution — the Starlark
   provider even *disables* Starlark's built-in termination guarantees and never sets a step
   budget, so a runaway script hangs `plan`. If functy ever ships a provider, this item
   stops being hygiene and becomes the differentiator. The
@@ -588,7 +602,7 @@ links the library directly and supplies its own richer context). Planned additio
     non-destructive open registration (`RegisterOpenType`), currently leaf-only.
 
   The host picks identity vs. open per type.
-- **An OpenTofu provider — see `OPENTOFU.md`.** OpenTofu 1.7 lets a *configured* provider
+- **An OpenTofu provider — see `OPENTOFU-PROVIDER.md`.** OpenTofu 1.7 lets a *configured* provider
   mint functions dynamically (an OpenTofu-only protocol feature), so a `functy` provider
   handed `file("./lib.cty")` can expose real, statically-typed `provider::functy::name`
   functions — **no core change, no fork, and no build step for the user.** Two
@@ -600,6 +614,18 @@ links the library directly and supplies its own richer context). Planned additio
 
 ## Type system
 
+- **Defaulted optional object attributes — `optional(T, default)`.** The type resolver
+  accepts `optional(T)` (marking an object attribute optional) but rejects the two-argument
+  `optional(T, default)` form that `ext/typeexpr` supports — `resolveCtyType` in `types.go`
+  errors *"optional(T) takes a single type argument."* The gap is not merely the arity
+  guard: functy returns object types via `cty.ObjectWithOptionalAttrs`, which only *marks*
+  attributes optional and has nowhere to store a default. In Terraform/OpenTofu, optional-
+  attribute defaults live in a separate `typeexpr.Defaults` tree applied during decode, not
+  in the `cty.Type` itself. So supporting them means giving functy's `TypeConstraint` a
+  defaults structure that `Coerce` applies when an attribute is absent — a real feature, not
+  a one-argument relaxation. Motivated by the OpenTofu symbol-library use
+  (`OPENTOFU-SYMBOLS.md`), whose `defaults_type` example relies on it for parity with what an
+  OpenTofu/Terraform author expects.
 - **Nested *open* types in the type resolver.** Capsule named types now nest
   (`list(bus)`, `object({ b = bus })`); the remaining gap is nesting an **open
   predicate** type (`error`, a marker-capsule `ctx`). Because an open type has no
