@@ -175,7 +175,10 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
   supplying a hand-written rendering — is **not currently cheap either**: it depends on
   **per-function directives**, which aren't implemented (only file-scope directives are
   collected today; see *Directive comments* in `doc/language.md`). Until one of those lands,
-  a prose doc comment is the proportionate answer.
+  a prose doc comment is the proportionate answer — and each of these functions (`cond`,
+  `switch`, `try`, `error`, `assert`) now carries a complete `Description` plus a
+  parameter/variadic description explaining its shape, so `help()`/`doc()` describe them in
+  full even though the signature line still renders the tail as `*exprs: expression closure`.
 - **Declaration visibility (`_` prefix)** — *shipped*, as one feature with namespacing; see
   **Namespaces + `_` visibility** under *Top-level constructs* for what remains, and
   `doc/language.md` for the feature itself.

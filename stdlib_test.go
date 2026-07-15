@@ -229,3 +229,51 @@ func TestCanReportsFailure(t *testing.T) {
     }`)
 	wantStr(t, call(t, funcs, "f"), "false/true")
 }
+
+// The stdlib functions' cty metadata must be complete: every function and every
+// parameter documented, so help()/doc() and a non-functy host see full information.
+func TestStdlibMetadataIsComplete(t *testing.T) {
+	all := Stdlib()
+	for name, fn := range StdlibExtras() {
+		all[name] = fn
+	}
+	// can() is stock hcl tryfunc, adopted as-is; its metadata is not ours to complete.
+	skip := map[string]bool{"can": true}
+
+	for name, fn := range all {
+		if skip[name] {
+			continue
+		}
+		if fn.Description() == "" {
+			t.Errorf("%s() has no cty Description", name)
+		}
+		for _, p := range fn.Params() {
+			if p.Description == "" {
+				t.Errorf("%s() parameter %q has no Description", name, p.Name)
+			}
+		}
+		if vp := fn.VarParam(); vp != nil && vp.Description == "" {
+			t.Errorf("%s() variadic parameter %q has no Description", name, vp.Name)
+		}
+	}
+}
+
+// typeof and typekind take a value of any type and return a string. Because their
+// parameter is dynamic, cty poisons the return type to dynamic — hiding the static
+// string from reflected metadata — unless the parameter opts in with AllowDynamicType.
+// This guards that opt-in: ReturnType, asked with a dynamic argument, must still say
+// string.
+func TestTypeofFamilyReturnsStaticString(t *testing.T) {
+	for _, name := range []string{"typeof", "typekind"} {
+		fn := Stdlib()[name]
+		rt, err := fn.ReturnType([]cty.Type{cty.DynamicPseudoType})
+		if err != nil {
+			t.Errorf("%s ReturnType: %v", name, err)
+			continue
+		}
+		if rt != cty.String {
+			t.Errorf("%s() return type is %s, want string — the dynamic argument poisoned it; "+
+				"the value parameter needs AllowDynamicType", name, rt.FriendlyName())
+		}
+	}
+}

@@ -59,7 +59,11 @@ func StdlibExtras() map[string]function.Function {
 var typeOfFunc = function.New(&function.Spec{
 	Description: "Returns the type of a value in functy's annotation grammar (e.g. list(string), object({ a = string }))",
 	Params: []function.Parameter{
-		{Name: "value", Type: cty.DynamicPseudoType, AllowNull: true},
+		// AllowDynamicType so the function accepts a value of any type *and* cty does not
+		// poison the return to dynamic — a dynamic argument otherwise hides the static
+		// string return in reflected metadata (help/doc). Reading .Type() is safe on a
+		// dynamic value (it yields "any").
+		{Name: "value", Type: cty.DynamicPseudoType, AllowNull: true, AllowDynamicType: true, Description: "Any value; its type is what is returned"},
 	},
 	Type: function.StaticReturnType(cty.String),
 	Impl: func(args []cty.Value, retType cty.Type) (cty.Value, error) {
@@ -72,7 +76,9 @@ var typeOfFunc = function.New(&function.Spec{
 var typeKindFunc = function.New(&function.Spec{
 	Description: "Returns the top-level type kind of a value (string, number, list, object, …), for dispatch",
 	Params: []function.Parameter{
-		{Name: "value", Type: cty.DynamicPseudoType, AllowNull: true},
+		// AllowDynamicType: see typeOfFunc — it keeps the static string return visible in
+		// reflected metadata rather than poisoned to dynamic by a dynamic argument.
+		{Name: "value", Type: cty.DynamicPseudoType, AllowNull: true, AllowDynamicType: true, Description: "Any value; its top-level type kind is what is returned"},
 	},
 	Type: function.StaticReturnType(cty.String),
 	Impl: func(args []cty.Value, retType cty.Type) (cty.Value, error) {
@@ -88,7 +94,7 @@ var typeKindFunc = function.New(&function.Spec{
 var errorFunc = function.New(&function.Spec{
 	Description: "Raises an error with the given value (string or object), usable in expression position",
 	Params: []function.Parameter{
-		{Name: "error", Type: customdecode.ExpressionClosureType},
+		{Name: "value", Type: customdecode.ExpressionClosureType, Description: "The error to raise: a string message, or an object like { message = ..., code = ... }"},
 	},
 	Type: function.StaticReturnType(cty.DynamicPseudoType),
 	Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
@@ -115,11 +121,12 @@ var errorFunc = function.New(&function.Spec{
 var assertFunc = function.New(&function.Spec{
 	Description: "Assert that a condition holds: assert(cond, message?). Raises a catchable error (carrying the condition's source range) when cond is false; returns true otherwise. The optional message (string or object, like error()) is evaluated only on failure.",
 	Params: []function.Parameter{
-		{Name: "condition", Type: customdecode.ExpressionClosureType},
+		{Name: "condition", Type: customdecode.ExpressionClosureType, Description: "The condition to check; a catchable error is raised when it is false"},
 	},
 	VarParam: &function.Parameter{
-		Name: "message",
-		Type: customdecode.ExpressionClosureType,
+		Name:        "message",
+		Type:        customdecode.ExpressionClosureType,
+		Description: "Optional failure message (string or object, like error()), evaluated only when the assertion fails",
 	},
 	Type: func(args []cty.Value) (cty.Type, error) {
 		if len(args) > 2 {
@@ -190,8 +197,9 @@ var assertFunc = function.New(&function.Spec{
 var condFunc = function.New(&function.Spec{
 	Description: "Lazy conditional: cond(c1, r1, c2, r2, ..., else). Evaluates conditions in order; only the selected result expression is evaluated.",
 	VarParam: &function.Parameter{
-		Name: "exprs",
-		Type: customdecode.ExpressionClosureType,
+		Name:        "exprs",
+		Type:        customdecode.ExpressionClosureType,
+		Description: "Alternating condition/result expressions followed by a trailing else: cond(c1, r1, …, else). Only the selected result is evaluated",
 	},
 	// DynamicPseudoType from Type keeps evaluation single-pass. cty calls Type
 	// before Impl; evaluating closures in Type (as upstream tryfunc does) would
@@ -244,8 +252,9 @@ var condFunc = function.New(&function.Spec{
 var switchFunc = function.New(&function.Spec{
 	Description: "Switch dispatch: switch(on, v1, r1, v2, r2, ..., default?). Evaluates `on` once, then each vN until a match; returns the matching rN, or the optional default. Errors if nothing matches and no default was given. Each branch is evaluated at most once.",
 	VarParam: &function.Parameter{
-		Name: "exprs",
-		Type: customdecode.ExpressionClosureType,
+		Name:        "exprs",
+		Type:        customdecode.ExpressionClosureType,
+		Description: "The value to match on, then alternating case/result expressions and an optional trailing default: switch(on, v1, r1, …, default?)",
 	},
 	Type: func(args []cty.Value) (cty.Type, error) {
 		if len(args) < 3 {
@@ -288,8 +297,9 @@ var switchFunc = function.New(&function.Spec{
 var tryFunc = function.New(&function.Spec{
 	Description: "Try each expression in order; return the first that evaluates without error. Evaluates each expression at most once (unlike stock HCL try()).",
 	VarParam: &function.Parameter{
-		Name: "exprs",
-		Type: customdecode.ExpressionClosureType,
+		Name:        "exprs",
+		Type:        customdecode.ExpressionClosureType,
+		Description: "Expressions to try in order; the first that evaluates without error is returned",
 	},
 	Type: func(args []cty.Value) (cty.Type, error) {
 		if len(args) == 0 {
