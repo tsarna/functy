@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/ext/typeexpr"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/convert"
@@ -46,6 +47,30 @@ func (c convertConstraint) Cty() cty.Type                         { return c.ty 
 // FriendlyName, which says "list of string" and flattens every object to bare "object".
 // This is what a signature shows, so it has to round-trip back through the resolver.
 func (c convertConstraint) String() string { return typeString(c.ty) }
+
+// defaultedConstraint is a convertConstraint whose annotation carried at least one
+// optional object attribute with a default (`optional(T, default)`). Before converting,
+// Coerce fills any missing/null optional attribute from the nested defaults tree, so an
+// absent attribute takes its declared default. The tree is an ext/typeexpr.Defaults built
+// by functy's own resolver; its Apply is the same routine Terraform/OpenTofu use, which is
+// why the semantics match theirs exactly.
+type defaultedConstraint struct {
+	ty       cty.Type
+	defaults *typeexpr.Defaults
+}
+
+// Coerce applies defaults first (permissive, never errors) then converts, matching
+// typeexpr's documented usage — conversion is where a genuinely wrong-typed value is
+// reported, with the better context of the final type.
+func (c defaultedConstraint) Coerce(v cty.Value) (cty.Value, error) {
+	return convert.Convert(c.defaults.Apply(v), c.ty)
+}
+func (c defaultedConstraint) Cty() cty.Type { return c.ty }
+
+// String renders the annotation including its defaults (`optional(T, <literal>)`), so a
+// signature round-trips back through the resolver — the plain typeString would drop the
+// default, since the cty.Type does not carry it.
+func (c defaultedConstraint) String() string { return typeStringDefaults(c.ty, c.defaults) }
 
 // anyConstraint is the explicit `any` annotation: every value passes through.
 type anyConstraint struct{}
@@ -320,10 +345,14 @@ func (e *typeEnv) resolveTypeOpaque(expr hcl.Expression, allowNull, allowOpaque 
 	}
 
 	// Constructors (list/set/map/object/tuple) build a concrete cty type, coerced
-	// by conversion.
-	ty, diags := e.resolveCtyType(expr)
+	// by conversion. An `optional(T, default)` anywhere inside yields a defaults tree;
+	// when present, the constraint also applies those defaults before converting.
+	ty, defaults, diags := e.resolveCtyType(expr)
 	if diags.HasErrors() {
 		return nil, diags
+	}
+	if defaults != nil {
+		return defaultedConstraint{ty: ty, defaults: defaults}, nil
 	}
 	return convertConstraint{ty}, nil
 }
@@ -334,19 +363,25 @@ func (e *typeEnv) resolveTypeOpaque(expr hcl.Expression, allowNull, allowOpaque 
 // and null are not allowed — they have no single concrete cty type. Supporting
 // open types in nested positions is future work (see FUTURE.md, "nested open
 // types").
-func (e *typeEnv) resolveCtyType(expr hcl.Expression) (cty.Type, hcl.Diagnostics) {
+//
+// It also returns an ext/typeexpr.Defaults tree carrying any optional-attribute
+// defaults (`optional(T, default)`) found at or below this position, or nil when
+// there are none — mirroring typeexpr's own getType. Defaults nest, so the tree is
+// threaded up through every constructor: a collection wraps its element's defaults,
+// a tuple/object collects its children's.
+func (e *typeEnv) resolveCtyType(expr hcl.Expression) (cty.Type, *typeexpr.Defaults, hcl.Diagnostics) {
 	if kw := hcl.ExprAsKeyword(expr); kw != "" {
 		switch kw {
 		case "any":
-			return cty.DynamicPseudoType, nil
+			return cty.DynamicPseudoType, nil, nil
 		case "string":
-			return cty.String, nil
+			return cty.String, nil, nil
 		case "bool":
-			return cty.Bool, nil
+			return cty.Bool, nil, nil
 		case "number":
-			return cty.Number, nil
+			return cty.Number, nil, nil
 		case "null":
-			return cty.NilType, typeDiag(expr, "Invalid type",
+			return cty.NilType, nil, typeDiag(expr, "Invalid type",
 				"null is only valid as a function return type.")
 		}
 		if c, ok := e.named[kw]; ok {
@@ -360,103 +395,167 @@ func (e *typeEnv) resolveCtyType(expr hcl.Expression) (cty.Type, hcl.Diagnostics
 			// a whole-annotation leaf.
 			switch cc := c.(type) {
 			case convertConstraint:
-				return cc.ty, nil
+				return cc.ty, nil, nil
 			case identityConstraint:
-				return cc.ty, nil
+				return cc.ty, nil, nil
 			case anyConstraint:
-				return cty.DynamicPseudoType, nil
+				return cty.DynamicPseudoType, nil, nil
 			default:
-				return cty.NilType, typeDiag(expr, "Open type cannot be nested",
+				return cty.NilType, nil, typeDiag(expr, "Open type cannot be nested",
 					fmt.Sprintf("the open type %q can only be used as a whole annotation, not inside a collection or structural type.", kw))
 			}
 		}
-		return cty.NilType, typeDiag(expr, "Unknown type", fmt.Sprintf("%q is not a known type.", kw))
+		return cty.NilType, nil, typeDiag(expr, "Unknown type", fmt.Sprintf("%q is not a known type.", kw))
 	}
 
 	call, diags := hcl.ExprCall(expr)
 	if diags.HasErrors() {
-		return cty.NilType, typeDiag(expr, "Invalid type",
+		return cty.NilType, nil, typeDiag(expr, "Invalid type",
 			"A type must be a primitive (string, bool, number, any) or a constructor (list, set, map, object, tuple).")
 	}
 
 	switch call.Name {
 	case "list", "set", "map":
 		if len(call.Arguments) != 1 {
-			return cty.NilType, typeDiag(expr, "Invalid type", call.Name+" requires exactly one element type argument.")
+			return cty.NilType, nil, typeDiag(expr, "Invalid type", call.Name+" requires exactly one element type argument.")
 		}
-		elem, ediags := e.resolveCtyType(call.Arguments[0])
+		elem, edefaults, ediags := e.resolveCtyType(call.Arguments[0])
 		if ediags.HasErrors() {
-			return cty.NilType, ediags
+			return cty.NilType, nil, ediags
 		}
+		var ty cty.Type
 		switch call.Name {
 		case "list":
-			return cty.List(elem), nil
+			ty = cty.List(elem)
 		case "set":
-			return cty.Set(elem), nil
+			ty = cty.Set(elem)
 		default:
-			return cty.Map(elem), nil
+			ty = cty.Map(elem)
 		}
+		return ty, collectionDefaults(ty, edefaults), nil
 	case "tuple":
 		if len(call.Arguments) != 1 {
-			return cty.NilType, typeDiag(expr, "Invalid type", "tuple requires a single [...] list of element types.")
+			return cty.NilType, nil, typeDiag(expr, "Invalid type", "tuple requires a single [...] list of element types.")
 		}
 		elems, ediags := hcl.ExprList(call.Arguments[0])
 		if ediags.HasErrors() {
-			return cty.NilType, ediags
+			return cty.NilType, nil, ediags
 		}
 		etys := make([]cty.Type, len(elems))
+		children := make(map[string]*typeexpr.Defaults, len(elems))
 		for i, el := range elems {
-			ety, eds := e.resolveCtyType(el)
+			ety, edefaults, eds := e.resolveCtyType(el)
 			if eds.HasErrors() {
-				return cty.NilType, eds
+				return cty.NilType, nil, eds
 			}
 			etys[i] = ety
+			if edefaults != nil {
+				children[fmt.Sprintf("%d", i)] = edefaults
+			}
 		}
-		return cty.Tuple(etys), nil
+		ty := cty.Tuple(etys)
+		return ty, structuredDefaults(ty, nil, children), nil
 	case "object":
 		if len(call.Arguments) != 1 {
-			return cty.NilType, typeDiag(expr, "Invalid type", "object requires a single { ... } attribute map.")
+			return cty.NilType, nil, typeDiag(expr, "Invalid type", "object requires a single { ... } attribute map.")
 		}
 		return e.resolveObjectType(call.Arguments[0])
 	default:
-		return cty.NilType, typeDiag(expr, "Unknown type constructor",
+		return cty.NilType, nil, typeDiag(expr, "Unknown type constructor",
 			fmt.Sprintf("%q is not a known type constructor.", call.Name))
 	}
 }
 
-func (e *typeEnv) resolveObjectType(arg hcl.Expression) (cty.Type, hcl.Diagnostics) {
+func (e *typeEnv) resolveObjectType(arg hcl.Expression) (cty.Type, *typeexpr.Defaults, hcl.Diagnostics) {
 	pairs, diags := hcl.ExprMap(arg)
 	if diags.HasErrors() {
-		return cty.NilType, diags
+		return cty.NilType, nil, diags
 	}
 	attrs := make(map[string]cty.Type, len(pairs))
 	var optional []string
+	defaultValues := make(map[string]cty.Value)
+	children := make(map[string]*typeexpr.Defaults)
 	for _, pair := range pairs {
 		name := hcl.ExprAsKeyword(pair.Key)
 		if name == "" {
-			return cty.NilType, typeDiag(pair.Key, "Invalid object type",
+			return cty.NilType, nil, typeDiag(pair.Key, "Invalid object type",
 				"Object attribute names must be identifiers.")
 		}
 		valExpr := pair.Value
-		// optional(T) marks an optional attribute.
+		// optional(T) marks an optional attribute; optional(T, default) also gives it a
+		// default value that fills the attribute when absent (recorded in the defaults
+		// tree, since cty.ObjectWithOptionalAttrs stores no default of its own).
+		var defaultExpr hcl.Expression
 		if call, cdiags := hcl.ExprCall(pair.Value); !cdiags.HasErrors() && call.Name == "optional" {
-			if len(call.Arguments) != 1 {
-				return cty.NilType, typeDiag(pair.Value, "Invalid optional attribute",
-					"optional(T) takes a single type argument.")
+			switch len(call.Arguments) {
+			case 1:
+				// optional attribute, no default.
+			case 2:
+				defaultExpr = call.Arguments[1]
+			default:
+				return cty.NilType, nil, typeDiag(pair.Value, "Invalid optional attribute",
+					"optional takes the attribute type and an optional default value: optional(T) or optional(T, default).")
 			}
 			optional = append(optional, name)
 			valExpr = call.Arguments[0]
 		}
-		aty, adiags := e.resolveCtyType(valExpr)
+		aty, adefaults, adiags := e.resolveCtyType(valExpr)
 		if adiags.HasErrors() {
-			return cty.NilType, adiags
+			return cty.NilType, nil, adiags
 		}
 		attrs[name] = aty
+		if adefaults != nil {
+			children[name] = adefaults
+		}
+		if defaultExpr != nil {
+			// The default is a pure literal, evaluated with no context (parity with
+			// typeexpr), then checked convertible to the attribute type.
+			defaultVal, ddiags := defaultExpr.Value(nil)
+			if ddiags.HasErrors() {
+				return cty.NilType, nil, ddiags
+			}
+			converted, err := convert.Convert(defaultVal, aty)
+			if err != nil {
+				return cty.NilType, nil, typeDiag(defaultExpr, "Invalid default value for optional attribute",
+					fmt.Sprintf("this default value is not compatible with the attribute's type: %s.", err))
+			}
+			defaultValues[name] = converted
+		}
 	}
-	if len(optional) > 0 {
-		return cty.ObjectWithOptionalAttrs(attrs, optional), nil
+	// ObjectWithOptionalAttrs with an empty optional list is exactly cty.Object.
+	// structuredDefaults returns nil unless there is a default or a nested child, so a
+	// required attribute whose type itself carries defaults still propagates them up.
+	ty := cty.ObjectWithOptionalAttrs(attrs, optional)
+	return ty, structuredDefaults(ty, defaultValues, children), nil
+}
+
+// collectionDefaults and structuredDefaults build the ext/typeexpr.Defaults nodes for
+// collection and structural types. They mirror typeexpr's own unexported helpers (which
+// functy cannot call): both return nil when there is nothing to store, so a type with no
+// optional-attribute defaults produces a nil tree and the no-default coercion path is
+// unchanged.
+func collectionDefaults(ty cty.Type, defaults *typeexpr.Defaults) *typeexpr.Defaults {
+	if defaults == nil {
+		return nil
 	}
-	return cty.Object(attrs), nil
+	return &typeexpr.Defaults{
+		Type:     ty,
+		Children: map[string]*typeexpr.Defaults{"": defaults},
+	}
+}
+
+func structuredDefaults(ty cty.Type, defaultValues map[string]cty.Value, children map[string]*typeexpr.Defaults) *typeexpr.Defaults {
+	if len(defaultValues) == 0 && len(children) == 0 {
+		return nil
+	}
+	defaults := &typeexpr.Defaults{Type: ty}
+	if len(defaultValues) > 0 {
+		defaults.DefaultValues = defaultValues
+	}
+	if len(children) > 0 {
+		defaults.Children = children
+	}
+	return defaults
 }
 
 func typeDiag(expr hcl.Expression, summary, detail string) hcl.Diagnostics {

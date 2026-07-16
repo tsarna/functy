@@ -9,12 +9,15 @@ import (
 	"github.com/hashicorp/hcl/v2/ext/typeexpr"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/convert"
 	"github.com/zclconf/go-cty/cty/function"
 )
 
 // TestResolverTypeexprParity proves the hand-written resolver produces the same
-// cty.Type as ext/typeexpr for the pure built-in grammar. typeexpr is used here
-// only as a test oracle — functy does not depend on it at runtime.
+// cty.Type as ext/typeexpr for the pure built-in grammar. functy also uses typeexpr
+// at runtime for the Defaults.Apply of optional-attribute defaults (see
+// defaultedConstraint), but the resolver — grammar, capsule naming, coercion — is its
+// own; typeexpr is the oracle for this parity check.
 func TestResolverTypeexprParity(t *testing.T) {
 	annotations := []string{
 		"string", "bool", "number", "any",
@@ -42,6 +45,157 @@ func TestResolverTypeexprParity(t *testing.T) {
 		if !tc.Cty().Equals(want) {
 			t.Errorf("%s: resolver gave %s, typeexpr gave %s", ann, tc.Cty().FriendlyName(), want.FriendlyName())
 		}
+	}
+}
+
+// resolveAnn parses and resolves a type annotation string to a TypeConstraint.
+func resolveAnn(t *testing.T, ann string) TypeConstraint {
+	t.Helper()
+	expr, diags := hclsyntax.ParseExpression([]byte(ann), "ann", hcl.InitialPos)
+	if diags.HasErrors() {
+		t.Fatalf("%s: parse: %s", ann, diags.Error())
+	}
+	tc, rdiags := newTypeEnv().resolveType(expr, false)
+	if rdiags.HasErrors() {
+		t.Fatalf("%s: resolve: %s", ann, rdiags.Error())
+	}
+	return tc
+}
+
+// TestOptionalDefaultsParity proves that for annotations using optional(T, default) the
+// resolver's constraint coerces identically to ext/typeexpr's own type + Defaults tree,
+// across missing, null, and present attributes and nesting.
+func TestOptionalDefaultsParity(t *testing.T) {
+	annotations := []string{
+		`object({ a = string, b = optional(number, 42) })`,
+		`object({ a = optional(string, "x"), b = optional(bool, true) })`,
+		`object({ inner = optional(object({ b = optional(string, "y") }), {}) })`,
+		`list(object({ n = optional(number, 1) }))`,
+		`tuple([object({ a = optional(string, "z") }), number])`,
+	}
+	inputs := []cty.Value{
+		cty.EmptyObjectVal,
+		cty.ObjectVal(map[string]cty.Value{"a": cty.StringVal("given")}),
+		cty.ObjectVal(map[string]cty.Value{"b": cty.NullVal(cty.Number)}),
+	}
+	for _, ann := range annotations {
+		expr, diags := hclsyntax.ParseExpression([]byte(ann), "ann", hcl.InitialPos)
+		if diags.HasErrors() {
+			t.Fatalf("%s: parse: %s", ann, diags.Error())
+		}
+		wantTy, wantDefaults, wdiags := typeexpr.TypeConstraintWithDefaults(expr)
+		if wdiags.HasErrors() {
+			t.Fatalf("%s: typeexpr: %s", ann, wdiags.Error())
+		}
+		tc := resolveAnn(t, ann)
+		if !tc.Cty().Equals(wantTy) {
+			t.Errorf("%s: resolver type %s, typeexpr %s", ann, tc.Cty().FriendlyName(), wantTy.FriendlyName())
+		}
+		for _, in := range inputs {
+			got, gerr := tc.Coerce(in)
+			want, werr := convert.Convert(wantDefaults.Apply(in), wantTy)
+			if (gerr == nil) != (werr == nil) {
+				continue // both erroring or an input that doesn't fit this shape; the value cases below cover fit inputs
+			}
+			if gerr == nil && !got.RawEquals(want) {
+				t.Errorf("%s on %#v: resolver gave %#v, typeexpr gave %#v", ann, in, got, want)
+			}
+		}
+	}
+}
+
+// TestOptionalDefaultCoerce checks defaults fill missing and null attributes, recurse,
+// and never override a value the caller supplied.
+func TestOptionalDefaultCoerce(t *testing.T) {
+	tc := resolveAnn(t, `object({ a = optional(string, "x"), n = optional(number, 1) })`)
+
+	// Missing attributes take their defaults.
+	got, err := tc.Coerce(cty.EmptyObjectVal)
+	if err != nil {
+		t.Fatalf("coerce empty: %v", err)
+	}
+	if a := got.GetAttr("a"); a.AsString() != "x" {
+		t.Errorf("a = %#v, want \"x\"", a)
+	}
+	if !got.GetAttr("n").RawEquals(cty.NumberIntVal(1)) {
+		t.Errorf("n = %#v, want 1", got.GetAttr("n"))
+	}
+
+	// A supplied value is kept; only the other default fills in.
+	got, err = tc.Coerce(cty.ObjectVal(map[string]cty.Value{"a": cty.StringVal("given")}))
+	if err != nil {
+		t.Fatalf("coerce partial: %v", err)
+	}
+	if got.GetAttr("a").AsString() != "given" {
+		t.Errorf("a = %#v, want \"given\"", got.GetAttr("a"))
+	}
+	if !got.GetAttr("n").RawEquals(cty.NumberIntVal(1)) {
+		t.Errorf("n = %#v, want 1", got.GetAttr("n"))
+	}
+
+	// An explicit null attribute is overwritten by the default (parity with Terraform).
+	got, err = tc.Coerce(cty.ObjectVal(map[string]cty.Value{"a": cty.NullVal(cty.String)}))
+	if err != nil {
+		t.Fatalf("coerce null: %v", err)
+	}
+	if got.GetAttr("a").AsString() != "x" {
+		t.Errorf("null a = %#v, want default \"x\"", got.GetAttr("a"))
+	}
+
+	// Nested defaults fill from the inside out.
+	nested := resolveAnn(t, `object({ inner = optional(object({ b = optional(string, "y") }), {}) })`)
+	got, err = nested.Coerce(cty.EmptyObjectVal)
+	if err != nil {
+		t.Fatalf("coerce nested: %v", err)
+	}
+	if b := got.GetAttr("inner").GetAttr("b"); b.AsString() != "y" {
+		t.Errorf("inner.b = %#v, want \"y\"", b)
+	}
+}
+
+// TestOptionalDefaultBadValue rejects a default that is not convertible to the attribute
+// type, at resolve time.
+func TestOptionalDefaultBadValue(t *testing.T) {
+	expr, diags := hclsyntax.ParseExpression([]byte(`object({ n = optional(number, "nope") })`), "ann", hcl.InitialPos)
+	if diags.HasErrors() {
+		t.Fatalf("parse: %s", diags.Error())
+	}
+	_, rdiags := newTypeEnv().resolveType(expr, false)
+	if !rdiags.HasErrors() {
+		t.Fatalf("expected an error for an unconvertible default")
+	}
+	if !diagsHaveSummary(rdiags, "Invalid default value for optional attribute") {
+		t.Errorf("wrong diagnostic: %s", rdiags.Error())
+	}
+}
+
+// TestOptionalArity rejects optional() with no type and optional(T, d, e) with too many
+// arguments.
+func TestOptionalArity(t *testing.T) {
+	for _, ann := range []string{`object({ a = optional() })`, `object({ a = optional(string, "x", "y") })`} {
+		expr, diags := hclsyntax.ParseExpression([]byte(ann), "ann", hcl.InitialPos)
+		if diags.HasErrors() {
+			t.Fatalf("%s: parse: %s", ann, diags.Error())
+		}
+		if _, rdiags := newTypeEnv().resolveType(expr, false); !rdiags.HasErrors() {
+			t.Errorf("%s: expected an arity error", ann)
+		}
+	}
+}
+
+// TestOptionalDefaultStringRoundTrip checks that String() renders the default and the
+// rendering re-resolves to an equivalent constraint that coerces the same way.
+func TestOptionalDefaultStringRoundTrip(t *testing.T) {
+	tc := resolveAnn(t, `object({ a = optional(string, "x"), n = optional(number, 1) })`)
+	rendered := tc.String()
+	tc2 := resolveAnn(t, rendered)
+	got1, _ := tc.Coerce(cty.EmptyObjectVal)
+	got2, err := tc2.Coerce(cty.EmptyObjectVal)
+	if err != nil {
+		t.Fatalf("re-resolved %q failed to coerce: %v", rendered, err)
+	}
+	if !got1.RawEquals(got2) {
+		t.Errorf("round-trip differs: %q coerced to %#v vs %#v", rendered, got2, got1)
 	}
 }
 

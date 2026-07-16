@@ -123,10 +123,26 @@ type-constraint grammar (the same shape Terraform `variable` blocks use):
 string   bool   number   any
 list(<type>)        set(<type>)        map(<type>)
 tuple([<type>, …])  object({ name = <type>, … })
-object({ name = optional(<type>), … })   // optional object attributes
+object({ name = optional(<type>), … })            // optional object attributes
+object({ name = optional(<type>, <default>), … }) // optional, with a default
 ```
 
 `any` denotes the absence of a constraint (cty's dynamic type).
+
+An `optional(<type>)` attribute may be omitted from a value; without a default it
+is then null. `optional(<type>, <default>)` gives it a **default** instead: when the
+attribute is absent (or explicitly null), coercing the value fills it with `<default>`.
+The default is a literal expression, must be convertible to the attribute's type, and
+applies from the inside out for nested objects — matching Terraform/OpenTofu
+optional-attribute defaults.
+
+```functy
+// f({})            -> { retries = 3, tags = [] }
+// f({ retries = 5 }) -> { retries = 5, tags = [] }
+func f(cfg: object({ retries = optional(number, 3), tags = optional(list(string), []) })) {
+  return cfg
+}
+```
 
 functy resolves these annotations with its **own** resolver rather than delegating
 to `ext/typeexpr`. The built-in grammar above behaves identically, but the

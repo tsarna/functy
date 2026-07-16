@@ -10,6 +10,19 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Defaulted optional object attributes — `optional(T, default)`.** An optional
+  object attribute may now carry a default value:
+  `object({ retries = optional(number, 3) })`. When the attribute is absent (or
+  explicitly null), coercing the value fills it with the default — recursively, from
+  the inside out for nested objects — matching Terraform/OpenTofu optional-attribute
+  defaults. The default is a literal expression and must be convertible to the
+  attribute's type. Previously only the no-default `optional(T)` form was accepted.
+  functy builds the defaults tree in its own resolver but reuses
+  `hcl/v2/ext/typeexpr`'s `Defaults.Apply` at runtime, so the semantics match
+  Terraform's exactly. Type signatures round-trip the default
+  (`optional(T, <literal>)`). See
+  [doc/language.md](doc/language.md#types).
+
 - **Execution limits (Tier 1) — a per-invocation step budget.** functy is a
   tree-walking interpreter, so an unbounded `for` / `while` could wedge the host.
   `Parser.MaxSteps(n)` now caps the number of steps any single function invocation

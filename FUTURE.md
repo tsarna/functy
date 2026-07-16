@@ -646,18 +646,6 @@ links the library directly and supplies its own richer context). Planned additio
 
 ## Type system
 
-- **Defaulted optional object attributes — `optional(T, default)`.** The type resolver
-  accepts `optional(T)` (marking an object attribute optional) but rejects the two-argument
-  `optional(T, default)` form that `ext/typeexpr` supports — `resolveCtyType` in `types.go`
-  errors *"optional(T) takes a single type argument."* The gap is not merely the arity
-  guard: functy returns object types via `cty.ObjectWithOptionalAttrs`, which only *marks*
-  attributes optional and has nowhere to store a default. In Terraform/OpenTofu, optional-
-  attribute defaults live in a separate `typeexpr.Defaults` tree applied during decode, not
-  in the `cty.Type` itself. So supporting them means giving functy's `TypeConstraint` a
-  defaults structure that `Coerce` applies when an attribute is absent — a real feature, not
-  a one-argument relaxation. Motivated by the OpenTofu symbol-library use
-  (`OPENTOFU-SYMBOLS.md`), whose `defaults_type` example relies on it for parity with what an
-  OpenTofu/Terraform author expects.
 - **Nested *open* types in the type resolver.** Capsule named types now nest
   (`list(bus)`, `object({ b = bus })`); the remaining gap is nesting an **open
   predicate** type (`error`, a marker-capsule `ctx`). Because an open type has no

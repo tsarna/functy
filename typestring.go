@@ -2,8 +2,11 @@ package functy
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2/ext/typeexpr"
+	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -92,6 +95,68 @@ func typeString(ty cty.Type) string {
 	default:
 		return ty.FriendlyName()
 	}
+}
+
+// typeStringDefaults renders a type constraint that carries optional-attribute defaults,
+// the round-tripping counterpart of typeString for a defaultedConstraint. It follows the
+// same grammar but, at each optional object attribute for which the defaults tree records
+// a value, renders `optional(T, <literal>)` — the default value written as a functy/HCL
+// literal via hclwrite, so the whole annotation re-resolves through the type resolver.
+// Where d is nil (a subtree with no defaults) it delegates to plain typeString.
+func typeStringDefaults(ty cty.Type, d *typeexpr.Defaults) string {
+	if d == nil {
+		return typeString(ty)
+	}
+	switch {
+	case ty.IsListType():
+		return "list(" + typeStringDefaults(ty.ElementType(), d.Children[""]) + ")"
+	case ty.IsSetType():
+		return "set(" + typeStringDefaults(ty.ElementType(), d.Children[""]) + ")"
+	case ty.IsMapType():
+		return "map(" + typeStringDefaults(ty.ElementType(), d.Children[""]) + ")"
+	case ty.IsTupleType():
+		ets := ty.TupleElementTypes()
+		parts := make([]string, len(ets))
+		for i, et := range ets {
+			parts[i] = typeStringDefaults(et, d.Children[strconv.Itoa(i)])
+		}
+		return "tuple([" + strings.Join(parts, ", ") + "])"
+	case ty.IsObjectType():
+		if cap, ok := richCapsule(ty); ok {
+			return cap.FriendlyName()
+		}
+		ats := ty.AttributeTypes()
+		if len(ats) == 0 {
+			return "object({})"
+		}
+		names := make([]string, 0, len(ats))
+		for name := range ats {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		parts := make([]string, len(names))
+		for i, name := range names {
+			at := typeStringDefaults(ats[name], d.Children[name])
+			if ty.AttributeOptional(name) {
+				if def, ok := d.DefaultValues[name]; ok {
+					at = "optional(" + at + ", " + valueLiteral(def) + ")"
+				} else {
+					at = "optional(" + at + ")"
+				}
+			}
+			parts[i] = name + " = " + at
+		}
+		return "object({ " + strings.Join(parts, ", ") + " })"
+	default:
+		return typeString(ty)
+	}
+}
+
+// valueLiteral renders a cty value as functy/HCL literal source, the form the type
+// resolver evaluates a default expression from. hclwrite produces canonical HCL tokens
+// that re-parse to the same value.
+func valueLiteral(v cty.Value) string {
+	return strings.TrimSpace(string(hclwrite.TokensForValue(v).Bytes()))
 }
 
 // typeKind renders just the top-level kind of a cty type — `string`, `number`,
