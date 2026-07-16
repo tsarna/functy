@@ -8,6 +8,8 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-15
+
 ### Added
 
 - **Namespaces and `_` visibility — unit-scoped names.** A `.cty` file may open
@@ -135,6 +137,16 @@ tagged. Until then, everything lives under **Unreleased**.
   - Extern-only: a real functy `func` still declares one signature, and a duplicate name is
     still a duplicate function.
 
+- **An extern may name a host type nested inside a collection.** A bare unregistered type in
+  an extern already stands in as an opaque name (`ctx`, `bytes`), so the reader need not have
+  registered it; the same now holds one level down — `list(geopoint)`,
+  `object({ at = geopoint })` — where a nested position previously demanded a concrete cty
+  type an open or unregistered name has none of, and failed to parse. An extern documents
+  rather than enforces, so the annotation is taken opaquely from its source text: it renders
+  as written and enforces nothing. A genuinely malformed constructor is still an error, and
+  a nested name the host *did* register degrades silently, with no spurious warning. (Full
+  nested-open-type *enforcement* remains future work; this is the extern-only slice of it.)
+
 ### Fixed
 
 - **A single-line function's parameters no longer take the function's doc comment.**
@@ -170,6 +182,28 @@ tagged. Until then, everything lives under **Unreleased**.
   comment, growing by one copy per run. Latent for a function with a body (whose
   signature stops at `{` on the same line); found by the extern work, whose
   signatures end at the newline.
+
+- **`fmt` no longer duplicates a comment written *inside* a type annotation.** A comment
+  in an object type — `object({ a = number, // count\n})` — is part of the type's source
+  text and rendered verbatim, but the comment cursor did not know that and emitted it a
+  second time as a dangling comment before the `)`, so the file grew by one copy on every
+  run. A separate defect from the one above (comments *after* the annotation); this one is
+  *inside* it. Both are now covered by the formatter's idempotency check.
+
+- **`help()` renders type constraints in functy's own grammar**, not cty's prose
+  `FriendlyName`. A parameter or return type now shows as `list(string)` and
+  `object({ a = string })` (with `optional()` markers where present) rather than
+  `list of string` and a bare `object` that hid its attributes — the same round-trippable
+  syntax `typeof()` emits. Applies to declared functions and to the cty-metadata fallback
+  for host functions.
+
+- **`typeof`/`typekind` no longer hide their return type, and every stdlib builtin is
+  documented.** The two take a value of any type and return a string, but a dynamic
+  argument poisoned the reflected return type to dynamic, so `help()` showed no return at
+  all; the parameter now opts into `AllowDynamicType` so the string return stays visible.
+  Every standard-library function — including the lazy `cond`/`switch`/`try`/`error`/
+  `assert` and the `help`/`doc` reflection builtins — now carries a parameter description,
+  so `help()`/`doc()` describe them in full.
 
 ### Changed
 
