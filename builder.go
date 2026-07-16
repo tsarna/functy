@@ -30,6 +30,25 @@ type Compiled struct {
 	// consulted on every call, from whatever goroutine is calling, so handing the
 	// same maps out would let a host's write race a running function.
 	Units map[string]map[string]function.Function
+
+	// Vars maps a namespace ("" = global) to that namespace's variable scope: the
+	// map a namespace's function bodies resolve a bare variable name against,
+	// symmetric to Units for functions (a body in namespace ns calls Units[ns] and
+	// reads Vars[ns]). A bare name a body does not resolve locally falls through
+	// here, and if still absent, on to the host's own Variables.
+	//
+	// functy hands this back EMPTY and puts nothing in it: it takes no position on
+	// what a const or var means, so it neither evaluates declarations nor buckets
+	// them by namespace. The host FILLS it — writing a scope under Vars[ns] for any
+	// namespace it likes, by any policy (e.g. evaluate the namespace's Decls with
+	// EvalDecls, or use EvalNamespacedDecls for the own+global convention) — before
+	// any function is invoked. Each namespace's bodies look their scope up in this
+	// same map by name at call time, so there is no per-namespace pre-registration
+	// and no distinction between a namespace that has functions and one that has only
+	// consts: whatever the host writes under Vars[ns] is what ns's bodies read.
+	// Leaving it empty preserves the pre-namespaced behavior (bare names resolve only
+	// against host globals).
+	Vars map[string]map[string]cty.Value
 }
 
 // Compile turns the parsed function declarations into cty functions for the host.
@@ -69,11 +88,23 @@ func (r *Result) CompileUnits(evalCtxFn func() *hcl.EvalContext) (*Compiled, hcl
 	// cannot happen before this function returns.
 	units := make(map[string]map[string]function.Function)
 	ctxFns := make(map[string]func() *hcl.EvalContext)
+
+	// The per-namespace variable scopes, shared with unitCtxFn (see Compiled.Vars).
+	// functy allocates no content here and never scans declarations: this map starts
+	// empty and is handed to the host to fill under whatever namespace keys and
+	// policy it chooses. Each namespace's unitCtxFn looks its own scope up in this
+	// map *by name at call time*, so a table the host writes under vars[ns] — for any
+	// ns, whether or not it has functions — becomes the variable layer for that
+	// namespace's bodies, with no pre-registration needed and no "const vs function"
+	// distinction. This is the variable-scope partner of units: a body in namespace
+	// ns calls units[ns] and reads vars[ns].
+	vars := make(map[string]map[string]cty.Value)
+
 	for _, fn := range r.Funcs {
 		if _, ok := units[fn.Namespace]; !ok {
 			table := make(map[string]function.Function)
 			units[fn.Namespace] = table
-			ctxFns[fn.Namespace] = unitCtxFn(evalCtxFn, table)
+			ctxFns[fn.Namespace] = unitCtxFn(evalCtxFn, table, vars, fn.Namespace)
 		}
 	}
 
@@ -123,17 +154,24 @@ func (r *Result) CompileUnits(evalCtxFn func() *hcl.EvalContext) (*Compiled, hcl
 		}
 		snapshot[ns] = copied
 	}
-	return &Compiled{Funcs: exported, Units: snapshot}, diags
+	return &Compiled{Funcs: exported, Units: snapshot, Vars: vars}, diags
 }
 
 // unitCtxFn wraps a late-bound host eval context in a child layer carrying one
-// namespace's own functions under their bare names, private ones included.
+// namespace's own functions under their bare names (private ones included) and that
+// namespace's variable scope.
 //
-// HCL resolves a call by walking the *entire* context chain, checking each non-nil
-// Functions map, so this layer ADDS the namespace's names without hiding the
-// host's library: a sibling call resolves here, everything else falls through to
-// the host. It is also the only place a private function is reachable, which is
-// what lets it be callable from its namespace yet absent from the host's map.
+// HCL resolves a call *or a variable* by walking the *entire* context chain,
+// checking each non-nil Functions / Variables map, so this layer ADDS the
+// namespace's names without hiding the host's library: a sibling call or a
+// namespace const resolves here, everything else falls through to the host. It is
+// also the only place a private function is reachable, which is what lets it be
+// callable from its namespace yet absent from the host's map.
+//
+// The variable scope is looked up as vars[ns] at call time — vars is the shared
+// Compiled.Vars map, not a captured table — so a scope the host writes under
+// vars[ns] after compilation becomes visible to the bodies, and functy needs to
+// pre-register nothing. nil (no scope for this namespace) is fine; HCL skips it.
 //
 // Two consequences worth naming:
 //
@@ -148,7 +186,7 @@ func (r *Result) CompileUnits(evalCtxFn func() *hcl.EvalContext) (*Compiled, hcl
 //     &EvalContext{parent}) against an interpreter that already builds a context per
 //     statement group. Memoizing on the parent pointer would be safe but buys nothing
 //     and adds a concurrency surface; don't.
-func unitCtxFn(evalCtxFn func() *hcl.EvalContext, table map[string]function.Function) func() *hcl.EvalContext {
+func unitCtxFn(evalCtxFn func() *hcl.EvalContext, table map[string]function.Function, vars map[string]map[string]cty.Value, ns string) func() *hcl.EvalContext {
 	return func() *hcl.EvalContext {
 		var parent *hcl.EvalContext
 		if evalCtxFn != nil {
@@ -159,6 +197,10 @@ func unitCtxFn(evalCtxFn func() *hcl.EvalContext, table map[string]function.Func
 			child = parent.NewChild()
 		}
 		child.Functions = table
+		// The namespace's variable scope, looked up by name at call time so that a
+		// table the host writes under vars[ns] after compilation is picked up here.
+		// nil (the host never gave this namespace a scope) is fine — HCL skips it.
+		child.Variables = vars[ns]
 		return child
 	}
 }

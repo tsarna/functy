@@ -109,13 +109,21 @@ func loadProgram(input any, baseline map[string]function.Function) (*functy.Resu
 	diags = diags.Extend(shadowWarnings(res, compiled, baseline))
 
 	// The context is shared by reference: functy functions late-bind to it, and
-	// the declaration evaluator below fills its Variables in dependency order.
-	ctx = &hcl.EvalContext{Functions: all, Variables: map[string]cty.Value{}}
+	// the declaration evaluator below fills its Variables in dependency order. Its
+	// Variables map is the global (unnamespaced) var table, so global consts/vars
+	// are visible to every namespace's bodies (which late-bind to this context as
+	// their parent); EvalNamespacedDecls fills each namespace's own table.
+	if compiled.Vars[""] == nil {
+		compiled.Vars[""] = map[string]cty.Value{}
+	}
+	ctx = &hcl.EvalContext{Functions: all, Variables: compiled.Vars[""]}
 
-	// const declarations resolve before var declarations, matching the common
-	// host ordering (a var may reference a const, not vice versa).
+	// const declarations resolve before var declarations, matching the common host
+	// ordering (a var may reference a const, not vice versa); the grouping in
+	// EvalNamespacedDecls preserves this order within each namespace, and evaluates
+	// the global namespace before the others so namespaced decls may reference globals.
 	decls := append(append([]functy.Decl{}, res.Consts...), res.Vars...)
-	diags = diags.Extend(functy.EvalDecls(decls, ctx))
+	diags = diags.Extend(functy.EvalNamespacedDecls(decls, ctx, compiled))
 
 	return res, compiled, ctx, files, diags
 }

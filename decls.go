@@ -101,6 +101,62 @@ func EvalDecls(decls []Decl, ctx *hcl.EvalContext) hcl.Diagnostics {
 	return diags
 }
 
+// EvalNamespacedDecls evaluates const/var Decls grouped by Decl.Namespace into a
+// Compiled's per-namespace variable tables under the own+global policy.
+//
+// The global namespace ("") is evaluated first into baseCtx.Variables — which the
+// caller must set to compiled.Vars[""] so that (a) the global consts land in the
+// table the host projects and (b) they are visible to every namespace's bodies,
+// which late-bind to baseCtx as their parent. Each other namespace is then
+// evaluated into compiled.Vars[ns] via a child of baseCtx that also exposes that
+// namespace's sibling functions (compiled.Units[ns]). A namespaced initializer thus
+// sees its own namespace's names, then the global names, with the local winning —
+// mirroring how a namespaced function call resolves.
+//
+// Because the global namespace is evaluated first, a namespaced declaration may
+// reference a global one; the reverse cannot (a global sees only globals). Duplicate
+// detection is per namespace: two namespaces may each declare `const greeting`, but a
+// name declared twice within one namespace is still reported.
+//
+// This is one policy, not the only one. A host wanting strict isolation (a namespace
+// sees only its own consts) can skip this helper and call EvalDecls against each
+// compiled.Vars[ns] directly, with no shared parent carrying the globals.
+func EvalNamespacedDecls(decls []Decl, baseCtx *hcl.EvalContext, compiled *Compiled) hcl.Diagnostics {
+	byNS := make(map[string][]Decl)
+	var order []string
+	for _, d := range decls {
+		if _, ok := byNS[d.Namespace]; !ok {
+			order = append(order, d.Namespace)
+		}
+		byNS[d.Namespace] = append(byNS[d.Namespace], d)
+	}
+
+	var diags hcl.Diagnostics
+
+	// Global first, so namespaced initializers can resolve global names through the
+	// parent chain. baseCtx.Variables is compiled.Vars[""] by contract.
+	if globals, ok := byNS[""]; ok {
+		diags = diags.Extend(EvalDecls(globals, baseCtx))
+	}
+
+	for _, ns := range order {
+		if ns == "" {
+			continue
+		}
+		table, ok := compiled.Vars[ns]
+		if !ok {
+			table = make(map[string]cty.Value)
+			compiled.Vars[ns] = table
+		}
+		child := baseCtx.NewChild()
+		child.Functions = compiled.Units[ns] // bare siblings; nil is fine
+		child.Variables = table
+		diags = diags.Extend(EvalDecls(byNS[ns], child))
+	}
+
+	return diags
+}
+
 // declDepsReady reports whether every top-level declaration that d references has
 // already been evaluated (references to non-declaration names are left for the
 // expression evaluator to resolve or reject).

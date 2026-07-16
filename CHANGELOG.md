@@ -10,6 +10,26 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Namespace-scoped consts/values.** The `functy` CLI/REPL and the `symbols`
+  library now resolve a namespaced file's top-level `const`/`var` within its own
+  namespace, instead of the single flat unit-global table used before. Two namespaces
+  may each declare the same bare name without colliding, and a function resolves a
+  bare name the way it resolves a bare call — its own namespace first, then the global
+  (unnamespaced) names, local winning — so an author writing `const greeting` in
+  `namespace foo` gets `symbols.foo.greeting`, independent of `namespace bar`'s. There
+  is still no qualified *spelling* for a value (`foo::bar::x` is a parse error), so a
+  namespace's consts are reachable only from within that namespace or through a
+  per-namespace host projection.
+
+  This is a **host policy, not a language change.** functy attaches each declaration's
+  namespace as metadata but evaluates nothing and buckets nothing. Embedders get a new
+  `Compiled.Vars`: a map, handed back empty, that each namespace's function bodies read
+  their bare variables from (`Vars[ns]`) — the variable-scope partner of
+  `Compiled.Units` for functions. A host fills it by whatever policy it wants; the new
+  `EvalNamespacedDecls` helper implements the own-plus-global resolution above, while a
+  plain `EvalDecls` into one table keeps the flat behavior. See
+  [doc/language.md](doc/language.md#namespace-scoped-consts-and-values).
+
 - **Defaulted optional object attributes — `optional(T, default)`.** An optional
   object attribute may now carry a default value:
   `object({ retries = optional(number, 3) })`. When the attribute is absent (or

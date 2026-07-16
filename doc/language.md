@@ -956,10 +956,47 @@ func summary() -> string {
 ```
 
 `::` is a **function-call selector** in HCL, so only functions can be qualified —
-there is no `foo::bar::x` for a variable or a type. Namespacing therefore applies
-to functions, which is the namespace that actually gets crowded. A namespaced
-file's top-level `const`/`var` are still collected for the host (with their
-namespace attached), and type aliases remain project-scoped across all sources.
+there is no `foo::bar::x` for a variable or a type. Functions are therefore the one
+kind functy namespaces on its own. A `const`/`var` carries the namespace of the file
+it was declared in as *metadata*, and what that means is the **host's** choice (see
+below). Type aliases remain project-scoped across all sources.
+
+### Namespace-scoped consts and values
+
+This is a **host-elected behavior, not a language rule.** functy attaches a
+declaration's namespace and takes no position on it: it hands the parsed
+declarations back and pre-evaluates nothing, so a host is free to keep all values in
+one flat global table (the original behavior), scope them per namespace, or reject
+namespaced values outright. The `functy` CLI and the
+[symbols library](../OPENTOFU-SYMBOLS.md) both **elect** the per-namespace policy
+described here; another embedding may elect otherwise.
+
+Under that policy a namespaced file's top-level `const` belongs to its namespace.
+Two namespaces may each declare the same bare name without colliding — each gets its
+own table — and a function resolves a bare name the way it resolves a bare call: its
+**own** namespace first, then the global (unnamespaced) names, with the local
+winning:
+
+```functy
+namespace acme::math
+
+const pi = 3.14159        // acme::math's own; a different acme::geo may have its own
+
+func area(r: number) -> number {
+    return pi * r * r     // resolves to acme::math's pi; falls back to a global pi
+}
+```
+
+There is still no qualified *spelling* for a value (`acme::math::pi` is a parse
+error, since `::` selects a function), so a namespace's consts are reachable only
+from within that namespace — or through a host projection that gives each namespace
+its own object, such as the symbols library's `symbols.<label>`.
+
+An embedder elects this policy by filling `Compiled.Vars[ns]` per namespace —
+functy's `EvalNamespacedDecls` helper implements exactly this own-plus-global
+resolution — and elects a different one by filling those scopes differently (strict
+per-namespace isolation with no shared global parent, or a single flat table as
+before). See the *Compiled.Vars* documentation in the Go API.
 
 ### Shadowing: local wins
 

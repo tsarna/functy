@@ -121,7 +121,7 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 		}
 		bodyCtxFn := evalCtxFn
 		if table, ok := compiled.Units[td.Namespace]; ok {
-			bodyCtxFn = unitCtxFn(evalCtxFn, table)
+			bodyCtxFn = unitCtxFn(evalCtxFn, table, compiled.Vars, td.Namespace)
 		}
 		// Bound test bodies by the same ceiling as normal functions, so a runaway
 		// loop in a test surfaces as a (non-skipped) *LimitError rather than hanging.

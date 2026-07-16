@@ -126,14 +126,13 @@ func (bt *Built) Type(label, name string) (cty.Type, bool) {
 	return ty, ok
 }
 
-// unit is one parsed source directory: its parse result, compiled functions, and
-// the eval context its functions late-bind to (also where its consts were
-// evaluated). Cached per resolved source path so two blocks pointing at the same
-// source with different namespaces parse it once.
+// unit is one parsed source directory: its parse result and compiled functions.
+// The per-namespace consts are evaluated into compiled.Vars by parseUnit, which is
+// where projectConsts reads them. Cached per resolved source path so two blocks
+// pointing at the same source with different namespaces parse it once.
 type unit struct {
 	res      *functy.Result
 	compiled *functy.Compiled
-	ctx      *hcl.EvalContext
 }
 
 // Build parses each block's source once, projects the requested namespace under
@@ -226,11 +225,20 @@ func (b *Builder) parseUnit(path string, files map[string]*hcl.File) (*unit, hcl
 	for k, v := range compiled.Funcs {
 		funcs[k] = v
 	}
-	ctx = &hcl.EvalContext{Functions: funcs, Variables: map[string]cty.Value{}}
 
-	diags = diags.Extend(functy.EvalDecls(res.Consts, ctx))
+	// Point the shared context's Variables at the global (unnamespaced) var table so
+	// global consts are both projected under the empty-namespace label and visible
+	// to every namespace's bodies (which late-bind to this context as their parent).
+	// EvalNamespacedDecls then fills each namespace's own table in compiled.Vars,
+	// so two namespaces may each declare `const greeting` without colliding.
+	if compiled.Vars[""] == nil {
+		compiled.Vars[""] = map[string]cty.Value{}
+	}
+	ctx = &hcl.EvalContext{Functions: funcs, Variables: compiled.Vars[""]}
 
-	return &unit{res: res, compiled: compiled, ctx: ctx}, diags
+	diags = diags.Extend(functy.EvalNamespacedDecls(res.Consts, ctx, compiled))
+
+	return &unit{res: res, compiled: compiled}, diags
 }
 
 // projectFunctions selects the unit's exported functions in the block's namespace
@@ -251,26 +259,23 @@ func projectFunctions(blk SymbolsBlock, u *unit) map[string]function.Function {
 }
 
 // projectConsts buckets the unit's exported consts in the block's namespace into
-// one flat object under the block's label. Consts were evaluated into u.ctx by
-// parseUnit; here they are only selected and collected. `var` never crosses (it is
-// rejected at parse), and a `const x` never collides with a `func x` — values live
-// in the `.` space, functions in the `::` space.
+// one flat object under the block's label. Consts were evaluated per namespace into
+// u.compiled.Vars by parseUnit; here they are only selected and collected. `var`
+// never crosses (it is rejected at parse), and a `const x` never collides with a
+// `func x` — values live in the `.` space, functions in the `::` space.
 //
-// LIMITATION: consts are unit-global (functy evaluates them into one flat
-// Variables map; Decl.Namespace is metadata), so within a single source unit const
-// names must be unique across namespaces — two namespaces that both declare `const
-// greeting` fail to parse, even though each projects into its own symbols.<label>
-// object. Fixing this (namespace-scoped consts) needs the per-namespace variable
-// plumbing tracked in functy's FUTURE.md ("Namespace-scoped consts/values"),
-// symmetric to the namespace-scoped type-alias work.
+// Consts are namespace-scoped: each namespace's consts live in their own
+// u.compiled.Vars[namespace] table, so two namespaces in one unit may both declare
+// `const greeting` and each projects into its own symbols.<label> object.
 func projectConsts(blk SymbolsBlock, u *unit) cty.Value {
 	fields := map[string]cty.Value{}
+	table := u.compiled.Vars[blk.Namespace]
 	for i := range u.res.Consts {
 		d := u.res.Consts[i]
 		if d.Namespace != blk.Namespace || d.IsPrivate() {
 			continue
 		}
-		if v, ok := u.ctx.Variables[d.Name]; ok {
+		if v, ok := table[d.Name]; ok {
 			fields[d.Name] = v
 		}
 	}
