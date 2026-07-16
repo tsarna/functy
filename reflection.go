@@ -38,7 +38,7 @@ func DocFunc(evalCtxFn func() *hcl.EvalContext) function.Function {
 	return function.New(&function.Spec{
 		Description: `Return a function's documentation by name: doc("f"). Returns the function's description, "" if it exists but is undocumented, or null if there is no such function.`,
 		Params: []function.Parameter{
-			{Name: "name", Type: cty.String},
+			{Name: "name", Type: cty.String, Description: "The name of the function to document"},
 		},
 		Type: function.StaticReturnType(cty.String),
 		Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
@@ -105,7 +105,7 @@ func HelpFunc(res *Result, evalCtxFn func() *hcl.EvalContext) function.Function 
 	return function.New(&function.Spec{
 		Description: `Return a human-readable help summary for a function by name: help("f"). Includes its signature, description, and per-parameter docs; null if there is no such function. Called with no argument, help() lists the names of all available functions.`,
 		Params:      []function.Parameter{},
-		VarParam:    &function.Parameter{Name: "name", Type: cty.String},
+		VarParam:    &function.Parameter{Name: "name", Type: cty.String, Description: "The name of the function to describe; omit to list all available function names"},
 		Type:        function.StaticReturnType(cty.String),
 		Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
 			if len(args) == 0 {
