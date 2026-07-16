@@ -50,6 +50,63 @@ func skipFromDiags(diags hcl.Diagnostics) (*SkipError, bool) {
 	return nil, false
 }
 
+// LimitError is the Go error a functy function returns at its cty.Function
+// boundary when an execution limit (a per-invocation step budget; see
+// Parser.MaxSteps) is breached. It is modeled on SkipError but is deliberately
+// *uncatchable*: a breach terminates the whole evaluation and unwinds straight out
+// through every enclosing frame — try/catch and `val, err =` re-propagate it rather
+// than handle it, so a guard like `try { while true {} }` cannot swallow the very
+// protection that fired.
+type LimitError struct {
+	// Steps is the step count at the moment the limit tripped; Limit is the ceiling.
+	Steps, Limit int
+	// Range is the source location of the checkpoint that tripped (a loop or the
+	// statement being executed), used to underline the breach in diagnostics.
+	Range hcl.Range
+}
+
+func (e *LimitError) Error() string {
+	return fmt.Sprintf("execution limit exceeded: %d steps (max %d)", e.Steps, e.Limit)
+}
+
+// Diagnostics renders the breach as hcl.Diagnostics so a host can print it with
+// source context, mirroring ThrownError.Diagnostics.
+func (e *LimitError) Diagnostics() hcl.Diagnostics { return limitDiags(e) }
+
+// limitDiags builds the diagnostics that carry a *LimitError up out of the
+// interpreter. The error is stashed on the diagnostic's Extra so limitFromDiags can
+// recover it at the function boundary (the local-origin form), and the range
+// underlines the checkpoint that tripped.
+func limitDiags(le *LimitError) hcl.Diagnostics {
+	return hcl.Diagnostics{{
+		Severity: hcl.DiagError,
+		Summary:  "Execution limit exceeded",
+		Detail:   le.Error(),
+		Subject:  le.Range.Ptr(),
+		Extra:    le,
+	}}
+}
+
+// limitFromDiags recovers a *LimitError from diagnostics, in either of the two forms
+// it appears in: stashed directly on a diagnostic's Extra (the local origin, where a
+// loop backedge or statement tick tripped inside this interp), or carried across a
+// called function's boundary on a FunctionCallDiagExtra (the propagated form, exactly
+// like skipFromDiags). Callers use it to re-emit the error uncatchably.
+func limitFromDiags(diags hcl.Diagnostics) (*LimitError, bool) {
+	for _, d := range diags {
+		if le, ok := d.Extra.(*LimitError); ok {
+			return le, true
+		}
+		if fce, ok := hcl.DiagnosticExtra[hclsyntax.FunctionCallDiagExtra](d); ok {
+			var le *LimitError
+			if errors.As(fce.FunctionCallError(), &le) {
+				return le, true
+			}
+		}
+	}
+	return nil, false
+}
+
 // thrownValueFromDiags recovers the original functy error value from a set of
 // diagnostics produced by evaluating a call to a functy function that threw. HCL
 // stashes the underlying call error on a diagnostic's Extra (exposed via

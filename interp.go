@@ -10,6 +10,25 @@ import (
 type interp struct {
 	parentCtx *hcl.EvalContext
 	defers    []deferred
+
+	// steps counts execution checkpoints for this one invocation (Tier-1 execution
+	// limit): incremented per statement in execBlock and once per loop backedge.
+	// maxSteps is the ceiling captured immutably at compile time; 0 means unbounded.
+	// Because each invocation builds a fresh interp, this counter is per-frame and
+	// needs no synchronization. See tick.
+	steps    int
+	maxSteps int
+}
+
+// tick advances the step counter for one checkpoint and reports a breach. It returns
+// the diagnostics that carry a *LimitError when the ceiling is exceeded (unbounded
+// when maxSteps is 0), and nil otherwise. rng underlines the checkpoint that tripped.
+func (ip *interp) tick(rng hcl.Range) hcl.Diagnostics {
+	ip.steps++
+	if ip.maxSteps > 0 && ip.steps > ip.maxSteps {
+		return limitDiags(&LimitError{Steps: ip.steps, Limit: ip.maxSteps, Range: rng})
+	}
+	return nil
 }
 
 // deferred is a scheduled defer expression together with the scope it was
@@ -32,6 +51,9 @@ type deferred struct {
 func (ip *interp) execBlock(stmts []Statement, scope *Scope) (*Signal, hcl.Diagnostics) {
 	var ctx *hcl.EvalContext
 	for _, stmt := range stmts {
+		if d := ip.tick(stmt.srcRange()); d != nil {
+			return nil, d
+		}
 		if ctx == nil || scope.dirty {
 			ctx = scopeEvalContext(scope, ip.parentCtx)
 			scope.dirty = false
@@ -156,6 +178,11 @@ func execCaptureAssign(s *CaptureAssign, scope *Scope, ctx *hcl.EvalContext) hcl
 
 	val, errVal := cty.NilVal, cty.NilVal
 	if v, diags := s.Expr.Value(ctx); diags.HasErrors() {
+		// An execution-limit breach is uncatchable: propagate it instead of routing
+		// it into the err target, so `val, err = <loops forever>` cannot swallow it.
+		if _, ok := limitFromDiags(diags); ok {
+			return diags
+		}
 		// Error path: val stays null, err carries the caught error. Recover a
 		// structured error thrown by a called function (like try/catch), rather
 		// than flattening it to diagnostic text.
@@ -302,6 +329,9 @@ func (ip *interp) execFor(s *For, scope *Scope, ctx *hcl.EvalContext) (*Signal, 
 // execForCond runs `for cond { ... }` / `while cond { ... }` / `for { ... }`.
 func (ip *interp) execForCond(s *For, scope *Scope) (*Signal, hcl.Diagnostics) {
 	for {
+		if d := ip.tick(s.srcRange()); d != nil {
+			return nil, d
+		}
 		if s.Cond != nil {
 			cond, diags := s.Cond.Value(scopeEvalContext(scope, ip.parentCtx))
 			if diags.HasErrors() {
@@ -335,6 +365,9 @@ func (ip *interp) execForClause(s *For, scope *Scope) (*Signal, hcl.Diagnostics)
 		}
 	}
 	for {
+		if d := ip.tick(s.srcRange()); d != nil {
+			return nil, d
+		}
 		if s.Cond != nil {
 			cond, diags := s.Cond.Value(scopeEvalContext(loopScope, ip.parentCtx))
 			if diags.HasErrors() {
@@ -378,6 +411,9 @@ func (ip *interp) execForRange(s *For, scope *Scope, ctx *hcl.EvalContext) (*Sig
 	}
 
 	for _, kv := range pairs {
+		if d := ip.tick(s.srcRange()); d != nil {
+			return nil, d
+		}
 		child := NewScope(scope)
 		if s.KeyName != "" {
 			_ = child.Declare(s.KeyName, nil, kv.key)
@@ -400,6 +436,12 @@ func (ip *interp) execForRange(s *For, scope *Scope, ctx *hcl.EvalContext) (*Sig
 // expression) to the catch block if present, and always runs the finally block.
 func (ip *interp) execTry(s *Try, scope *Scope) (*Signal, hcl.Diagnostics) {
 	sig, diags := ip.execBlock(s.Body, NewScope(scope))
+
+	// An execution-limit breach is uncatchable: re-propagate it without running any
+	// catch or finally, so a guard like `try { while true {} }` cannot swallow it.
+	if _, ok := limitFromDiags(diags); ok {
+		return nil, diags
+	}
 
 	errVal, errored := raisedError(sig, diags)
 	if errored {

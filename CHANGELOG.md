@@ -8,6 +8,32 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Added
+
+- **Execution limits (Tier 1) — a per-invocation step budget.** functy is a
+  tree-walking interpreter, so an unbounded `for` / `while` could wedge the host.
+  `Parser.MaxSteps(n)` now caps the number of steps any single function invocation
+  may take (one per statement executed, plus one per loop iteration); `0` (the
+  default) means unbounded, so existing embeddings are unchanged. The ceiling is
+  captured immutably at compile time into each function's `Impl`, so the counter is
+  per-frame and needs no shared state. See
+  [doc/language.md](doc/language.md#execution-limits).
+
+  - A breach raises an **uncatchable** `*LimitError`: `try` / `catch` and
+    `val, err = …` re-propagate it rather than handle it (otherwise
+    `try { while true {} }` would fire the guard, unwind into the catch, and loop
+    again), and `defer`s / enclosing `finally` blocks do not run as it unwinds. The
+    breach terminates the whole evaluation, surfacing to the host as a Go
+    `*LimitError` (which also renders as source-underlined diagnostics).
+  - The budget is **per-frame**, so it bounds a single function's runaway loop but
+    **not** recursion (each nested call starts a fresh count) nor work aggregated
+    across many small calls — and it is cooperative, so a single long-running host or
+    cty-stdlib call runs to completion regardless. Those are Tier 2.
+  - The `functy` CLI exposes it as a persistent `--max-steps` flag (generous
+    default; `0` disables). `functy test` bodies are bounded too, so a runaway loop in
+    a test fails with a `*LimitError` rather than hanging.
+  - API change: `BuildFunction` takes an additional `maxSteps int` argument.
+
 ## [0.10.0] - 2026-07-15
 
 ### Added

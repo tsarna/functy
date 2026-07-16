@@ -106,7 +106,7 @@ func (r *Result) CompileUnits(evalCtxFn func() *hcl.EvalContext) (*Compiled, hcl
 		}
 		seen[qualified] = true
 
-		f := BuildFunction(fn, ctxFns[fn.Namespace])
+		f := BuildFunction(fn, ctxFns[fn.Namespace], r.maxSteps)
 		units[fn.Namespace][fn.Name] = f
 		if !fn.IsPrivate() {
 			exported[qualified] = f
@@ -168,7 +168,10 @@ func unitCtxFn(evalCtxFn func() *hcl.EvalContext, table map[string]function.Func
 // cty has no native optional parameters, so only the required parameters go in
 // Spec.Params; optional parameters and the variadic parameter are collected via
 // a VarParam and mapped back to names (applying defaults) inside the Impl.
-func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Function {
+// maxSteps is the Tier-1 execution-limit ceiling captured immutably into the Impl
+// closure: every invocation builds a fresh interp seeded with it, so the step
+// counter is per-frame and needs no shared state. 0 means unbounded.
+func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext, maxSteps int) function.Function {
 	var required, optional []Param
 	var variadic *Param
 	for i := range fn.Params {
@@ -247,8 +250,17 @@ func BuildFunction(fn *FuncDecl, evalCtxFn func() *hcl.EvalContext) function.Fun
 			return cty.NilVal, fmt.Errorf("too many arguments: %q takes %d", fn.Name, len(fn.Params))
 		}
 
-		ip := &interp{parentCtx: parentCtx}
+		ip := &interp{parentCtx: parentCtx, maxSteps: maxSteps}
 		sig, diags := ip.execBlock(fn.Body, scope)
+
+		// An execution-limit breach is uncatchable and terminates the whole
+		// evaluation: re-emit it as a Go error so it crosses this boundary (arriving
+		// at the caller as a FunctionCallDiagExtra, like a propagated skip), and
+		// skip the defers — a defer can itself loop, so running it would defeat the
+		// bound on post-breach cost.
+		if le, ok := limitFromDiags(diags); ok {
+			return cty.NilVal, le
+		}
 
 		// Deferred expressions run at function exit (LIFO), after any finally
 		// blocks and after the body's outcome is determined. A defer that

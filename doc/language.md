@@ -835,6 +835,29 @@ func handle(ctx, id) {
   because functy has no named returns, a defer cannot change the return value. A
   deferred expression that raises aborts the remaining defers and propagates.
 
+## Execution limits
+
+functy is a tree-walking interpreter, so an unbounded `for` / `while` would
+otherwise let a single function wedge the host. A host (or the CLI's `--max-steps`
+flag) may set a **step budget**: the maximum number of steps any one function
+invocation may take.
+
+- A *step* is one statement executed, plus one per loop iteration. The count is
+  **per invocation** — each function call starts fresh at zero.
+- Exceeding the budget aborts the whole evaluation with an execution-limit error.
+  This error is **uncatchable**: `try` / `catch` and `val, err = …` re-propagate it
+  rather than handle it (otherwise `try { while true {} }` would fire the guard,
+  unwind into the catch, and loop again). `defer`s and enclosing `finally` blocks do
+  **not** run as it unwinds — a defer could itself loop.
+- The budget is **opt-in**: unset (or `0`) means unbounded, so an embedding that
+  configures no limit is unaffected. The `functy` CLI applies a generous default
+  (`--max-steps`, `0` to disable).
+
+Because the counter is per invocation, this bounds a *single* function's runaway
+loop but **not** recursion (each nested call starts a fresh count) nor work spread
+across many small calls — and it is cooperative, so a single long-running host or
+stdlib call (a huge `range()`, a catastrophic regex) runs to completion regardless.
+
 ## Scoping
 
 functy uses lexically nested scopes:

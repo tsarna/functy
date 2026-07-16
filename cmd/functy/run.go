@@ -67,6 +67,12 @@ func runCmd() *cobra.Command {
 				if errors.As(err, &te) {
 					return emitRunError(cmd, jsonOut, fileMap, pending.Extend(te.Diagnostics()), "execution failed")
 				}
+				// An execution-limit breach carries the source range of the loop that
+				// tripped, so render it underlined like a thrown error.
+				var le *functy.LimitError
+				if errors.As(err, &le) {
+					return emitRunError(cmd, jsonOut, fileMap, pending.Extend(le.Diagnostics()), "execution failed")
+				}
 				return emitRunPlainError(cmd, jsonOut, pending, fmt.Errorf("calling %q: %w", funcName, err))
 			}
 			if len(pending) > 0 {

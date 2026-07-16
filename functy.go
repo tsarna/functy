@@ -38,6 +38,10 @@ type Parser struct {
 	requireReturnType    bool
 	requireDeclaredTypes bool
 
+	// maxSteps is the Tier-1 execution-limit ceiling (see MaxSteps): the maximum
+	// number of steps a single function invocation may take. 0 = unbounded.
+	maxSteps int
+
 	resolver *TypeResolver
 
 	// externSources are //functy:extern sources supplied by the *host* (see
@@ -200,6 +204,19 @@ func (p *Parser) RequireDeclaredTypes(v bool) *Parser {
 	return p
 }
 
+// MaxSteps sets the Tier-1 execution limit: the maximum number of steps any single
+// function invocation may take before a breach terminates the whole evaluation with
+// an (uncatchable) *LimitError. A step is one statement executed plus one per loop
+// iteration, counted per invocation — so it bounds a single function's runaway
+// `for` / `while`, but not recursion (each nested call starts a fresh count) nor
+// work aggregated across many small calls. 0 (the default) means unbounded, leaving
+// existing embeddings unchanged. The ceiling is captured immutably at compile time.
+// Returns the Parser for chaining.
+func (p *Parser) MaxSteps(v int) *Parser {
+	p.maxSteps = v
+	return p
+}
+
 // types returns the parser's resolver, creating it if the Parser was constructed
 // as a zero value rather than via NewParser.
 func (p *Parser) types() *TypeResolver {
@@ -298,7 +315,7 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	}
 	diags = diags.Extend(resolveTypeAliases(aliases, env))
 
-	merged := &Result{}
+	merged := &Result{maxSteps: p.maxSteps}
 	for _, a := range aliases {
 		if tc, ok := env.named[a.name]; ok {
 			merged.Types = append(merged.Types, TypeAlias{Name: a.name, Type: tc, TypeSrc: a.rhsSrc, DefRange: a.defRange})
@@ -468,6 +485,11 @@ type Result struct {
 	Consts []Decl      // top-level const declarations (only when enabled)
 	Vars   []Decl      // top-level var declarations (only when enabled)
 	Types  []TypeAlias // top-level type aliases (project-scoped across all sources)
+
+	// maxSteps is the Tier-1 execution-limit ceiling stamped from the Parser at
+	// parse time and read by CompileUnits when it builds each function. 0 =
+	// unbounded, so a hand-assembled Result is unbounded by default.
+	maxSteps int
 
 	// Externs are the bodiless declarations from //functy:extern sources, in source
 	// order. They declare the signatures of functions the *host* provides, so they

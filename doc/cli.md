@@ -21,6 +21,16 @@ functy symbols [--json] [--filename NAME] [FILE|DIR ... | -]
 functy version [--json]
 ```
 
+## Global flags
+
+`--max-steps N` (persistent, all subcommands) caps the number of steps any single
+function invocation may take before a runaway `for` / `while` is aborted with an
+(uncatchable) execution-limit error — one step per statement plus one per loop
+iteration, counted per invocation. The CLI applies a generous default so ordinary
+exploration is never clipped; pass `--max-steps 0` to disable the limit entirely.
+See *Execution limits* in [language.md](language.md) for the semantics (per-frame
+counting, uncatchability, and what it does and does not bound).
+
 ## run
 
 Load the given source files into one eval context and invoke an entry function.

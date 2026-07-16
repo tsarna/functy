@@ -35,6 +35,8 @@ func rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.PersistentFlags().IntVar(&maxSteps, "max-steps", defaultCLIMaxSteps,
+		"max steps per function invocation before a runaway loop is aborted (0 = unbounded)")
 	root.AddCommand(runCmd(), evalCmd(), replCmd(), checkCmd(), testCmd(), fmtCmd(), symbolsCmd(), versionCmd())
 	return root
 }

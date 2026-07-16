@@ -14,6 +14,16 @@ import (
 	"github.com/zclconf/go-cty/cty/function"
 )
 
+// defaultCLIMaxSteps is the CLI's generous default execution-limit ceiling (steps
+// per function invocation). It is high enough that ordinary interactive exploration
+// is never clipped, yet finite so a runaway `for` / `while` aborts with a
+// *LimitError instead of wedging the process. Override with --max-steps; 0 disables.
+const defaultCLIMaxSteps = 100_000_000
+
+// maxSteps is bound to the root command's persistent --max-steps flag (see rootCmd)
+// and applied to the Parser in loadProgram.
+var maxSteps = defaultCLIMaxSteps
+
 // loadProgram reads, parses, and compiles the given source paths against the
 // baseline functions. Top-level const and var declarations are enabled and
 // evaluated into the context's variables, so functions can reference constants
@@ -63,6 +73,7 @@ func loadProgram(input any, baseline map[string]function.Function) (*functy.Resu
 	evalCtxFn := func() *hcl.EvalContext { return ctx }
 
 	res, pdiags := functy.NewParser().
+		MaxSteps(maxSteps).
 		AllowTopLevelConst(true).
 		AllowTopLevelVar(true).
 		ParseAll(sources)

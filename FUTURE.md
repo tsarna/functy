@@ -428,7 +428,14 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
 
   Two tiers, the first shippable on its own:
 
-  - **Tier 1 — per-frame loop guard (self-contained; ship first).** A step / iteration
+  - **Tier 1 — per-frame loop guard (self-contained; ship first). — IMPLEMENTED.**
+    Shipped as `Parser.MaxSteps(n)` (0 = unbounded): a per-`interp` step counter
+    incremented once per statement in `execBlock` *and* once per loop backedge (the
+    backedge tick is needed so an empty-bodied `for {}` is still caught). A breach
+    raises an uncatchable `*LimitError` (modeled on `SkipError`; `try`/`catch` and
+    `val, err =` re-propagate it, and defers/finally are skipped). The `functy` CLI
+    exposes it as `--max-steps` with a generous default. Test bodies are bounded too.
+    The original design notes follow. A step / iteration
     counter on `interp` (constructed per invocation in `BuildFunction`'s `Impl`, so each
     call gets its own), incremented at every loop backedge in `execForCond` /
     `execForClause` / `execForRange` — and optionally per statement in `execBlock` for a

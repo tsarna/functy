@@ -123,7 +123,9 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 		if table, ok := compiled.Units[td.Namespace]; ok {
 			bodyCtxFn = unitCtxFn(evalCtxFn, table)
 		}
-		fn := BuildFunction(&FuncDecl{Name: td.Name, Namespace: td.Namespace, Body: td.Body}, bodyCtxFn)
+		// Bound test bodies by the same ceiling as normal functions, so a runaway
+		// loop in a test surfaces as a (non-skipped) *LimitError rather than hanging.
+		fn := BuildFunction(&FuncDecl{Name: td.Name, Namespace: td.Namespace, Body: td.Body}, bodyCtxFn, r.maxSteps)
 		start := time.Now()
 		_, err := fn.Call([]cty.Value{})
 		o := TestOutcome{Name: td.Name, DefRange: td.DefRange, Duration: time.Since(start), Err: err}
