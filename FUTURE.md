@@ -277,6 +277,28 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
     Doing this properly needs a functy-internal qualified-type syntax, or per-namespace
     `typeEnv` layers with bare-then-qualified resolution. Consequence today: two files in
     different namespaces still collide on `type Id = …`.
+  - **Namespace-scoped consts/values — mechanism, not policy.** functy deliberately defines
+    *no* semantics for top-level `const`/`var`: `Decl.Namespace` is carried as metadata and
+    the host decides what a declaration means (`EvalDecls` evaluates a flat set into one
+    `Variables` map). Consequence today: consts are unit-global by bare name, so two
+    namespaces that each declare `const greeting` collide (`EvalDecls` reports a duplicate) —
+    even though a projection like the OpenTofu symbol library (`OPENTOFU-SYMBOLS.md`) crosses
+    each namespace as its own `symbols.<label>` object, so an author writing `const greeting`
+    in `namespace foo` reasonably expects `symbols.foo.greeting`, independent of `namespace
+    bar`'s. The enabling mechanism is the exact symmetric partner of the shipped per-namespace
+    *function* layer: `unitCtxFn` (`builder.go`) already wraps the host's late-bound context in
+    a per-namespace child and sets its `Functions`; giving that child a per-namespace
+    `Variables` table too makes a bare `greeting` in a body resolve to *that* namespace's const
+    through the same `scopeEvalContext` chain walk (`interp.go`), local-wins, without hiding
+    host globals — verified feasible. functy's part is purely plumbing: expose per-namespace
+    variable tables (a `Compiled.Vars` alongside `Compiled.Units`) for the host to fill from
+    `Decl.Namespace`. The *policy* stays with the host (symbols, and optionally the CLI/REPL) —
+    notably whether a namespaced function also sees global/unnamespaced consts (own+global with
+    shadowing, mirroring how functions resolve) or only its own (strict isolation); the
+    plumbing supports either (a shared parent layer for globals, or none). Pairs with the
+    namespace-scoped type-alias work above — both are cases of "namespacing currently applies
+    to functions only." Until it lands, a symbol-library unit's const names must be unique
+    across its namespaces.
   - **`_` visibility is not wired to type aliases.** The leading-underscore convention is
     enforced for functions (private ones withheld from the exported map in `builder.go`) and
     is advisory for `var`/`const` (`Decl.IsPrivate()` exists; the host decides), but

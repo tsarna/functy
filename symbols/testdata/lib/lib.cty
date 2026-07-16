@@ -1,0 +1,25 @@
+// A global-namespace symbol library, exercised by the symbols builder tests.
+
+type items = list(string)
+
+// _spec is a private type: it must not cross on export.
+type _spec = object({ id = string })
+
+func non_empty(xs: items) -> bool {
+    return length(xs) != 0
+}
+
+func shout(s: string) -> string {
+    return upper(s)
+}
+
+// _helper is a private function: it must not cross on export.
+func _helper(s: string) -> string {
+    return s
+}
+
+const default_items: items = ["foo", "bar", "baz"]
+const greeting = shout("hi")
+
+// _secret is a private const: it must not cross on export.
+const _secret = "hidden"

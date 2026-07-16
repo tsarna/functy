@@ -1,0 +1,7 @@
+namespace foo
+
+const greeting = "hello"
+
+func greet(who: string) -> string {
+    return "${greeting} ${who}"
+}

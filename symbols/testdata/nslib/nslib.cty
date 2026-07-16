@@ -1,0 +1,12 @@
+// A namespaced symbol library: everything lives in namespace acme::net, so a
+// binding block must select it with `namespace = "acme::net"`.
+
+namespace acme::net
+
+type cidr = string
+
+func mask(s: string) -> string {
+    return upper(s)
+}
+
+const default_cidr = "10.0.0.0/8"

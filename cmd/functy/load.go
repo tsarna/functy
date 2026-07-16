@@ -115,7 +115,7 @@ func loadProgram(input any, baseline map[string]function.Function) (*functy.Resu
 	// const declarations resolve before var declarations, matching the common
 	// host ordering (a var may reference a const, not vice versa).
 	decls := append(append([]functy.Decl{}, res.Consts...), res.Vars...)
-	diags = diags.Extend(evalTopLevelDecls(decls, ctx))
+	diags = diags.Extend(functy.EvalDecls(decls, ctx))
 
 	return res, compiled, ctx, files, diags
 }
@@ -205,108 +205,6 @@ func resolveEntry(compiled *functy.Compiled, ctx *hcl.EvalContext, name string) 
 			"entry function %q is declared in more than one namespace (%s); name one of them with --func",
 			name, strings.Join(matches, ", "))
 	}
-}
-
-// evalTopLevelDecls evaluates collected const/var declarations into ctx.Variables.
-// Declarations may reference one another out of source order, so this resolves
-// them iteratively: each pass evaluates every declaration whose referenced
-// declaration names are already available, until no progress is made. Anything
-// left unresolved is a cyclic or dangling reference and is reported.
-func evalTopLevelDecls(decls []functy.Decl, ctx *hcl.EvalContext) hcl.Diagnostics {
-	var diags hcl.Diagnostics
-
-	names := make(map[string]bool, len(decls))
-	for _, d := range decls {
-		if names[d.Name] {
-			diags = diags.Append(&hcl.Diagnostic{
-				Severity: hcl.DiagError,
-				Summary:  "Duplicate declaration",
-				Detail:   fmt.Sprintf("%q is declared more than once at the top level.", d.Name),
-				Subject:  d.DefRange.Ptr(),
-			})
-		}
-		names[d.Name] = true
-	}
-
-	pending := make([]functy.Decl, len(decls))
-	copy(pending, decls)
-
-	for len(pending) > 0 {
-		var stuck []functy.Decl
-		progress := false
-
-		for _, d := range pending {
-			if !depsReady(d, names, ctx.Variables) {
-				stuck = append(stuck, d)
-				continue
-			}
-			val := cty.NullVal(cty.DynamicPseudoType)
-			if d.Type != nil {
-				val = cty.NullVal(d.Type.Cty())
-			}
-			if d.Expr != nil {
-				v, vdiags := d.Expr.Value(ctx)
-				diags = diags.Extend(vdiags)
-				if vdiags.HasErrors() {
-					ctx.Variables[d.Name] = val // placeholder so dependents don't loop
-					progress = true
-					continue
-				}
-				val = v
-			}
-			if d.Type != nil {
-				conv, err := d.Type.Coerce(val)
-				if err != nil {
-					diags = diags.Append(&hcl.Diagnostic{
-						Severity: hcl.DiagError,
-						Summary:  "Invalid declaration value",
-						Detail:   fmt.Sprintf("%s: %s", d.Name, err),
-						Subject:  d.DefRange.Ptr(),
-					})
-				} else {
-					val = conv
-				}
-			}
-			ctx.Variables[d.Name] = val
-			progress = true
-		}
-
-		if !progress {
-			for _, d := range stuck {
-				diags = diags.Append(&hcl.Diagnostic{
-					Severity: hcl.DiagError,
-					Summary:  "Unresolved declaration",
-					Detail: fmt.Sprintf(
-						"%q could not be resolved; it may reference an undefined name or form a dependency cycle.", d.Name),
-					Subject: d.DefRange.Ptr(),
-				})
-			}
-			break
-		}
-		pending = stuck
-	}
-	return diags
-}
-
-// depsReady reports whether every top-level declaration that d references has
-// already been evaluated (references to non-declaration names are left for the
-// expression evaluator to resolve or reject).
-func depsReady(d functy.Decl, names map[string]bool, available map[string]cty.Value) bool {
-	if d.Expr == nil {
-		return true
-	}
-	for _, traversal := range d.Expr.Variables() {
-		root := traversal.RootName()
-		if root == d.Name {
-			continue
-		}
-		if names[root] {
-			if _, ok := available[root]; !ok {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // writeDiags renders diagnostics with source context to w, colorizing (which is how

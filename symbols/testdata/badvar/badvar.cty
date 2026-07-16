@@ -1,0 +1,4 @@
+// A top-level `var` is meaningless in a shared, plan-time symbol library, so the
+// builder disables it — parsing this unit must fail.
+
+var mutable = 1
