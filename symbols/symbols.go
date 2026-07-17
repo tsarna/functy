@@ -180,7 +180,7 @@ func (b *Builder) Build() (*Built, hcl.Diagnostics) {
 
 		built.Functions = mergeFunctions(built.Functions, projectFunctions(blk, u), &diags)
 		labelObjs[blk.Label] = projectConsts(blk, u)
-		built.types[blk.Label] = projectTypes(u)
+		built.types[blk.Label] = projectTypes(blk, u)
 	}
 
 	built.Symbols = cty.ObjectVal(labelObjs)
@@ -282,18 +282,19 @@ func projectConsts(blk SymbolsBlock, u *unit) cty.Value {
 	return cty.ObjectVal(fields)
 }
 
-// projectTypes exposes the unit's type aliases as a [typeName]cty.Type lookup.
+// projectTypes exposes the block's namespace's exported type aliases as a
+// [typeName]cty.Type lookup backing Built.Type(label, name).
 //
-// TODO: types are project-scoped, not namespaced — functy's TypeAlias has no
-// Namespace yet — so a block's Namespace cannot filter them and the whole unit's
-// types cross under every label pointing at this source. Leading-underscore names
-// are skipped by hand here, since TypeAlias has no IsPrivate() yet either. Filter by
-// blk.Namespace and drop private aliases once functy lands the "Namespace-scoped
-// type aliases" work (see functy FUTURE.md).
-func projectTypes(u *unit) map[string]cty.Type {
+// Types are namespace-scoped, mirroring projectFunctions/projectConsts: only
+// aliases whose namespace matches the block's cross, so two namespaces in one unit
+// may both declare `type cidr = …` and each projects under its own label. Private
+// (`_`-prefixed) aliases are withheld via IsPrivate() — they are still resolved and
+// inlined into exported aliases (e.g. `type items = list(_spec)` crosses as a
+// concrete `list(object(...))`), just not named on the export surface.
+func projectTypes(blk SymbolsBlock, u *unit) map[string]cty.Type {
 	out := map[string]cty.Type{}
 	for _, a := range u.res.Types {
-		if len(a.Name) > 0 && a.Name[0] == '_' {
+		if a.Namespace != blk.Namespace || a.IsPrivate() {
 			continue
 		}
 		out[a.Name] = a.Type.Cty()

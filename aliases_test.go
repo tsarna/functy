@@ -2,8 +2,10 @@ package functy
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -157,6 +159,155 @@ func TestAliasNullBody(t *testing.T) {
 
 func TestAliasUnknownType(t *testing.T) {
 	parseErr(t, "type A = nope")
+}
+
+// --- namespace-scoped aliases ---
+
+// A namespaced alias resolves for that namespace's own annotations.
+func TestAliasNamespaceScopedResolves(t *testing.T) {
+	c := compileNS(t, src("m.cty", `
+		namespace foo
+		type Id = number
+		func f(x: Id) -> number { return x + 1 }
+	`))
+	// "5" is coerced to number by the pinned Id parameter, proving Id == number.
+	if got := call(t, c.Funcs, "foo::f", cty.StringVal("5")); !got.RawEquals(num(6)) {
+		t.Errorf("foo::f(\"5\") = %#v, want 6", got)
+	}
+}
+
+// Two namespaces may each declare the same alias name with different types; each
+// namespace's annotations enforce its own.
+func TestAliasSameNameDifferentNamespaces(t *testing.T) {
+	c := compileNS(t,
+		src("foo.cty", "namespace foo\ntype T = number\nfunc f(x: T) { return x }"),
+		src("bar.cty", "namespace bar\ntype T = string\nfunc g(x: T) { return x }"),
+	)
+	if got := call(t, c.Funcs, "foo::f", cty.StringVal("5")); !got.RawEquals(num(5)) {
+		t.Errorf("foo::f(\"5\") = %#v, want number 5 (foo's T = number)", got)
+	}
+	if got := call(t, c.Funcs, "bar::g", num(5)); !got.RawEquals(cty.StringVal("5")) {
+		t.Errorf("bar::g(5) = %#v, want string \"5\" (bar's T = string)", got)
+	}
+}
+
+// An alias declared in one namespace is invisible from another (no global one).
+func TestAliasNamespaceIsolation(t *testing.T) {
+	sources := []Source{
+		{Filename: "foo.cty", Bytes: []byte("namespace foo\ntype Secret = number")},
+		{Filename: "bar.cty", Bytes: []byte("namespace bar\nfunc g(x: Secret) { return x }")},
+	}
+	_, diags := NewParser().ParseAll(sources)
+	if !diags.HasErrors() {
+		t.Fatal("a foo alias must not be visible from namespace bar")
+	}
+}
+
+// A namespaced alias may shadow a global alias (own-then-global, own wins) without
+// a duplicate error.
+func TestAliasNamespaceShadowsGlobalAlias(t *testing.T) {
+	c := compileNS(t,
+		src("global.cty", "type T = string\nfunc h(x: T) -> string { return x }"),
+		src("foo.cty", "namespace foo\ntype T = number\nfunc f(x: T) { return x }"),
+	)
+	if got := call(t, c.Funcs, "h", num(5)); !got.RawEquals(cty.StringVal("5")) {
+		t.Errorf("h(5) = %#v, want string \"5\" (global T = string)", got)
+	}
+	if got := call(t, c.Funcs, "foo::f", cty.StringVal("5")); !got.RawEquals(num(5)) {
+		t.Errorf("foo::f(\"5\") = %#v, want number 5 (foo's T shadows global)", got)
+	}
+}
+
+// A namespaced function falls back to a global alias when it has none of its own.
+func TestAliasNamespaceFallsBackToGlobal(t *testing.T) {
+	c := compileNS(t,
+		src("global.cty", "type Id = number"),
+		src("foo.cty", "namespace foo\nfunc f(x: Id) -> number { return x + 1 }"),
+	)
+	if got := call(t, c.Funcs, "foo::f", cty.StringVal("5")); !got.RawEquals(num(6)) {
+		t.Errorf("foo::f(\"5\") = %#v, want 6 (Id resolves to the global alias)", got)
+	}
+}
+
+// Shadowing a host-registered type inside a namespace is allowed but warns.
+func TestAliasNamespaceShadowsHostTypeWarns(t *testing.T) {
+	wty := cty.Capsule("widget", reflect.TypeOf(widget{}))
+	p := NewParser().RegisterType("widget", wty)
+	res, diags := p.ParseAll([]Source{
+		{Filename: "foo.cty", Bytes: []byte("namespace foo\ntype widget = number\nfunc f(x: widget) { return x }")},
+	})
+	if diags.HasErrors() {
+		t.Fatalf("shadowing a host type in a namespace should be allowed: %s", diags.Error())
+	}
+	var warned bool
+	for _, d := range diags {
+		if d.Severity == hcl.DiagWarning && strings.Contains(d.Summary, "shadows a host-registered type") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected a host-type-shadow warning, got: %s", diags.Error())
+	}
+	// The alias took effect: it is materialized under namespace foo.
+	var found bool
+	for i := range res.Types {
+		if res.Types[i].Name == "widget" && res.Types[i].Namespace == "foo" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected foo's widget alias in Result.Types, got %+v", res.Types)
+	}
+}
+
+// --- private aliases ---
+
+// `type _` (the blank identifier) is rejected; `type _spec` (private) is fine and
+// still inlines into an exported alias.
+func TestAliasBlankIdentifierRejected(t *testing.T) {
+	parseErr(t, "type _ = number")
+}
+
+func TestAliasPrivateResolvesAndInlines(t *testing.T) {
+	res := parse(t, `type _spec = object({ id = string })
+type items = list(_spec)`)
+	byName := map[string]TypeAlias{}
+	for i := range res.Types {
+		byName[res.Types[i].Name] = res.Types[i]
+	}
+	spec, ok := byName["_spec"]
+	if !ok {
+		t.Fatal("_spec should be materialized in Result.Types")
+	}
+	if !spec.IsPrivate() {
+		t.Error("_spec should report IsPrivate() == true")
+	}
+	if items := byName["items"]; items.IsPrivate() {
+		t.Error("items should not be private")
+	} else if !items.Type.Cty().IsListType() {
+		t.Errorf("items should resolve to a list type, got %s", items.Type.Cty().FriendlyName())
+	}
+}
+
+// Namespaced aliases are stamped with their namespace in Result.Types.
+func TestAliasResultTypesCarryNamespace(t *testing.T) {
+	res, diags := NewParser().ParseAll([]Source{
+		src("foo.cty", "namespace foo\ntype Id = string"),
+		src("g.cty", "type Gid = number"),
+	})
+	if diags.HasErrors() {
+		t.Fatalf("unexpected errors: %s", diags.Error())
+	}
+	ns := map[string]string{}
+	for i := range res.Types {
+		ns[res.Types[i].Name] = res.Types[i].Namespace
+	}
+	if ns["Id"] != "foo" {
+		t.Errorf("Id.Namespace = %q, want foo", ns["Id"])
+	}
+	if ns["Gid"] != "" {
+		t.Errorf("Gid.Namespace = %q, want global", ns["Gid"])
+	}
 }
 
 // ensure the in-function `type` identifier is still usable (contextual keyword).

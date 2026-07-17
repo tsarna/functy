@@ -161,15 +161,35 @@ func fetch(url: string) -> HttpResult { … }
 
 - Aliases are **order-independent** — an alias may be used before it is declared,
   and one alias may reference another (cycles are an error).
-- Aliases are **project-scoped**: every alias from the `.cty` files loaded together
-  is visible to all of them, exactly like the function namespace — so a function in
-  one file may use a type declared in another, with no import needed. A duplicate
-  alias name (within or across files) is an error.
+- Aliases are **namespace-scoped** with **own-then-global** resolution, exactly like
+  functions and consts (see [Namespaces and visibility](#namespaces-and-visibility)).
+  An alias declared in a namespaced file is visible to that namespace's annotations
+  first, then falls back to the global (unnamespaced) aliases and the host-registered
+  types. Two files in **different** namespaces may therefore each declare `type Id =
+  …` without colliding; a duplicate **within one namespace** (or across files sharing
+  it) is still an error. A file with no `namespace` is in the global namespace, which
+  is the shared fallback — put project-wide types there.
+- A namespaced alias **shadows** a same-named global alias within its namespace
+  (own wins). It may also shadow a host-registered type, but that silently changes
+  enforcement (identity → structural), so it is allowed with a **warning**.
+- A **private** alias — a leading underscore, `type _spec = …` — is namespace-local:
+  it is resolved and inlines into other aliases/annotations of its namespace (so
+  `type items = list(_spec)` yields a concrete `list(object(…))`), but a consumer
+  projecting an export surface (e.g. the symbols library) withholds it. `type _`
+  alone (the blank identifier) is not a valid name.
 - An alias over a **concrete** type (`type Id = string`) may be used in nested
   position too (`list(Id)`). An alias over a host capsule/open type may only be used
   as a whole-annotation leaf.
-- Aliasing a built-in (`type string = …`) or a host-registered type name is an
-  error.
+- Aliasing a built-in (`type string = …`) is always an error (in any namespace): a
+  built-in keyword is resolved before the alias table, so such an alias would be
+  silently dead. A **global** alias may not collide with a host-registered type
+  either (a namespaced one shadows it, per above).
+
+There is no qualified *spelling* for a type across namespaces — `::` is a
+function-call selector in HCL, so a namespace's alias is nameable only from within
+that namespace (or the global fallback). A host projection such as the symbols
+library's `symbols::<label>::types(name)` is how a namespaced type is referenced
+from outside.
 
 `type` is recognized as a declaration keyword only at file top level, so it remains
 usable as an ordinary variable/parameter name inside function bodies.
@@ -956,10 +976,12 @@ func summary() -> string {
 ```
 
 `::` is a **function-call selector** in HCL, so only functions can be qualified —
-there is no `foo::bar::x` for a variable or a type. Functions are therefore the one
-kind functy namespaces on its own. A `const`/`var` carries the namespace of the file
-it was declared in as *metadata*, and what that means is the **host's** choice (see
-below). Type aliases remain project-scoped across all sources.
+there is no `foo::bar::x` for a variable or a type. A `const`/`var` carries the
+namespace of the file it was declared in as *metadata*, and what that means is the
+**host's** choice (see below). **Type aliases** are namespace-scoped too, resolved
+own-then-global at parse time (see [Type aliases](#type-aliases)); like consts, they
+have no qualified cross-namespace spelling, so a namespace's alias is reachable only
+from within it or through a host projection.
 
 ### Namespace-scoped consts and values
 

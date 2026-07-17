@@ -151,9 +151,11 @@ func collectSymbols(res *functy.Result) []jsonSymbol {
 				Doc: d.Doc, Range: rangeToJSON(d.DefRange),
 			})
 		}
-		for _, ta := range res.Types {
+		for i := range res.Types {
+			ta := res.Types[i]
 			symbols = append(symbols, jsonSymbol{
-				Kind: "type", Name: ta.Name, Range: rangeToJSON(ta.DefRange),
+				Kind: "type", Name: ta.Name, Namespace: ta.Namespace, Private: ta.IsPrivate(),
+				Range: rangeToJSON(ta.DefRange),
 			})
 		}
 	}

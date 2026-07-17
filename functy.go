@@ -300,25 +300,60 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 		})
 	}
 
-	// Collect aliases from every source first, then resolve them into a per-parse
-	// env (a clone of the parser's registered types so file aliases never leak
-	// back into the shared Parser across separate calls).
-	env := p.types().env.clone()
+	// Collect aliases from every source, stamped with each file's namespace, then
+	// resolve them per namespace into per-namespace type environments. globalEnv is
+	// a clone of the parser's registered types (so file aliases never leak back into
+	// the shared Parser across separate calls); each other namespace's env is a
+	// clone of the resolved global env, so a bare type name resolves own-then-global.
+	globalEnv := p.types().env.clone()
+
+	// Host-registered type names, captured before any alias is resolved, so a
+	// namespaced alias that shadows one can be warned about.
+	hostTypes := make(map[string]bool, len(globalEnv.named))
+	for name := range globalEnv.named {
+		hostTypes[name] = true
+	}
+
 	var aliases []aliasDecl
+	aliasesByNS := map[string][]aliasDecl{}
+	var nsOrder []string
 	for _, ls := range lexed {
 		if ls.fd.extern {
 			continue // extern files declare no aliases; the parser rejects `type` there
 		}
-		ad, cdiags := collectTypeAliases(ls.tokens, ls.src, ls.filename)
+		ns := leadingNamespace(ls.tokens)
+		ad, cdiags := collectTypeAliases(ls.tokens, ls.src, ls.filename, ns)
 		diags = diags.Extend(cdiags)
 		aliases = append(aliases, ad...)
+		for _, a := range ad {
+			if _, seen := aliasesByNS[a.namespace]; !seen {
+				nsOrder = append(nsOrder, a.namespace)
+			}
+			aliasesByNS[a.namespace] = append(aliasesByNS[a.namespace], a)
+		}
 	}
-	diags = diags.Extend(resolveTypeAliases(aliases, env))
+
+	// Resolve the global namespace first, then each other namespace into a clone of
+	// the resolved global env (own shadows global; global + host types fall back).
+	envByNS := map[string]*typeEnv{"": globalEnv}
+	diags = diags.Extend(resolveTypeAliases(aliasesByNS[""], globalEnv, "", hostTypes))
+	for _, ns := range nsOrder {
+		if ns == "" {
+			continue
+		}
+		nsEnv := globalEnv.clone()
+		diags = diags.Extend(resolveTypeAliases(aliasesByNS[ns], nsEnv, ns, hostTypes))
+		envByNS[ns] = nsEnv
+	}
 
 	merged := &Result{maxSteps: p.maxSteps}
 	for _, a := range aliases {
+		env := envByNS[a.namespace]
+		if env == nil {
+			env = globalEnv
+		}
 		if tc, ok := env.named[a.name]; ok {
-			merged.Types = append(merged.Types, TypeAlias{Name: a.name, Type: tc, TypeSrc: a.rhsSrc, DefRange: a.defRange})
+			merged.Types = append(merged.Types, TypeAlias{Name: a.name, Namespace: a.namespace, Type: tc, TypeSrc: a.rhsSrc, DefRange: a.defRange})
 		}
 	}
 
@@ -332,7 +367,8 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 			src:                ls.src,
 			filename:           ls.filename,
 			tokens:             ls.tokens,
-			env:                env,
+			env:                globalEnv,
+			envByNS:            envByNS,
 			allowTopLevelVar:   p.allowTopLevelVar,
 			allowTopLevelConst: p.allowTopLevelConst,
 			extern:             ls.fd.extern,
@@ -484,7 +520,7 @@ type Result struct {
 	Tests  []*TestDecl // parsed test blocks (not registered as callable functions)
 	Consts []Decl      // top-level const declarations (only when enabled)
 	Vars   []Decl      // top-level var declarations (only when enabled)
-	Types  []TypeAlias // top-level type aliases (project-scoped across all sources)
+	Types  []TypeAlias // top-level type aliases (namespace-scoped; see TypeAlias)
 
 	// maxSteps is the Tier-1 execution-limit ceiling stamped from the Parser at
 	// parse time and read by CompileUnits when it builds each function. 0 =
@@ -539,15 +575,28 @@ type Result struct {
 }
 
 // TypeAlias is a resolved top-level `type Name = <type>` declaration. Aliases are
-// project-scoped: every alias collected from the sources parsed together is
-// visible to every source (like the function namespace), so a function in one
-// file may use a type declared in another.
+// namespace-scoped with own-then-global resolution, exactly like functions and
+// consts: an alias declared in a namespaced file is visible to that namespace's
+// annotations first, then falls back to the global (unnamespaced) aliases and the
+// host-registered types. Two files in different namespaces may therefore each
+// declare the same name; a `_`-prefixed alias is namespace-local (see IsPrivate).
 type TypeAlias struct {
-	Name     string
-	Type     TypeConstraint
-	TypeSrc  string // source text of the aliased type (right-hand side), for rendering (fmt)
-	DefRange hcl.Range
+	Name string
+	// Namespace is the enclosing namespace of the file the alias appeared in
+	// ("" = global). It scopes name resolution (own-then-global) and lets a
+	// consumer project an alias under the right namespace surface.
+	Namespace string
+	Type      TypeConstraint
+	TypeSrc   string // source text of the aliased type (right-hand side), for rendering (fmt)
+	DefRange  hcl.Range
 }
+
+// IsPrivate reports whether the alias is namespace-local (a leading underscore).
+// A private alias is still resolved and inlined into other aliases/annotations of
+// its namespace (so `type items = list(_spec)` works), but a consumer projecting
+// an export surface — e.g. the symbols library — withholds it, mirroring how a
+// private function is withheld from the host's function table.
+func (t *TypeAlias) IsPrivate() bool { return isPrivateName(t.Name) }
 
 // Decl is a collected top-level var/const declaration, returned unevaluated so a
 // host can fold it into its own dependency-sorting and evaluation pass.

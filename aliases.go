@@ -10,20 +10,26 @@ import (
 
 // aliasDecl is a collected, unresolved top-level `type Name = <type>` declaration.
 type aliasDecl struct {
-	name     string
-	expr     hcl.Expression
-	rhsSrc   string // source text of the aliased type (right-hand side), for rendering (fmt)
-	defRange hcl.Range
+	name string
+	// namespace is the enclosing namespace of the file the alias was collected
+	// from ("" = global), taken from the file's leading `namespace a::b`
+	// declaration. Aliases from the same file share one namespace.
+	namespace string
+	expr      hcl.Expression
+	rhsSrc    string // source text of the aliased type (right-hand side), for rendering (fmt)
+	defRange  hcl.Range
 }
 
 // collectTypeAliases scans a source's token stream for top-level
 // `type Name = <type>` declarations, returning them unresolved. It is a linear
 // scan independent of the main recursive-descent parse, so aliases from every
 // co-loaded source can be gathered (and resolved together) before any source's
-// annotations are resolved — giving aliases a project-wide, order-independent
-// namespace. `type` is recognized only at depth 0 and at a statement start, so it
-// stays usable as an ordinary identifier elsewhere.
-func collectTypeAliases(tokens []token, src []byte, filename string) ([]aliasDecl, hcl.Diagnostics) {
+// annotations are resolved — giving aliases an order-independent, per-namespace
+// name space. `type` is recognized only at depth 0 and at a statement start, so it
+// stays usable as an ordinary identifier elsewhere. ns is the file's namespace
+// (from a leading `namespace a::b`, "" = global); every alias collected here is
+// stamped with it so resolution can scope names own-then-global.
+func collectTypeAliases(tokens []token, src []byte, filename, ns string) ([]aliasDecl, hcl.Diagnostics) {
 	var out []aliasDecl
 	var diags hcl.Diagnostics
 
@@ -43,6 +49,7 @@ func collectTypeAliases(tokens []token, src []byte, filename string) ([]aliasDec
 			decl, next, adiags := parseAliasAt(tokens, i, src, filename)
 			diags = diags.Extend(adiags)
 			if decl != nil {
+				decl.namespace = ns
 				out = append(out, *decl)
 			}
 			i = next
@@ -60,6 +67,35 @@ func collectTypeAliases(tokens []token, src []byte, filename string) ([]aliasDec
 	return out, diags
 }
 
+// leadingNamespace returns the file's namespace from a leading `namespace a::b`
+// declaration ("" = global). A namespace, when present, is required to be the
+// first declaration in the file (enforced by the recursive-descent parser), so it
+// is the first non-terminator token here. This is a best-effort read for stamping
+// aliases; a malformed namespace declaration is diagnosed by parseNamespaceDecl,
+// not here.
+func leadingNamespace(tokens []token) string {
+	i := 0
+	for i < len(tokens) && isTerminator(tokens[i].Type) {
+		i++
+	}
+	if i >= len(tokens) || tokens[i].Type != hclsyntax.TokenIdent || string(tokens[i].Bytes) != "namespace" {
+		return ""
+	}
+	i++ // consume `namespace`
+
+	var segs []string
+	for i < len(tokens) && tokens[i].Type == hclsyntax.TokenIdent {
+		segs = append(segs, string(tokens[i].Bytes))
+		i++
+		if i < len(tokens) && tokens[i].Type == hclsyntax.TokenDoubleColon {
+			i++
+			continue
+		}
+		break
+	}
+	return strings.Join(segs, "::")
+}
+
 // parseAliasAt parses `type Name = <type>` beginning at the `type` token at index
 // i. It returns the declaration (nil on error), the index to continue scanning
 // from (the terminating newline/';'/EOF), and any diagnostics.
@@ -72,6 +108,12 @@ func parseAliasAt(tokens []token, i int, src []byte, filename string) (*aliasDec
 			"Expected type alias name", "A type alias is written: type Name = <type>.")}
 	}
 	nameTok := tokens[nameIdx]
+
+	if string(nameTok.Bytes) == "_" {
+		return nil, skipToTerminator(tokens, nameIdx), hcl.Diagnostics{aliasScanDiag(nameTok.Range,
+			"Invalid type alias name",
+			"`_` is the blank identifier and cannot name a type alias. Use a name like `_spec` for a namespace-local type.")}
+	}
 
 	eqIdx := nameIdx + 1
 	if eqIdx >= len(tokens) || tokens[eqIdx].Type != hclsyntax.TokenEqual {
@@ -138,11 +180,22 @@ func skipToTerminator(tokens []token, i int) int {
 	return i
 }
 
-// resolveTypeAliases resolves the collected aliases into env, order-independently
-// and across all sources. Names are validated up front (no shadowing of built-ins,
-// no duplicates, no collision with host-registered types); the bodies are then
-// resolved in dependency order via a fixpoint, with cycles reported.
-func resolveTypeAliases(aliases []aliasDecl, env *typeEnv) hcl.Diagnostics {
+// resolveTypeAliases resolves one namespace's collected aliases into env,
+// order-independently. It is called once per namespace: namespace is that
+// namespace ("" = global) and env is that namespace's type environment — for the
+// global namespace, a clone of the host's registered types; for a namespaced call,
+// a clone of the resolved global env, so bare names fall back own-then-global.
+// hostTypes is the set of host-registered type names (captured before any alias
+// resolution) used only to warn on a namespaced shadow.
+//
+// Names are validated up front: a built-in keyword may never be redefined (it is
+// resolved before the alias table, so such an alias would be silently dead);
+// duplicates within the namespace are rejected; a *global* alias may not collide
+// with a host-registered type. A *namespaced* alias may shadow a global alias or a
+// host type (own-then-global), but shadowing a host type warns, since it silently
+// changes enforcement. Bodies are then resolved in dependency order via a fixpoint,
+// with cycles reported.
+func resolveTypeAliases(aliases []aliasDecl, env *typeEnv, namespace string, hostTypes map[string]bool) hcl.Diagnostics {
 	var diags hcl.Diagnostics
 
 	names := make(map[string]bool, len(aliases))
@@ -155,13 +208,23 @@ func resolveTypeAliases(aliases []aliasDecl, env *typeEnv) hcl.Diagnostics {
 			continue
 		case names[a.name]:
 			diags = diags.Append(aliasScanDiag(a.defRange, "Duplicate type alias",
-				fmt.Sprintf("Type %q is already defined.", a.name)))
+				fmt.Sprintf("Type %q is already defined in this namespace.", a.name)))
 			continue
 		}
-		if _, exists := env.named[a.name]; exists {
-			diags = diags.Append(aliasScanDiag(a.defRange, "Type alias collides with a registered type",
-				fmt.Sprintf("A type named %q is already registered by the host.", a.name)))
-			continue
+		if namespace == "" {
+			if _, exists := env.named[a.name]; exists {
+				diags = diags.Append(aliasScanDiag(a.defRange, "Type alias collides with a registered type",
+					fmt.Sprintf("A type named %q is already registered by the host.", a.name)))
+				continue
+			}
+		} else if hostTypes[a.name] {
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagWarning,
+				Summary:  "Type alias shadows a host-registered type",
+				Detail: fmt.Sprintf("%q is registered by the host. Within namespace %q this alias shadows it, so annotations using %q here enforce this alias instead of the host type.",
+					a.name, namespace, a.name),
+				Subject: a.defRange.Ptr(),
+			})
 		}
 		names[a.name] = true
 		valid = append(valid, a)

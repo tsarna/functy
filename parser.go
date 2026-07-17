@@ -25,7 +25,12 @@ type parser struct {
 	tokens   []token
 	pos      int
 	diags    hcl.Diagnostics
-	env      *typeEnv
+	// env is the type environment this file resolves annotations against. It starts
+	// as the global env and is swapped for the file's namespace env once the leading
+	// `namespace` declaration is parsed (see parseFile), giving own-then-global type
+	// resolution. envByNS maps every namespace ("" = global) to its resolved env.
+	env     *typeEnv
+	envByNS map[string]*typeEnv
 
 	loops        []string // labels of enclosing loops ("" for an unlabeled loop)
 	pendingLabel string   // a label parsed but not yet attached to its loop
@@ -146,6 +151,12 @@ func (p *parser) parseFile() *Result {
 	if p.atNamespaceKeyword() {
 		if nd := p.parseNamespaceDecl(); nd != nil {
 			p.ns = nd.Name
+			// Resolve this file's annotations against its namespace's env (own
+			// aliases first, then global + host types). Absent when the namespace
+			// declares no aliases of its own, in which case the global env is right.
+			if e, ok := p.envByNS[p.ns]; ok {
+				p.env = e
+			}
 			result.Namespaces = append(result.Namespaces, *nd)
 		}
 	}

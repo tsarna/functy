@@ -5,6 +5,10 @@ namespace acme::net
 
 type cidr = string
 
+// A namespace-local (private) type: resolved and usable within acme::net, but
+// withheld from the exported symbol surface.
+type _octet = number
+
 func mask(s: string) -> string {
     return upper(s)
 }

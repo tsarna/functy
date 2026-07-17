@@ -10,6 +10,22 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Namespace-scoped and private type aliases.** A `type` alias is now scoped to its
+  file's namespace with **own-then-global** resolution, matching functions and consts:
+  an alias declared in `namespace foo` is seen by foo's annotations first, then falls
+  back to the global (unnamespaced) aliases and host-registered types. Two files in
+  different namespaces may each declare `type Id = …` without colliding; a duplicate
+  *within* a namespace is still an error. A namespaced alias shadows a same-named
+  global alias silently and a host-registered type with a **warning** (the enforcement
+  silently changes from identity to structural); a built-in keyword stays reserved in
+  every namespace. A leading-underscore alias (`type _spec = …`) is namespace-local: it
+  resolves and inlines into other aliases of its namespace, but a consumer projecting an
+  export surface — the `symbols` library and `functy symbols` — withholds it via the new
+  `TypeAlias.IsPrivate()`. `TypeAlias` gains a `Namespace` field; `type _` (the blank
+  identifier) is now rejected. See
+  [doc/language.md](doc/language.md#type-aliases). Previously aliases were project-scoped
+  in one flat table, so cross-namespace names collided and privates could not be withheld.
+
 - **Namespace-scoped consts/values.** The `functy` CLI/REPL and the `symbols`
   library now resolve a namespaced file's top-level `const`/`var` within its own
   namespace, instead of the single flat unit-global table used before. Two namespaces

@@ -109,6 +109,14 @@ func TestBuild_NamespaceProjection(t *testing.T) {
 	if c := net.GetAttr("default_cidr"); c != cty.StringVal("10.0.0.0/8") {
 		t.Errorf("symbols.net.default_cidr = %#v", c)
 	}
+
+	// The namespaced type crosses under its label; the private one does not.
+	if ty, ok := built.Type("net", "cidr"); !ok || !ty.Equals(cty.String) {
+		t.Errorf("Type(net, cidr) = %#v, %v; want string", ty, ok)
+	}
+	if _, ok := built.Type("net", "_octet"); ok {
+		t.Errorf("private type _octet must not be exported")
+	}
 }
 
 func TestBuild_WrongNamespaceIsEmpty(t *testing.T) {
@@ -126,6 +134,10 @@ func TestBuild_WrongNamespaceIsEmpty(t *testing.T) {
 	}
 	if attrs := built.Symbols.GetAttr("net").Type().AttributeTypes(); len(attrs) != 0 {
 		t.Errorf("expected no consts for the global surface, got %v", attrs)
+	}
+	// The namespaced `cidr` type must not cross under the global surface either.
+	if _, ok := built.Type("net", "cidr"); ok {
+		t.Errorf("namespaced type cidr must not appear on the global surface")
 	}
 }
 

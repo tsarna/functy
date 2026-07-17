@@ -274,63 +274,30 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
     `import foo::bar as baz` are each just entries in the importing unit's layer. The
     open questions are all language-level (spelling, aliasing, whether a bare import is
     even wanted), not runtime.
-  - **Namespace-scoped type aliases.** Type aliases stay project-scoped (one flat
-    `env.named`, resolved by a token pre-scan before any file is parsed). With functions and
-    consts/values both now namespace-scoped (see the shipped bullet), type aliases are the
-    last top-level construct still project-scoped, so two files in different namespaces still
-    collide on `type Id = …`.
+  - **Namespace-scoped type aliases** — ***shipped.*** Type aliases are now namespace-scoped
+    with **full own-then-global** resolution and `_`-privacy; see `doc/language.md` (*Type
+    aliases*, *Namespaces and visibility*) and `CHANGELOG.md`. Implemented as per-namespace
+    resolved `typeEnv` clones selected per file at *parse* time (`functy.go` `parseSources`,
+    `aliases.go`, `parser.go`) rather than by threading a namespace through the recursive
+    resolver: each namespace's env is a clone of the resolved global env with its own aliases
+    layered on top, so own shadows global and global + host types fall back — no `unitCtxFn`
+    runtime chain, since a type name resolves before any context walk. A namespaced alias may
+    shadow a global alias silently and a host-registered type with a **warning**; a built-in
+    keyword stays reserved everywhere (shadowing it is silently dead). The symbols library
+    (`symbols/projectTypes`) and `functy symbols` filter types by namespace and withhold
+    privates via `TypeAlias.IsPrivate()`. Impact on existing externs was nil (no extern file
+    declares a `type` alias; they reference only global host/built-in/opaque types).
 
-    **The design is the cheap one — per-namespace `typeEnv` buckets with own-then-global
-    resolution** — the direct analogue of the shipped namespace-scoped consts: a bare type
-    name resolves its own namespace first, then the global (unnamespaced) table, then
-    host-registered types. But the *implementation site* differs from functions/vars, which
-    scope through HCL's runtime context-chain walk (`unitCtxFn` adds a child context whose
-    `Functions`/`Variables` maps hold the namespace's bare names). A type name is instead
-    resolved at *parse/resolve* time by a flat-map lookup (`hcl.ExprAsKeyword(expr)` →
-    `env.named[kw]`), long before any context walk, so there is no chain to piggyback on.
-    The change is therefore localized to `aliases.go` + `types.go`: stamp each collected
-    alias with its file's namespace (already available as `p.ns`), make the duplicate check
-    per-namespace, and have the bare-keyword lookup try `named[ns]` then `named[""]` (global)
-    then host types. Host-registered and built-in types stay global.
-
-    A no-`namespace` file is the **commons**: shared types put there are reachable from every
-    namespace via the global fallback, so the "one common-types.cty everyone uses" pattern
-    keeps working. The cross-namespace wall (naming a *foreign* namespace's alias) is the same
-    one consts already accept — and much softer for types, because types are erased and values
-    are structural: a caller in another namespace passes a compatible object literal and never
-    names the type, or holds it in an unannotated (dynamic) var. The only real casualty is a
-    namespace-local alias *over a host capsule/open type* (identity/predicate types can't be
-    reconstructed structurally) — but those host types are globally reachable by their
-    registered name anyway, so the workaround is "use the registered name, don't alias it
-    privately."
-
-    **Impact audited (2026-07): zero on existing extern files.** Across the sibling cty
-    packages, six namespaced extern files exercise the multi-namespace pattern (geo-cty-funcs'
-    `geo`+`sky`, time-cty-funcs' `dns`+`duration`+`time`, url-cty-funcs' `url` — two packages
-    ship several namespaces each), but **no extern file, namespaced or not, declares a `type`
-    alias.** Externs reference only host-registered types (resolved by identity in the global
-    table), built-ins, and unregistered *opaque* names (the extern opaque-type fallback) — all
-    unaffected by alias scoping, since the per-namespace bucket is always empty for an extern
-    and resolution falls straight through to the global/opaque path as today. The one
-    migration-sensitive pattern (an alias declared *inside* a namespaced file and used from
-    *another* namespace) appears nowhere in the corpus — not even in test fixtures, where the
-    single namespaced alias (`symbols/testdata/nslib`) is used only within its own namespace.
-
-    Co-delivers with **`_`-private aliases** (next bullet): an `IsPrivate()` on `TypeAlias`,
-    the `checkDeclName` guard extended to aliases, and the type-export filter land together
-    with this.
-
-    **Escape hatch for a *public-API* type alias.** A namespaced library that wants an alias
-    in its public API hits the spelling blocker: scoping makes the alias namespace-local, and
-    `::` is a *function-call selector* in HCL, so `foo::bar::MyType` in a type annotation is a
-    parse error — a namespaced alias is unreferenceable from outside its namespace. Three
-    answers, in increasing power:
-    1. **A second, unnamespaced file** — works the day scoping ships; honest (the type is
-       genuinely shared) at the cost of a satellite file.
-    2. **A host projection** (the symbols library's `symbols.<label>`) — genuinely exposes the
-       namespaced type under a spellable handle. The real fix, but needs a functy-internal
-       qualified-type syntax to be nameable in an *annotation* (HCL can't parse `foo::bar::T`
-       in type position — see the blocker above).
+    What remains is the cross-namespace **public-API** story — a namespaced alias is still
+    unreferenceable from *outside* its namespace, since `::` is a *function-call selector* in
+    HCL, so `foo::bar::MyType` in a type annotation is a parse error. Three answers, in
+    increasing power:
+    1. **A second, unnamespaced file** — works today; honest (the type is genuinely shared) at
+       the cost of a satellite file.
+    2. **A host projection** (the symbols library's `symbols::<label>::types(name)`) — genuinely
+       exposes the namespaced type under a spellable handle. The real fix, but needs a
+       functy-internal qualified-type syntax to be nameable in an *annotation* (HCL can't parse
+       `foo::bar::T` in type position — see the blocker above).
     3. **A `@public` marker** (working name) on the declaration — fits the marker-annotation
        tier motivated by `@standalone` (see *Annotations*), so it is nearly free once that
        plumbing lands. `@public type bar` inside `namespace foo` is **dual-homed**: it
@@ -358,20 +325,15 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
     and never name the library's type. So ship scoping first, let the second-file workaround
     stand as the honest answer, and add `@public` only if the pain materializes — conveniently
     about when the annotation tier lands for `@standalone`.
-  - **`_` visibility is not wired to type aliases.** The leading-underscore convention is
-    enforced for functions (private ones withheld from the exported map in `builder.go`) and
-    is advisory for `var`/`const` (`Decl.IsPrivate()` exists; the host decides), but
-    **`TypeAlias` has no `IsPrivate()` at all** — `isPrivateName` is never consulted for
-    types. `parseAliasAt` even accepts a bare `_` as an alias name, unlike the
-    `checkDeclName` guard on `func`/`const`/`var`. This is harmless today because there is no
-    type-*export* path to withhold an alias from: aliases are compile-time, project-scoped,
-    and inlined at resolve time, so a `_`-prefixed alias is an ordinary alias that merely
-    reads as private. It stops being harmless once a projection *does* export types — e.g.
-    the OpenTofu symbol-library use (`OPENTOFU-SYMBOLS.md`), whose "unexported symbols"
-    story relies on `_spec` being skipped on export. That wants, together: an `IsPrivate()`
-    accessor on `TypeAlias`, the `checkDeclName` guard extended to aliases, and the export
-    filter itself — which lands with the namespace-scoped-alias and type-export work above,
-    not before it.
+  - **`_` visibility on type aliases** — ***shipped*** alongside the namespace-scoped-alias
+    work above. `TypeAlias.IsPrivate()` exists, `parseAliasAt` rejects a bare `_` alias name
+    (matching the `checkDeclName` guard on `func`/`const`/`var`), and the symbols export path
+    (`symbols/projectTypes`) and `functy symbols` withhold `_`-prefixed aliases — so the
+    OpenTofu symbol-library "unexported symbols" story (`OPENTOFU-SYMBOLS.md`), which relies on
+    `_spec` being skipped on export, now holds. A private alias is still resolved and inlined
+    into exported aliases of its namespace (`type items = list(_spec)`), just not named on the
+    surface. Nothing remains here except whatever a *new* type-export path chooses to do with
+    the same `IsPrivate()` accessor (e.g. the `@public` marker above).
   - **HCL's "no functions in namespace" diagnostic is misleading inside functy bodies.**
     HCL builds its available-names list from the *innermost* context only
     (`hclsyntax/expression.go`), which at a functy eval site is the scope child (whose
