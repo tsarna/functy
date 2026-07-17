@@ -16,33 +16,18 @@ Designs that were worked out and then *declined* are not here — they live in
 
 ## Standard library
 
-functy ships its own **optional** standard library — `functy.Stdlib()` (`typeof`, `typekind`,
-`cond`, `switch`, `error`, `assert`) and the opt-in `functy.StdlibExtras()` (`try`,
-`can`) — dependency-free builtins that make HCL expressions more capable (see
-`doc/stdlib.md`). Remaining additions to that library:
+functy ships an optional standard library (`functy.Stdlib()` / `functy.StdlibExtras()`);
+see `doc/stdlib.md`. Remaining additions:
 
-- **`assert` sub-expression decomposition** — `assert(cond, message?)` ships with
-  variables-only operand capture and host-side diagnostic rendering (see
-  `doc/stdlib.md`). **Remaining:** reporting `len(xs) = 2`, not just `xs`, by
-  re-evaluating operand sub-expressions — opt-in, since it re-runs any function calls
-  in the condition.
+- **`assert` sub-expression decomposition** — `assert` ships with variables-only operand
+  capture. **Remaining:** report `len(xs) = 2`, not just `xs`, by re-evaluating operand
+  sub-expressions — opt-in, since it re-runs any function calls in the condition.
 - **`eval`** — evaluate a lazy / by-expression parameter; ships with the lazy
   `expr`-parameter story (see *Functions* below), since the two are the same feature
   from the author's side.
-- **`doc(name)` — function-doc reflection** — *shipped* (`functy.DocFunc`). Possible
-  later extension: a value-taking overload (`doc(add)`) if functions ever become
-  first-class values (see *First-class function values / closures*).
-- **`help(name)` — function help reflection** — *shipped* (`functy.HelpFunc`) for both
-  functy and non-functy functions. Known limitation: a Go builtin that emulates
-  optional/defaulted args through a `VarParam` can't be shown with its intended
-  signature — that structure isn't recoverable from cty. Possible extensions:
-  - **Host-registered argument docs for Go builtins** (addresses the limitation
-    above). Let a host supply proper signature/parameter metadata for its
-    `VarParam`-based builtins — a small registry (name → parameter names, optionality,
-    per-arg docs) that `HelpFunc` consults *before* falling back to raw cty
-    introspection. Open: the registration shape (a plain struct vs. reusing `FuncDecl`),
-    and whether it also feeds `doc()`.
-  - A value form when/if functions become values.
+- **`doc(name)` extension** — a value-taking overload (`doc(add)`) if functions ever
+  become first-class values (see *First-class function values / closures*).
+- **`help(name)` value form** — what remains is a value form when/if functions become values.
 - **Reflection over global variables** (not urgent) — extend `doc()` / `help()` (or a
   sibling builtin) to *variables*, not just functions, with two sources mirroring the
   function story:
@@ -52,8 +37,9 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
   - **host-defined** globals — `env`, `sys`, ambient providers, `http_status`, … — are
     plain cty values in the eval context's `Variables`, and **a cty value carries no
     description** (unlike `function.Spec.Description`), so their docs must come from a
-    **host-registered** table (name → doc) — the same registry shape proposed above for
-    Go builtins' argument docs, so the two could share one mechanism.
+    **host-registered** table (name → doc). A variable has no extern equivalent — an extern
+    declares a *function* signature — so unlike Go builtins (fixed by declaring an extern),
+    this genuinely needs a new registration path.
 
   Open: name-collision handling (HCL keeps `Functions` and `Variables` in separate
   namespaces, but `doc("x")` takes a single string — check both, or add a namespacing
@@ -67,58 +53,15 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
 
 ## Functions
 
-- **`extern` declarations** — *shipped*; see `doc/language.md`, *Extern declarations*. The
-  `//functy:extern` file directive, bodiless `func` declarations routed to `Result.Externs`,
-  the `name?` optional-without-default marker, relaxed parameter ordering in externs, opaque
-  unregistered types, and `help()` / `symbols` / `fmt` support all landed together. What
-  remains of the original entry is below: `RegisterExterns`, overload sets, the
-  documented-vs-registered lint, and `?` outside extern files.
-
-- **`RegisterExterns([]byte)` — shipping an extern file from a leaf package.** Parsing an
-  extern file is shipped; *distributing* one is not. The point is **zero coupling in both
-  directions**: the leaf package exports its extern block as an opaque
-  `var Externs = []byte(…)` (a raw-string literal) and never imports functy; functy never
-  imports the leaf package; the glue that already knows about both (the consuming program,
-  or a `RegisterFunctyType`-style hook) calls `functy.RegisterExterns(pkg.Externs)`. This
-  beats the obvious alternative — a shared `functydoc` struct package both sides import —
-  which reintroduces a shared dependency and forces inventing a second doc format instead
-  of reusing functy's own source as the single source of truth. Recorded so the `[]byte`
-  choice isn't re-litigated.
-
-  Purely additive: `Result.Externs` already exists, so this adds a registration path, not a
-  shape. Cost, stated honestly: no *runtime* cost unless `RegisterExterns` is called
-  (parsing is deferred to registration); binary-size cost is at most the literal bytes, and
-  only if the linker doesn't dead-code-eliminate the unreferenced `var`. The trade-off of
-  the bytes format is that a malformed extern block fails at **registration time
-  (runtime)**, not compile time.
-
-  **How much is actually broken (audited 2026-07).** Across the eight sibling cty packages
-  that export functions, **37 of 80 functions (46%) use `VarParam`, and only 2 of those 37 are
-  honest variadics** (`urljoinpath`, and arguably `call`). The other 35 are `VarParam` abused
-  to fake something cty cannot express, so their registered `function.Parameter` list is a lie
-  and nothing can be generated from it. Counting vinculum's own functions too, it is 62
-  `VarParam` functions out of the 192 it registers, 54 of them fakes. The 35 break down as:
-
-  | kind | count | example |
-  | --- | --- | --- |
-  | optional trailing arg | 9 | `barcode(type, data [, opts])` |
-  | defaulted trailing arg | 8 | `fromunix(n [, unit="s"])` |
-  | optional leading `ctx` | 11 | the whole rich-cty-types `get`/`set`/`count` family |
-  | genuine overload | 7 | `duration("5m")` vs `duration(5, "m")` |
-
-  All four groups are now expressible: the first three by the extern's optional/defaulted
-  parameters and the `?` marker, the fourth by overload sets.
-
-  (Genuine variadics needed nothing: a homogeneous unbounded tail is `*rest: T`, which the
-  grammar already spelled. The `VarParam` problem was never that functy couldn't express
-  variadics — it is that cty functions use `VarParam` for things that *aren't* variadic.)
-
+- **`extern` declarations** — *shipped*, including `RegisterExterns`; see `doc/language.md`,
+  *Extern declarations*. What remains, below: the documented-vs-registered lint,
+  and type-checking calls into externs.
 - **Documented-vs-registered lint.** Because externs name real registered functions, a host
   (or `functy check`) can cross-check them and flag *documented-but-unimplemented* and
   *implemented-but-undocumented* — precisely a diff between `Result.Externs` and the host's
   registry. A leaf package can take a **build-time-only** dependency on functy to run this
   over its own extern block in CI (optionally a `--externs-only` mode) without pulling functy
-  into its runtime graph. Wants `RegisterExterns` first.
+  into its runtime graph. (`RegisterExterns`, its prerequisite, has shipped.)
 - **Type-checking calls into externs.** An extern is a real signature, so `check` could
   verify calls into the host library, which it cannot do today (a host function is an opaque
   cty value). This is the reason the construct is named `extern` rather than something built
@@ -126,10 +69,9 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
   here. Wants overload sets first, since a call must be checked against *any* of a name's
   forms.
 - **Overload sets** — *shipped*; see `doc/language.md`, *Overload sets*. An extern file may
-  declare one name more than once, each decl a distinct form, each carrying its own return
-  type — which is what makes a function whose result type depends on its arguments (`timeadd`,
-  `timesub`) sayable at all. It needed no new syntax and no API change, because
-  `Result.Externs` was made a slice for exactly this. What remains of the original entry:
+  declare one name more than once, each decl a distinct form with its own return type
+  (what makes `timeadd` / `timesub`, whose result type depends on arguments, sayable at
+  all). What remains:
 
   - **Union types are still the trap — do not reach for them.** `duration(val: string|number,
     unit?: string)` looks like the tidier fix and is a lie: the constraint is *correlated
@@ -160,25 +102,20 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
     so the answer there is named args, not more signature syntax.
 
 - **Patterned varargs — knowingly out of scope.** A few functions have a tail that is a
-  *shape* rather than a homogeneous list, which `*rest: T` cannot describe: `cond(c1, r1, c2,
-  r2, …, else)` (repeating pairs plus a trailing required arg — odd arity), `switch(on, v1,
-  r1, …, [default])` (repeating pairs where a trailing optional is signalled by arity
-  *parity*), and the `log_*` family (either N positional values **or** exactly one map — a
-  disguised overload, so an overload set actually covers that one).
-
-  A repeating-group syntax would express them — `func cond(*(condition: bool, result: any),
-  else: any)`, with a required param permitted *after* the variadic since externs are never
-  compiled — but this is not worth a grammar extension: it is ~3 functions, all in functy's
-  own stdlib rather than in the host packages extern exists to serve, and `switch`'s
-  parity-encoded optional is arguably a smell in `switch` rather than a gap in the signature
-  language. The cheap alternative — a `//functy:signature cond(c1, r1, …, else)` escape hatch
-  supplying a hand-written rendering — is **not currently cheap either**: it depends on
-  **per-function directives**, which aren't implemented (only file-scope directives are
-  collected today; see *Directive comments* in `doc/language.md`). Until one of those lands,
-  a prose doc comment is the proportionate answer — and each of these functions (`cond`,
-  `switch`, `try`, `error`, `assert`) now carries a complete `Description` plus a
-  parameter/variadic description explaining its shape, so `help()`/`doc()` describe them in
-  full even though the signature line still renders the tail as `*exprs: expression closure`.
+  *shape* rather than a homogeneous list, which `*rest: T` cannot describe: `cond(c1, r1,
+  c2, r2, …, else)` (repeating pairs plus a trailing required arg — odd arity),
+  `switch(on, v1, r1, …, [default])` (trailing optional signalled by arity *parity*), and
+  the `log_*` family (N positional values **or** exactly one map — a disguised overload an
+  overload set covers). A repeating-group syntax — `func cond(*(condition: bool, result:
+  any), else: any)` — would express them, but is not worth a grammar extension: ~3
+  functions, all in functy's own stdlib rather than the host packages extern exists to
+  serve, and `switch`'s parity-encoded optional is arguably a smell in `switch`. The cheap
+  escape hatch — a `//functy:signature cond(c1, r1, …, else)` hand-written rendering —
+  depends on **per-function directives**, not yet implemented (see *Per-function
+  directives* under *Type system*). Until then a prose doc comment is the proportionate
+  answer, and each of these functions already carries a full `Description` so `help()` /
+  `doc()` describe them despite the signature line rendering the tail as `*exprs:
+  expression closure`.
 - **Declaration visibility (`_` prefix)** — *shipped*, as one feature with namespacing; see
   **Namespaces + `_` visibility** under *Top-level constructs* for what remains, and
   `doc/language.md` for the feature itself.
@@ -249,22 +186,13 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
 
 ## Top-level constructs
 
-- **Namespaces + `_` visibility — unit-scoped names** — *shipped.* A file may open with
-  `namespace foo::bar`; its functions register with the host under qualified names while
-  the namespace's own functions call each other by bare names, and a `_`-prefixed
-  declaration is namespace-local (compiled, callable within the namespace, never handed
-  to the host). A namespace spans files; nesting is a naming convention, not containment
-  (no parent fallback). Implemented as a name-resolution *layer* in the eval-context
-  chain: `unitCtxFn` (`builder.go`) wraps the host's late-bound context in a child whose
-  `Functions` map holds the namespace's bare names, and HCL's chain walk does the
-  resolving. The same layer now also carries a per-namespace `Variables` scope, so
-  top-level `const`/`var` are namespace-scoped as well — the host fills `Compiled.Vars`
-  (functy takes no position on what a value means; `EvalNamespacedDecls` is the own+global
-  convenience), and both the CLI/REPL and the `symbols` library use it. See
-  `doc/language.md` (*Namespaces and visibility*, *Namespace-scoped consts and values*)
-  and `CHANGELOG.md`.
-
-  Remaining work, in rough order of appeal:
+- **Namespaces + `_` visibility** — *shipped*; see `doc/language.md` (*Namespaces and
+  visibility*, *Namespace-scoped consts and values*) and `CHANGELOG.md`. A file may open
+  with `namespace foo::bar`; its functions register under qualified names while calling
+  each other by bare names, and a `_`-prefixed declaration is namespace-local. A namespace
+  spans files; nesting is a naming convention, not containment. Top-level `const`/`var` are
+  namespace-scoped too (the host fills `Compiled.Vars`; `EvalNamespacedDecls` is the
+  own+global convenience). Remaining work, in rough order of appeal:
 
   - **Module / import.** Deliberately excluded from the shipped feature — a namespace is
     usable immediately via its fully-qualified name, so imports are purely additive and
@@ -274,19 +202,6 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
     `import foo::bar as baz` are each just entries in the importing unit's layer. The
     open questions are all language-level (spelling, aliasing, whether a bare import is
     even wanted), not runtime.
-  - **Namespace-scoped type aliases** — ***shipped.*** Type aliases are now namespace-scoped
-    with **full own-then-global** resolution and `_`-privacy; see `doc/language.md` (*Type
-    aliases*, *Namespaces and visibility*) and `CHANGELOG.md`. Implemented as per-namespace
-    resolved `typeEnv` clones selected per file at *parse* time (`functy.go` `parseSources`,
-    `aliases.go`, `parser.go`) rather than by threading a namespace through the recursive
-    resolver: each namespace's env is a clone of the resolved global env with its own aliases
-    layered on top, so own shadows global and global + host types fall back — no `unitCtxFn`
-    runtime chain, since a type name resolves before any context walk. A namespaced alias may
-    shadow a global alias silently and a host-registered type with a **warning**; a built-in
-    keyword stays reserved everywhere (shadowing it is silently dead). The symbols library
-    (`symbols/projectTypes`) and `functy symbols` filter types by namespace and withhold
-    privates via `TypeAlias.IsPrivate()`. Impact on existing externs was nil (no extern file
-    declares a `type` alias; they reference only global host/built-in/opaque types).
 
     What remains is the cross-namespace **public-API** story — a namespaced alias is still
     unreferenceable from *outside* its namespace, since `::` is a *function-call selector* in
@@ -325,15 +240,6 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
     and never name the library's type. So ship scoping first, let the second-file workaround
     stand as the honest answer, and add `@public` only if the pain materializes — conveniently
     about when the annotation tier lands for `@standalone`.
-  - **`_` visibility on type aliases** — ***shipped*** alongside the namespace-scoped-alias
-    work above. `TypeAlias.IsPrivate()` exists, `parseAliasAt` rejects a bare `_` alias name
-    (matching the `checkDeclName` guard on `func`/`const`/`var`), and the symbols export path
-    (`symbols/projectTypes`) and `functy symbols` withhold `_`-prefixed aliases — so the
-    OpenTofu symbol-library "unexported symbols" story (`OPENTOFU-SYMBOLS.md`), which relies on
-    `_spec` being skipped on export, now holds. A private alias is still resolved and inlined
-    into exported aliases of its namespace (`type items = list(_spec)`), just not named on the
-    surface. Nothing remains here except whatever a *new* type-export path chooses to do with
-    the same `IsPrivate()` accessor (e.g. the `@public` marker above).
   - **HCL's "no functions in namespace" diagnostic is misleading inside functy bodies.**
     HCL builds its available-names list from the *innermost* context only
     (`hclsyntax/expression.go`), which at a functy eval site is the scope child (whose
@@ -473,23 +379,14 @@ functy ships its own **optional** standard library — `functy.Stdlib()` (`typeo
 
   - **Tier 1 — per-frame loop guard (self-contained; ship first). — IMPLEMENTED.**
     Shipped as `Parser.MaxSteps(n)` (0 = unbounded): a per-`interp` step counter
-    incremented once per statement in `execBlock` *and* once per loop backedge (the
-    backedge tick is needed so an empty-bodied `for {}` is still caught). A breach
-    raises an uncatchable `*LimitError` (modeled on `SkipError`; `try`/`catch` and
-    `val, err =` re-propagate it, and defers/finally are skipped). The `functy` CLI
-    exposes it as `--max-steps` with a generous default. Test bodies are bounded too.
-    The original design notes follow. A step / iteration
-    counter on `interp` (constructed per invocation in `BuildFunction`'s `Impl`, so each
-    call gets its own), incremented at every loop backedge in `execForCond` /
-    `execForClause` / `execForRange` — and optionally per statement in `execBlock` for a
-    finer bound. The ceiling is a `Parser` setter (e.g. `MaxSteps(n)` / `MaxLoopIterations(n)`,
-    mirroring `RequireParamTypes`), captured **immutably at compile time** into the `Impl`
-    closure — so it rides the existing option plumbing and is **trivially concurrency-safe**:
-    no shared mutable state, each invocation counts in isolation. This catches the
-    motivating case — a single function's unbounded `for` / `while` — with zero cross-call
-    machinery. It does **not** catch recursion / mutual recursion (each nested call is a
-    fresh `interp` whose counter starts at zero) nor aggregate work spread across many
-    small calls. That is Tier 2.
+    incremented once per statement in `execBlock` *and* once per loop backedge (so an
+    empty-bodied `for {}` is still caught), captured immutably at compile time into the
+    `Impl` closure (concurrency-safe: no shared mutable state). A breach raises an
+    uncatchable `*LimitError`; the CLI exposes `--max-steps` with a generous default, and
+    test bodies are bounded too. This catches a single function's unbounded `for` / `while`.
+    It does **not** catch recursion / mutual recursion (each nested call is a fresh `interp`
+    whose counter starts at zero) nor aggregate work spread across many small calls — that
+    is Tier 2.
 
   - **Tier 2 — evaluation-wide budget (shared; the harder half).** A shared
     `budget{ steps, maxSteps, deadline }` reachable by **every** `interp` participating in
@@ -567,22 +464,14 @@ links the library directly and supplies its own richer context). Planned additio
   go-to-definition, completion. Editor-agnostic; the VSCode extension below is its
   first client (and can ship static features ahead of the server).
 - **VSCode extension for `.cty`** — *shipped* (separate repo `vscode-functy`, its own
-  `README.md` / `CHANGELOG.md` / `FUTURE.md`). The static + CLI-command layer is done:
-  TextMate grammar, language config, snippets, Run/Check/Format, Evaluate Selection,
-  Run-with-arguments, REPL integration, version gating, tasks + workspace commands, the
-  `functy symbols`-backed outline, the Test Explorer (driven by `functy test --json`) with
-  continuous run, and a Get Started walkthrough. **Remaining on the functy side:** the
-  language server (see *LSP / editor support* above and the linked `functy lsp --stdio`
-  work) — the extension already has the client wiring planned and becomes its consumer,
-  upgrading diagnostics/hover/definition/completion without touching the static layer.
-- **Machine-readable CLI surfaces for editor tooling (a pre-LSP bridge).** Small,
-  JSON-emitting CLIs that expose *LSP primitives over the CLI* (reusing the parser, type
-  checker, `help`/`doc` reflection, and `functy.Format`) so an editor gets "IDE feel"
-  without the language server. The high-leverage ones have **shipped and are adopted** by
-  `vscode-functy`: `check --json -` / `run --json -` (stdin + `--filename` → live on-type
-  diagnostics), `eval --json`, `symbols --json` (outline + test discovery), and
-  `version --json`. Their JSON contracts now have downstream consumer tests in
-  `vscode-functy` (`src/protocol.ts`), so treat a shape change as breaking. Still wanted:
+  `README.md` / `CHANGELOG.md` / `FUTURE.md`). 
+  **Remaining on the functy side:** the language server (see *LSP / editor support* above)
+- **Machine-readable CLI surfaces for editor tooling (a pre-LSP bridge).** JSON-emitting
+  CLIs that expose *LSP primitives over the CLI* so an editor gets "IDE feel" without the
+  language server. The high-leverage ones have **shipped and are adopted** by
+  `vscode-functy` (`check`/`run`/`eval`/`symbols`/`version` with `--json`); their JSON
+  contracts have downstream consumer tests in `vscode-functy` (`src/protocol.ts`), so treat
+  a shape change as breaking. Still wanted:
   - **`functy doc --json <name>` / `functy help --json <name>`.** `DocFunc` / `HelpFunc`
     already produce this content; a JSON form lets a client render **pre-LSP hovers** (spawn
     on hover, cache) — a stepping stone toward the LSP hover, reusing the same reflection
@@ -593,77 +482,13 @@ links the library directly and supplies its own richer context). Planned additio
 
   The CLI forms are not throwaway: the LSP later provides the same information in-process,
   but they remain useful for scripting and non-LSP editors.
-- **Parser/lexer error-recovery hardening (for mid-edit tooling)** — *the two
-  file-swallowing cases are shipped.* The parser already recovered well —
-  `recoverToTopLevel` / `skipToParamBoundary` / `recoverToStatementEnd` let
-  `symbols`/`check` still report the declarations *around* a syntax error, so an editor
-  outline survives most transient edits (a half-typed expression, an incomplete parameter).
-  Two cases used to truncate everything after the error, both common **while typing**;
-  both are now fixed:
-  - **An unterminated `{`** (you've typed `func f() {` but not the closing brace) made the
-    body swallow the rest of the file — the block-open had no matching close, so
-    `recoverToTopLevel` never found the next declaration boundary. *Fixed* in
-    `parseStatements` (`parser.go`): a `func` keyword can never appear at statement
-    position (closures / nested functions are a non-goal — see DESIGN.md), so it is an
-    unambiguous signal that an enclosing block was left open and the next top-level
-    declaration has leaked into this body. The statement loop breaks on it, the body
-    reports its missing `}`, and `parseFile` resynchronizes on the leaked `func`.
-    (`func` is the only *unconditionally* safe resync token: `var` is legal in a body,
-    `const` has its own in-body diagnostic, and `test`/`type` are contextual idents that
-    are legal as ordinary expressions — so gating those on column-0 would risk breaking
-    valid code, whereas `func` alone covers the dominant real case.)
-  - **Unterminated quoted string** (`return "oops` with no closing quote) — the *real*
-    lexer-level derailment. HCL enters string mode and consumes the entire rest of the
-    file as `TokenQuotedLit`/`TokenQuotedNewline` content (the closing brace, every later
-    declaration), so `recoverToTopLevel` never sees another keyword. *Fixed* in `lexAll`
-    (`lexer.go`): on the `TokenQuotedNewline` marker HCL emits for the offending newline,
-    the broken string is cut, a real newline is emitted to terminate the statement, and
-    the remainder is re-lexed from just past the marker (`LexConfig` honors the start
-    position, so ranges stay absolute); one genuine "Invalid multi-line string"
-    diagnostic is kept and the phantom per-line ones are dropped. (Note: the *originally
-    recorded* second case — "stray `@`, `$`, backtick" — turned out **not** to be broken:
-    HCL emits a lone `TokenInvalid`/`TokenBacktick` and keeps the rest of the stream
-    coherent, so existing parser recovery already handled those. The unterminated string
-    is the case that actually swallowed the file.)
-
-  Remaining nicety (lower priority): an **unterminated heredoc** (`<<EOT` with no closing
-  marker) is the same class as the unterminated string but derails via a different token
-  pattern (`TokenOHeredoc` without a close) and is not yet resynchronized. Rare enough to
-  defer. Neither shipped fix is required for correctness — a file that doesn't parse is
-  genuinely broken — but both let any `symbols`/`check`-backed tool (outline, test
-  discovery, on-type diagnostics) keep working through the transient breakage of live
-  editing, matching the resilience of the regex scanner the parser-backed outline replaced.
-- **Inline tests** — *shipped*: co-located `test "…" { … }` blocks, the core runner
-  (`(*Result).RunTests` / `RunTestsMatching`), the `functy test` CLI verb (quiet/`-v`,
-  `--run` name filter, machine-readable `--json` report, and no-argument discovery of
-  `.cty` files in the working directory) and a test-only `skip("reason")` builtin (see
-  `doc/language.md#tests`). Per-test setup/teardown is already expressible (leading
-  statements + `defer`). Remaining niceties: soft / non-fatal assertions or a `t`-style
-  test context (today a test stops at its first failure, like Go/pytest); and shared
-  `beforeEach`-style setup (fresh mutable fixtures per test).
-- **Add-on package "functy-readiness" convention.** Sibling cty add-on packages
-  (`bytes-cty-type`, `url-cty-funcs`, `rich-cty-types`, `time-cty-funcs`, …) should let
-  a program that links *both* functy and the package register the package's type(s) in
-  one line — **without** the package importing functy. This is possible because functy's
-  registration entry points consume only go-cty vocabulary: `RegisterType(name, cty.Type)`
-  and `RegisterOpenType(name, func(cty.Value) error)`. So a package becomes functy-ready
-  by exporting, in go-cty terms only:
-  - its `cty.Type` (most already do) — for identity registration (`RegisterType`), which
-    **nests** (`list(bytes)`) but is closed/exact; and
-  - for marker-capsule / open types, a predicate `Is<Thing>(cty.Value) error` (e.g.
-    `rich-cty-types` adding `IsContextObject` wrapping `GetContextFromValue`) — for
-    non-destructive open registration (`RegisterOpenType`), currently leaf-only.
-
-  The host picks identity vs. open per type.
-- **An OpenTofu provider — see `OPENTOFU-PROVIDER.md`.** OpenTofu 1.7 lets a *configured* provider
-  mint functions dynamically (an OpenTofu-only protocol feature), so a `functy` provider
-  handed `file("./lib.cty")` can expose real, statically-typed `provider::functy::name`
-  functions — **no core change, no fork, and no build step for the user.** Two
-  proof-of-concept providers (Go/Yaegi and Lua) already do this with other languages;
-  functy fits better than either, since a compiled functy function *is* already a
-  `cty.Function` with a static signature. Nothing is planned, but this is the one
-  Terraform-adjacent idea that is buildable today. What is *not* possible — on Terraform,
-  and in the language itself — is analyzed separately in `TERRAFORM.md`.
+- **Parser/lexer error-recovery hardening (for mid-edit tooling)** — the two
+  file-swallowing cases are *shipped*. Remaining nicety (lower priority): an **unterminated heredoc** (`<<EOT` with no closing
+  marker) is the same class but derails via a different token pattern (`TokenOHeredoc`
+  without a close) and is not yet resynchronized. Rare enough to defer.
+- **Inline tests** — *shipped*: Remaining niceties: soft /
+  non-fatal assertions or a `t`-style test context (today a test stops at its first
+  failure); and shared `beforeEach`-style setup (fresh mutable fixtures per test).
 
 ## Type system
 
