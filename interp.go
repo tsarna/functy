@@ -3,6 +3,7 @@ package functy
 import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/convert"
 )
 
 // interp holds the state for one function invocation: the late-bound host eval
@@ -234,10 +235,11 @@ func (ip *interp) execIfChain(s *IfChain, scope *Scope, ctx *hcl.EvalContext) (*
 		if diags.HasErrors() {
 			return nil, diags
 		}
-		if cond.IsNull() {
-			return nil, condNullErr(branch.Condition.Range())
+		b, cdiags := condBool(cond, branch.Condition.Range())
+		if cdiags.HasErrors() {
+			return nil, cdiags
 		}
-		if cond.True() {
+		if b {
 			return ip.execBlock(branch.Body, NewScope(scope))
 		}
 	}
@@ -307,7 +309,11 @@ func (ip *interp) switchStart(s *Switch, ctx *hcl.EvalContext) (int, hcl.Diagnos
 			} else {
 				hit = subj.Equals(cv)
 			}
-			if !hit.IsNull() && hit.True() {
+			b, cdiags := condBool(hit, ve.Range())
+			if cdiags.HasErrors() {
+				return -1, cdiags
+			}
+			if b {
 				return i, nil
 			}
 		}
@@ -337,10 +343,11 @@ func (ip *interp) execForCond(s *For, scope *Scope) (*Signal, hcl.Diagnostics) {
 			if diags.HasErrors() {
 				return nil, diags
 			}
-			if cond.IsNull() {
-				return nil, condNullErr(s.Cond.Range())
+			b, cdiags := condBool(cond, s.Cond.Range())
+			if cdiags.HasErrors() {
+				return nil, cdiags
 			}
-			if !cond.True() {
+			if !b {
 				return nil, nil
 			}
 		}
@@ -373,10 +380,11 @@ func (ip *interp) execForClause(s *For, scope *Scope) (*Signal, hcl.Diagnostics)
 			if diags.HasErrors() {
 				return nil, diags
 			}
-			if cond.IsNull() {
-				return nil, condNullErr(s.Cond.Range())
+			b, cdiags := condBool(cond, s.Cond.Range())
+			if cdiags.HasErrors() {
+				return nil, cdiags
 			}
-			if !cond.True() {
+			if !b {
 				return nil, nil
 			}
 		}
@@ -500,7 +508,7 @@ func (ip *interp) clauseMatches(c CatchClause, errVal cty.Value, catchScope *Sco
 		if diags.HasErrors() {
 			return false, diags
 		}
-		return !v.IsNull() && v.True(), nil
+		return condBool(v, c.Guard.Range())
 	}
 	return true, nil
 }
@@ -631,6 +639,45 @@ func condNullErr(rng hcl.Range) hcl.Diagnostics {
 		Severity: hcl.DiagError,
 		Summary:  "Null condition",
 		Detail:   "A condition expression evaluated to null; it must be true or false.",
+		Subject:  rng.Ptr(),
+	}}
+}
+
+// condBool coerces a condition value to a Go bool, producing a clean diagnostic
+// rather than panicking (cty.Value.True panics on any non-Bool value and on an
+// unknown Bool). rng underlines the offending condition expression.
+//
+// An unknown condition currently yields an evaluation error. A future refinement
+// could instead propagate the unknown as an unknown function result rather than
+// erroring; that is a larger semantic change and intentionally not done here.
+func condBool(v cty.Value, rng hcl.Range) (bool, hcl.Diagnostics) {
+	if v.IsNull() {
+		return false, condNullErr(rng)
+	}
+	bv, err := convert.Convert(v, cty.Bool)
+	if err != nil {
+		return false, condTypeErr(rng)
+	}
+	if !bv.IsKnown() {
+		return false, condUnknownErr(rng)
+	}
+	return bv.True(), nil
+}
+
+func condTypeErr(rng hcl.Range) hcl.Diagnostics {
+	return hcl.Diagnostics{{
+		Severity: hcl.DiagError,
+		Summary:  "Non-boolean condition",
+		Detail:   "A condition expression must be true or false.",
+		Subject:  rng.Ptr(),
+	}}
+}
+
+func condUnknownErr(rng hcl.Range) hcl.Diagnostics {
+	return hcl.Diagnostics{{
+		Severity: hcl.DiagError,
+		Summary:  "Unknown condition",
+		Detail:   "A condition expression evaluated to an unknown value; its result must be known to decide the branch.",
 		Subject:  rng.Ptr(),
 	}}
 }

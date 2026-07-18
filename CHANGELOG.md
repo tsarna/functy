@@ -85,6 +85,21 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **Non-boolean and unknown conditions no longer panic.** Every condition site (`if`,
+  `while`, three-clause `for`, an expression-less `switch` case, a `catch … if` guard,
+  and the stdlib `cond()` / `assert()` builtins) called `cty.Value.True()` after only a
+  null check. That panics ("not bool") on any non-Bool value and on an unknown Bool, so
+  an ordinary type mistake like `if 5 { }` — or a condition referencing a host-provided
+  unknown value — leaked a Go stack trace ("panic in function implementation: not bool")
+  instead of a diagnostic (and would be a real crash on any path that drives the
+  interpreter outside `cty.Function.Call`, which today recovers it). A shared `condBool`
+  helper now converts the value to Bool and returns a clean diagnostic: null → "Null
+  condition", non-boolean → "Non-boolean condition", unknown → "Unknown condition"
+  (pointing at the offending expression). The switch subject-match test is guarded the
+  same way, so an unknown operand yields a clean error rather than a panic. (An unknown
+  condition currently errors; propagating it as an unknown result is left as a possible
+  future refinement.)
+
 - **`functy fmt` no longer corrupts heredoc string values.** The formatter re-indents
   the continuation lines of every reformatted expression, but did not exclude heredoc
   *body* lines — whose bytes are literal string content. A body-level `<<EOT` heredoc

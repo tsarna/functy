@@ -152,6 +152,9 @@ var assertFunc = function.New(&function.Spec{
 		if bv.IsNull() {
 			return cty.NilVal, errors.New("assert: condition is null")
 		}
+		if !bv.IsKnown() {
+			return cty.NilVal, errors.New("assert: condition is not known")
+		}
 		if bv.True() {
 			return cty.True, nil
 		}
@@ -222,6 +225,9 @@ var condFunc = function.New(&function.Spec{
 			}
 			if bv.IsNull() {
 				return cty.NilVal, fmt.Errorf("cond: condition #%d is null", i/2+1)
+			}
+			if !bv.IsKnown() {
+				return cty.NilVal, fmt.Errorf("cond: condition #%d is not known", i/2+1)
 			}
 			if bv.True() {
 				return evalClosure(args[i+1], fmt.Sprintf("cond: result #%d", i/2+1))
