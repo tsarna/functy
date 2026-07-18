@@ -41,62 +41,55 @@ func EvalDecls(decls []Decl, ctx *hcl.EvalContext) hcl.Diagnostics {
 		names[d.Name] = true
 	}
 
-	pending := make([]Decl, len(decls))
-	copy(pending, decls)
+	// Order the declarations so every one is evaluated after those it references, via
+	// a worklist topological sort (O(n+e)) instead of a rescan-everything fixpoint
+	// (O(n²) on a reverse-ordered chain, re-walking each Expr's Variables() every
+	// pass). Each dependency name-set is computed once. `unresolved` holds any decl in
+	// a dependency cycle (or depending on one), reported below in source order.
+	order, unresolved := topoResolveOrder(len(decls),
+		func(i int) string { return decls[i].Name },
+		func(i int) map[string]bool { return declDepNames(decls[i], names) })
 
-	for len(pending) > 0 {
-		var stuck []Decl
-		progress := false
-
-		for _, d := range pending {
-			if !declDepsReady(d, names, ctx.Variables) {
-				stuck = append(stuck, d)
+	for _, i := range order {
+		d := decls[i]
+		val := cty.NullVal(cty.DynamicPseudoType)
+		if d.Type != nil {
+			val = cty.NullVal(d.Type.Cty())
+		}
+		if d.Expr != nil {
+			v, vdiags := d.Expr.Value(ctx)
+			diags = diags.Extend(vdiags)
+			if vdiags.HasErrors() {
+				ctx.Variables[d.Name] = val // placeholder so dependents don't cascade
 				continue
 			}
-			val := cty.NullVal(cty.DynamicPseudoType)
-			if d.Type != nil {
-				val = cty.NullVal(d.Type.Cty())
-			}
-			if d.Expr != nil {
-				v, vdiags := d.Expr.Value(ctx)
-				diags = diags.Extend(vdiags)
-				if vdiags.HasErrors() {
-					ctx.Variables[d.Name] = val // placeholder so dependents don't loop
-					progress = true
-					continue
-				}
-				val = v
-			}
-			if d.Type != nil {
-				conv, err := d.Type.Coerce(val)
-				if err != nil {
-					diags = diags.Append(&hcl.Diagnostic{
-						Severity: hcl.DiagError,
-						Summary:  "Invalid declaration value",
-						Detail:   fmt.Sprintf("%s: %s", d.Name, err),
-						Subject:  d.DefRange.Ptr(),
-					})
-				} else {
-					val = conv
-				}
-			}
-			ctx.Variables[d.Name] = val
-			progress = true
+			val = v
 		}
-
-		if !progress {
-			for _, d := range stuck {
+		if d.Type != nil {
+			conv, err := d.Type.Coerce(val)
+			if err != nil {
 				diags = diags.Append(&hcl.Diagnostic{
 					Severity: hcl.DiagError,
-					Summary:  "Unresolved declaration",
-					Detail: fmt.Sprintf(
-						"%q could not be resolved; it may reference an undefined name or form a dependency cycle.", d.Name),
-					Subject: d.DefRange.Ptr(),
+					Summary:  "Invalid declaration value",
+					Detail:   fmt.Sprintf("%s: %s", d.Name, err),
+					Subject:  d.DefRange.Ptr(),
 				})
+			} else {
+				val = conv
 			}
-			break
 		}
-		pending = stuck
+		ctx.Variables[d.Name] = val
+	}
+
+	for _, i := range unresolved {
+		d := decls[i]
+		diags = diags.Append(&hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Unresolved declaration",
+			Detail: fmt.Sprintf(
+				"%q could not be resolved; it may reference an undefined name or form a dependency cycle.", d.Name),
+			Subject: d.DefRange.Ptr(),
+		})
 	}
 	return diags
 }
@@ -157,23 +150,87 @@ func EvalNamespacedDecls(decls []Decl, baseCtx *hcl.EvalContext, compiled *Compi
 	return diags
 }
 
-// declDepsReady reports whether every top-level declaration that d references has
-// already been evaluated (references to non-declaration names are left for the
-// expression evaluator to resolve or reject).
-func declDepsReady(d Decl, names map[string]bool, available map[string]cty.Value) bool {
+// declDepNames returns the set of sibling-declaration names that d references (those
+// present in names, excluding d itself). References to names not declared here are
+// left for the expression evaluator to resolve or reject, so they are not
+// dependencies for ordering.
+func declDepNames(d Decl, names map[string]bool) map[string]bool {
 	if d.Expr == nil {
-		return true
+		return nil
 	}
+	var deps map[string]bool
 	for _, traversal := range d.Expr.Variables() {
 		root := traversal.RootName()
-		if root == d.Name {
+		if root == d.Name || !names[root] {
 			continue
 		}
-		if names[root] {
-			if _, ok := available[root]; !ok {
-				return false
+		if deps == nil {
+			deps = make(map[string]bool)
+		}
+		deps[root] = true
+	}
+	return deps
+}
+
+// topoResolveOrder orders n named, cross-referencing items so each is visited after
+// the items it depends on. nameOf(i) is the name item i defines; depsOf(i) is the set
+// of names item i references (already filtered to in-scope names, self excluded). It
+// returns `order`, a dependency-respecting visit order, and `unresolved`, the items
+// that could never be ordered — those in a dependency cycle or transitively
+// depending on one — both in ascending index (source) order.
+//
+// This is Kahn's algorithm: O(n + e), replacing the O(n²) rescan-until-fixpoint that
+// both the const/var and type-alias resolvers used to share. The queue is seeded and
+// dependents are recorded in index order, so the visit order is deterministic and
+// keeps independent items in source order (e.g. consts before vars when the caller
+// concatenates them that way). A duplicate name wakes its dependents only on its
+// first resolution.
+func topoResolveOrder(n int, nameOf func(i int) string, depsOf func(i int) map[string]bool) (order, unresolved []int) {
+	remaining := make([]int, n)
+	dependents := make(map[string][]int)
+	for i := 0; i < n; i++ {
+		ds := depsOf(i)
+		remaining[i] = len(ds)
+		for name := range ds {
+			dependents[name] = append(dependents[name], i)
+		}
+	}
+
+	queue := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		if remaining[i] == 0 {
+			queue = append(queue, i)
+		}
+	}
+
+	processed := make([]bool, n)
+	resolvedName := make(map[string]bool)
+	for len(queue) > 0 {
+		i := queue[0]
+		queue = queue[1:]
+		if processed[i] {
+			continue
+		}
+		processed[i] = true
+		order = append(order, i)
+
+		if name := nameOf(i); !resolvedName[name] {
+			resolvedName[name] = true
+			for _, j := range dependents[name] {
+				if !processed[j] && remaining[j] > 0 {
+					remaining[j]--
+					if remaining[j] == 0 {
+						queue = append(queue, j)
+					}
+				}
 			}
 		}
 	}
-	return true
+
+	for i := 0; i < n; i++ {
+		if !processed[i] {
+			unresolved = append(unresolved, i)
+		}
+	}
+	return order, unresolved
 }

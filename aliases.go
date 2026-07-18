@@ -244,49 +244,49 @@ func resolveTypeAliases(aliases []aliasDecl, env *typeEnv, namespace string, hos
 		valid = append(valid, a)
 	}
 
-	pending := valid
-	for len(pending) > 0 {
-		var stuck []aliasDecl
-		progressed := false
-		for _, a := range pending {
-			if !aliasDepsReady(a, names, env) {
-				stuck = append(stuck, a)
-				continue
-			}
-			tc, rdiags := env.resolveType(a.expr, false)
-			diags = diags.Extend(rdiags)
-			if rdiags.HasErrors() {
-				env.named[a.name] = anyConstraint{} // placeholder so dependents don't cascade
-			} else {
-				env.named[a.name] = tc
-			}
-			progressed = true
+	// Resolve in dependency order via a worklist topological sort (O(n+e)), each
+	// alias visited after those it references — replacing the O(n²) rescan-until-
+	// fixpoint that re-walked every body's Variables() each pass. `unresolved` holds
+	// any alias in a reference cycle (or depending on one), reported in source order.
+	order, unresolved := topoResolveOrder(len(valid),
+		func(i int) string { return valid[i].name },
+		func(i int) map[string]bool { return aliasDepNames(valid[i], names) })
+
+	for _, i := range order {
+		a := valid[i]
+		tc, rdiags := env.resolveType(a.expr, false)
+		diags = diags.Extend(rdiags)
+		if rdiags.HasErrors() {
+			env.named[a.name] = anyConstraint{} // placeholder so dependents don't cascade
+		} else {
+			env.named[a.name] = tc
 		}
-		if !progressed {
-			for _, a := range stuck {
-				diags = diags.Append(aliasScanDiag(a.defRange, "Unresolvable type alias",
-					fmt.Sprintf("%q is part of a type-alias cycle or references an undefined type.", a.name)))
-			}
-			break
-		}
-		pending = stuck
+	}
+
+	for _, i := range unresolved {
+		a := valid[i]
+		diags = diags.Append(aliasScanDiag(a.defRange, "Unresolvable type alias",
+			fmt.Sprintf("%q is part of a type-alias cycle or references an undefined type.", a.name)))
 	}
 	return diags
 }
 
-// aliasDepsReady reports whether every alias that a references has already been
-// resolved into env. References to non-alias names (built-ins, host types) are
-// left for the resolver to handle or reject.
-func aliasDepsReady(a aliasDecl, names map[string]bool, env *typeEnv) bool {
+// aliasDepNames returns the set of sibling-alias names that a references (those
+// present in names). References to non-alias names — built-ins, host types — are left
+// for the resolver to handle or reject, so they are not dependencies for ordering.
+func aliasDepNames(a aliasDecl, names map[string]bool) map[string]bool {
+	var deps map[string]bool
 	for _, tr := range a.expr.Variables() {
 		root := tr.RootName()
-		if names[root] {
-			if _, ok := env.named[root]; !ok {
-				return false
-			}
+		if !names[root] {
+			continue
 		}
+		if deps == nil {
+			deps = make(map[string]bool)
+		}
+		deps[root] = true
 	}
-	return true
+	return deps
 }
 
 func aliasScanDiag(rng hcl.Range, summary, detail string) *hcl.Diagnostic {

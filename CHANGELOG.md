@@ -96,6 +96,15 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **Const/var and type-alias resolution are no longer quadratic.** Both resolvers
+  used a rescan-until-fixpoint that re-walked every declaration's referenced-name
+  set on every pass, so a reverse-ordered dependency chain (`const c0 = c1+1; …; cN
+  = 0`, or `type T0 = list(T1); …`) resolved one item per pass — O(n²), tens of
+  seconds on a few-hundred-KB file. They now share one worklist topological sort
+  (Kahn's, O(n+e)), computing each dependency set once; a 16 K-declaration chain
+  drops from ~9 s to ~0.1 s. Ordering, duplicate/cycle reporting, self-reference
+  handling, and error-cascade behavior are unchanged.
+
 - **The unterminated-string lexer resync is no longer quadratic.** Recovering from
   an unterminated single-line string re-lexes the entire remaining suffix (HCL stays
   in string mode to end-of-file), so a file of K such strings was Θ(K²) — tens of
