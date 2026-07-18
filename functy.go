@@ -449,7 +449,38 @@ func (p *Parser) parseSources(sources []Source) (result *Result, diags hcl.Diagn
 	diags = diags.Extend(hostDiags)
 
 	diags = diags.Extend(checkExternNames(merged))
-	return merged, diags
+	return merged, capDiagnostics(diags)
+}
+
+// maxDiagnostics bounds how many diagnostics Parse/ParseAll return. A malformed file
+// can produce one error per token, and rendering each one re-scans the source
+// (hcl.NewDiagnosticTextWriter is ~O(n) per diagnostic), so an uncapped flood costs
+// the host ~O(n²) wall-clock — a small file that wedges the process. The cap makes
+// that cost linear in the source regardless of the error count, and it lives here
+// (not in the CLI writer) so every embedding host — which may render diagnostics
+// itself — is protected, not just `functy` the CLI. It is generous: a real file with
+// legitimately many errors still surfaces plenty.
+const maxDiagnostics = 200
+
+// capDiagnostics bounds diags to at most maxDiagnostics entries. When more were
+// produced it keeps the first maxDiagnostics in source order — the earliest errors
+// are the ones to fix first; later ones are usually cascade noise — and appends one
+// summary diagnostic reporting how many were suppressed, so the host still learns a
+// flood occurred.
+func capDiagnostics(diags hcl.Diagnostics) hcl.Diagnostics {
+	if len(diags) <= maxDiagnostics {
+		return diags
+	}
+	suppressed := len(diags) - maxDiagnostics
+	capped := make(hcl.Diagnostics, maxDiagnostics, maxDiagnostics+1)
+	copy(capped, diags[:maxDiagnostics])
+	return append(capped, &hcl.Diagnostic{
+		Severity: hcl.DiagError,
+		Summary:  "Too many diagnostics",
+		Detail: fmt.Sprintf(
+			"%d more diagnostics were suppressed. Fix the errors above and re-run to see the rest.",
+			suppressed),
+	})
 }
 
 // checkExternNames validates extern names against each other and against the real

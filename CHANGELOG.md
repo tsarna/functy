@@ -96,6 +96,16 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **Parse diagnostics are capped so a malformed file can't wedge the host.** A file
+  with an error per token produced one diagnostic per error, and rendering each
+  re-scans the source (hcl's diagnostic writer is ~O(n) per diagnostic), so an
+  uncapped flood cost ~O(n²) wall-clock — tens of seconds from a small file,
+  reachable from flat (depth-0) input that the nesting-depth cap does not touch.
+  `Parse`/`ParseAll` now return at most 200 diagnostics plus a "Too many
+  diagnostics" summary of how many were suppressed. The cap lives in the library
+  (not the CLI's diagnostic writer), so every embedding host that renders
+  diagnostics itself is protected.
+
 - **Parse-time nesting-depth caps prevent an uncatchable stack-overflow crash.**
   Deeply nested input — a file of a million `{`, or an expression/type/alias with
   ~100 K nested parens or `list(list(…))` — recursed until Go's goroutine stack

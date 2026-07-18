@@ -492,6 +492,36 @@ func TestParseModerateNestingStillParses(t *testing.T) {
 	}
 }
 
+// A flat file (nesting depth 0) with far more than maxDiagnostics errors must not
+// wedge the host: the returned diagnostics are capped with a summary of how many
+// were suppressed, so a host rendering them (hcl's writer re-scans the source per
+// diagnostic) does O(cap·n) work instead of O(n²). Flat input is the point — the
+// depth cap from finding #1 does nothing here, since depth stays 0.
+func TestParseDiagnosticFloodIsCapped(t *testing.T) {
+	// A stray `)` at statement position is one error each; the body stays at nesting
+	// depth 1, so this floods with flat input the depth cap cannot touch.
+	src := "func f() {\n" + strings.Repeat(")\n", maxDiagnostics*5) + "}\n"
+	_, diags := NewParser().Parse([]byte(src), "test")
+	if len(diags) != maxDiagnostics+1 {
+		t.Fatalf("got %d diagnostics, want %d (cap + summary)", len(diags), maxDiagnostics+1)
+	}
+	if !hasSummary(diags, "Too many diagnostics") {
+		t.Fatalf("expected a \"Too many diagnostics\" summary, got:\n%s", allDiags(diags))
+	}
+}
+
+// A file with fewer errors than the cap is returned in full, with no summary.
+func TestParseDiagnosticsUnderCapNotTruncated(t *testing.T) {
+	src := "func f() {\n" + strings.Repeat(")\n", 5) + "}\n"
+	_, diags := NewParser().Parse([]byte(src), "test")
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics for malformed input")
+	}
+	if hasSummary(diags, "Too many diagnostics") {
+		t.Fatalf("a small error count must not be capped, got:\n%s", allDiags(diags))
+	}
+}
+
 // TestParseRecoverUnterminatedBrace verifies brace-aware recovery: an
 // unterminated function body must not swallow the declarations after it. A
 // bare `func` at statement position (closures are a non-goal) ends the runaway
