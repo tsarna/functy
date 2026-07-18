@@ -8,6 +8,8 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-18
+
 ### Added
 
 - **Namespace-scoped and private type aliases.** A `type` alias is now scoped to its
