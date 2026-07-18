@@ -96,6 +96,14 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **The unterminated-string lexer resync is no longer quadratic.** Recovering from
+  an unterminated single-line string re-lexes the entire remaining suffix (HCL stays
+  in string mode to end-of-file), so a file of K such strings was Θ(K²) — tens of
+  seconds from a ~50 KB buffer, and an editor re-lexing on every keystroke would
+  wedge. The number of resyncs is now capped (100); past it the remainder is lexed
+  once and appended, making `lexAll` linear. A legitimate mid-edit buffer has only a
+  handful of half-typed strings, far below the cap, so normal recovery is unchanged.
+
 - **Parse diagnostics are capped so a malformed file can't wedge the host.** A file
   with an error per token produced one diagnostic per error, and rendering each
   re-scans the source (hcl's diagnostic writer is ~O(n) per diagnostic), so an

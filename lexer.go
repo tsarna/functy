@@ -30,6 +30,15 @@ var keywords = map[string]bool{
 	"true": true, "false": true, "null": true,
 }
 
+// maxResyncs bounds how many unterminated-string resyncs lexAll performs. Each
+// resync re-lexes the entire remaining suffix (see the loop below), so K of them is
+// Θ(K²) — a ~50 KB file of unterminated strings otherwise burns tens of seconds. A
+// legitimate mid-edit buffer has a handful of half-typed strings at most, never
+// close to this, so the cap only bites pathological or adversarial input: past it,
+// resync stops and the remainder is lexed once and appended as-is (its errors are
+// still reported, subject to the diagnostic cap in capDiagnostics).
+const maxResyncs = 100
+
 // lexAll tokenizes functy source. It runs the HCL native-syntax lexer (which
 // correctly handles strings, ${}/%{} templates, heredocs, and comments) and
 // then adapts the stream for functy, returning both the adapted statement token
@@ -61,14 +70,20 @@ func lexAll(src []byte, filename string) ([]token, []Comment, hcl.Diagnostics) {
 	// ranges stay absolute). This resynchronizes editor tooling through the
 	// half-typed string literals that appear constantly while typing.
 	pos := hcl.InitialPos
+	resyncs := 0
 	for {
 		raw, rawDiags := hclsyntax.LexConfig(src[pos.Byte:], filename, pos)
 
 		resync := -1
-		for i, t := range raw {
-			if t.Type == hclsyntax.TokenQuotedNewline {
-				resync = i
-				break
+		// Stop resyncing once the cap is reached: leave resync at -1 so the remainder
+		// is lexed once and appended, bounding the O(K²) re-lex to O(cap × n). See
+		// maxResyncs.
+		if resyncs < maxResyncs {
+			for i, t := range raw {
+				if t.Type == hclsyntax.TokenQuotedNewline {
+					resync = i
+					break
+				}
 			}
 		}
 
@@ -124,6 +139,7 @@ func lexAll(src []byte, filename string) ([]token, []Comment, hcl.Diagnostics) {
 			Range: marker.Range,
 		})
 		pos = marker.Range.End
+		resyncs++
 	}
 
 	diags = dropSemicolonDiags(diags)

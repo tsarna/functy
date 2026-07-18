@@ -2,6 +2,7 @@ package functy
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -123,5 +124,44 @@ func TestLexResyncAfterUnterminatedString(t *testing.T) {
 	}
 	if swallowed {
 		t.Errorf("later source lines were swallowed as quoted-literal string content")
+	}
+}
+
+// TestLexResyncMultipleUnterminatedStrings verifies the resync recovers across
+// several unterminated strings in a row (well under maxResyncs), so the cap that
+// bounds pathological input does not disturb ordinary multi-error editing: a `func`
+// after three broken strings still tokenizes.
+func TestLexResyncMultipleUnterminatedStrings(t *testing.T) {
+	src := "a = \"x\nb = \"y\nc = \"z\nfunc after() {\n}\n"
+	toks, diags := lex([]byte(src), "test")
+	if !diags.HasErrors() {
+		t.Fatal("expected 'invalid multi-line string' diagnostics")
+	}
+	var sawAfter bool
+	for _, tok := range toks {
+		if tok.ident() == "after" {
+			sawAfter = true
+		}
+		if tok.Type == hclsyntax.TokenQuotedLit && bytes.Contains(tok.Bytes, []byte("func")) {
+			t.Errorf("later source swallowed as quoted-literal content")
+		}
+	}
+	if !sawAfter {
+		t.Fatal("resync failed: `func after` not recovered after multiple broken strings")
+	}
+}
+
+// TestLexManyUnterminatedStringsTerminates guards the resync cap: a file with far
+// more unterminated strings than maxResyncs must still lex to completion (ending in
+// EOF) without the Θ(K²) re-lex blowup — each resync re-lexes the whole remaining
+// suffix, so an uncapped run on this input would be pathologically slow.
+func TestLexManyUnterminatedStringsTerminates(t *testing.T) {
+	src := strings.Repeat("x = \"abc\n", maxResyncs*20)
+	toks, diags := lex([]byte(src), "test")
+	if !diags.HasErrors() {
+		t.Fatal("expected diagnostics for unterminated strings")
+	}
+	if len(toks) == 0 || toks[len(toks)-1].Type != hclsyntax.TokenEOF {
+		t.Fatal("token stream must terminate with EOF")
 	}
 }
