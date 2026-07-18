@@ -1609,7 +1609,7 @@ func (p *parser) resolveTypeSpanAllowNull(startByte, endByte int, startPos hcl.P
 	// written and enforces nothing, exactly like the bare-name case. A genuinely
 	// malformed constructor ("Invalid type") is left to fail.
 	if p.extern && rdiags.HasErrors() && allNestedOpaque(rdiags) {
-		name := strings.TrimSpace(string(p.src[startByte:endByte]))
+		name := canonicalOpaqueName(p.src[startByte:endByte])
 		// Warn only when a nested name is genuinely *unknown* — the composite analogue of
 		// a bare unregistered name, where the warning catches a typo. A nested name the
 		// host *did* register, which merely cannot enforce inside a collection (an open

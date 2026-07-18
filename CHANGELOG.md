@@ -85,6 +85,16 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **Extern overload collisions are no longer bypassed by whitespace.** The
+  "Duplicate extern signature" check keys each overload form on its parameter
+  types' rendered form. An unregistered (opaque) named type — the common case in
+  an extern, which names its *host's* types — was rendered verbatim from source, so
+  two forms differing only in insignificant whitespace (`func f(x: list(ctx))` vs
+  `func f(x: list( ctx ))`) got different keys and both were accepted. Opaque type
+  names are now canonicalized (via `hclwrite`, which preserves whitespace inside
+  string literals) before they key the check and before `help()` renders them, so
+  a whitespace variant of a copy-paste duplicate is caught.
+
 - **Duplicate attribute names in an object type are now an error.** An annotation
   like `object({ a = string, a = number })` was silently accepted: the resolver
   overwrote the map entry so the later attribute won and the earlier one was

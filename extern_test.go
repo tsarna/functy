@@ -311,6 +311,27 @@ func TestDuplicateOverloadShapeIsError(t *testing.T) {
 	}
 }
 
+// Two forms whose parameter types are opaque (unregistered) named types differing
+// only in insignificant whitespace — `list(ctx)` vs `list( ctx )` — are the same
+// signature: an opaque type is taken from source text, so its rendering must be
+// canonicalized before it keys the overload-collision check, else a whitespace
+// variant of a copy-paste duplicate slips past.
+func TestDuplicateOverloadShapeOpaqueWhitespace(t *testing.T) {
+	diags := parseExternErr(t, "func f(x: list(ctx)) -> number\n\nfunc f(x: list( ctx )) -> number\n")
+	if !hasSummary(diags, "Duplicate extern signature") {
+		t.Fatalf("expected a duplicate-shape error, got:\n%s", allDiags(diags))
+	}
+}
+
+// Opaque parameter types that genuinely differ remain distinct forms — the
+// canonicalization must not collapse `list(ctx)` and `list(time)` together.
+func TestOverloadSetDistinguishedByOpaqueType(t *testing.T) {
+	res := parseExtern(t, "func f(x: list(ctx)) -> number\n\nfunc f(x: list(time)) -> number\n")
+	if len(res.Externs) != 2 {
+		t.Fatalf("expected 2 forms, got %d", len(res.Externs))
+	}
+}
+
 // One name across two *files* is a collision, not an overload — it is what happens
 // when two packages both claim `get`. An overload set is written together, by one
 // author, in one file.

@@ -152,6 +152,20 @@ func typeStringDefaults(ty cty.Type, d *typeexpr.Defaults) string {
 	}
 }
 
+// canonicalOpaqueName normalizes an opaque type annotation's source text to
+// canonical HCL spacing, so two renderings that differ only in insignificant
+// whitespace — `list(ctx)` vs `list( ctx )` — collapse to one string. An opaque
+// name is taken verbatim from source (opaqueConstraint stands in for a nested type
+// nobody registered), so without this its String() — and the extern
+// overload-collision key derived from it in externShape — would treat a
+// whitespace variant as a distinct signature and let a copy-paste duplicate slip
+// past the "Duplicate extern signature" check. hclwrite.Format is
+// meaning-preserving: it collapses insignificant whitespace but keeps whitespace
+// inside string literals (e.g. an `optional(string, "x y")` default).
+func canonicalOpaqueName(src []byte) string {
+	return strings.TrimSpace(string(hclwrite.Format(src)))
+}
+
 // valueLiteral renders a cty value as functy/HCL literal source, the form the type
 // resolver evaluates a default expression from. hclwrite produces canonical HCL tokens
 // that re-parse to the same value.
