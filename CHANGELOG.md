@@ -96,6 +96,15 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **`for … in` no longer double-copies the collection before iterating.** Ranging
+  over a collection materialized the entire thing into a second slice of key/value
+  pairs *before* the loop began, so the per-element step-limit checkpoint could not
+  fire until after that full copy — a large collection (e.g. one returned by a host
+  function) was allocated twice before any budget check. The loop now iterates the
+  collection's element iterator directly, ticking per element, so nothing is
+  pre-materialized and the step limit applies as the loop proceeds. Range semantics
+  (list/tuple index key, set running-counter key, map/object key) are unchanged.
+
 - **Running tests no longer mutates the caller's eval context.** `RunTests` /
   `RunTestsMatching` injected the test-only `skip` builtin by writing it into the
   caller's shared `Functions` map (and restoring it afterward). Because compiled

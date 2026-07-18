@@ -413,21 +413,39 @@ func (ip *interp) execForRange(s *For, scope *Scope, ctx *hcl.EvalContext) (*Sig
 		return nil, rangeErr("Cannot range over a null value.", s.Collection.Range())
 	}
 
-	pairs, perr := rangePairs(coll, s.Collection.Range())
-	if perr != nil {
-		return nil, perr
+	// Validate the collection type up front (O(1)); a set has no meaningful key, so
+	// its key is a running counter while every other rangeable type uses the element
+	// key from the iterator.
+	ty := coll.Type()
+	var setCounter bool
+	switch {
+	case ty.IsListType() || ty.IsTupleType() || ty.IsMapType() || ty.IsObjectType():
+		setCounter = false
+	case ty.IsSetType():
+		setCounter = true
+	default:
+		return nil, rangeErr("for ... in requires a list, set, tuple, map, or object value.", s.Collection.Range())
 	}
 
-	for _, kv := range pairs {
+	// Iterate the collection directly, ticking per element, rather than
+	// materializing a second full slice of key/value pairs before the loop begins —
+	// so the step-limit checkpoint fires as the loop proceeds and a large collection
+	// is never double-copied. (Finding #8.)
+	i := 0
+	for it := coll.ElementIterator(); it.Next(); i++ {
 		if d := ip.tick(s.srcRange()); d != nil {
 			return nil, d
 		}
+		k, v := it.Element()
+		if setCounter {
+			k = cty.NumberIntVal(int64(i))
+		}
 		child := NewScope(scope)
 		if s.KeyName != "" {
-			_ = child.Declare(s.KeyName, nil, kv.key)
+			_ = child.Declare(s.KeyName, nil, k)
 		}
 		if s.ValName != "" {
-			_ = child.Declare(s.ValName, nil, kv.val)
+			_ = child.Declare(s.ValName, nil, v)
 		}
 		sig, diags := ip.execBlock(s.Body, child)
 		if diags.HasErrors() {
@@ -533,38 +551,6 @@ func (ip *interp) runDefers() hcl.Diagnostics {
 		}
 	}
 	return nil
-}
-
-type rangeKV struct{ key, val cty.Value }
-
-// rangePairs enumerates a collection into key/value pairs per the range
-// semantics: list/tuple yield index+element, set yields a stable counter+element,
-// map/object yield key+value.
-func rangePairs(coll cty.Value, rng hcl.Range) ([]rangeKV, hcl.Diagnostics) {
-	ty := coll.Type()
-	var pairs []rangeKV
-	switch {
-	case ty.IsListType() || ty.IsTupleType():
-		for it := coll.ElementIterator(); it.Next(); {
-			k, v := it.Element()
-			pairs = append(pairs, rangeKV{key: k, val: v})
-		}
-	case ty.IsSetType():
-		i := 0
-		for it := coll.ElementIterator(); it.Next(); {
-			_, v := it.Element()
-			pairs = append(pairs, rangeKV{key: cty.NumberIntVal(int64(i)), val: v})
-			i++
-		}
-	case ty.IsMapType() || ty.IsObjectType():
-		for it := coll.ElementIterator(); it.Next(); {
-			k, v := it.Element()
-			pairs = append(pairs, rangeKV{key: k, val: v})
-		}
-	default:
-		return nil, rangeErr("for ... in requires a list, set, tuple, map, or object value.", rng)
-	}
-	return pairs, nil
 }
 
 // loopSignal interprets a signal produced by a loop body, given the executing

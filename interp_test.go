@@ -143,6 +143,36 @@ func TestRangeKeyValue(t *testing.T) {
 	wantNum(t, call(t, funcs, "sum_keys", m), 30)
 }
 
+// Ranging over a list binds the element index as the key.
+func TestRangeOverListUsesIndexKey(t *testing.T) {
+	funcs := compileFuncs(t, `func sum_idx(items: list(number)) -> number {
+        var total = 0
+        for i, v in items { total = total + i }
+        return total
+    }`)
+	items := cty.ListVal([]cty.Value{num(5), num(6), num(7), num(8)})
+	wantNum(t, call(t, funcs, "sum_idx", items), 6) // indices 0+1+2+3
+}
+
+// A set has no key, so ranging over one binds a stable running counter as the key
+// while the value is each element — regardless of the (deterministic) iteration
+// order.
+func TestRangeOverSetUsesCounterKey(t *testing.T) {
+	funcs := compileFuncs(t, `func sum_keys(s: set(number)) -> number {
+        var total = 0
+        for i, v in s { total = total + i }
+        return total
+    }
+    func sum_vals(s: set(number)) -> number {
+        var total = 0
+        for i, v in s { total = total + v }
+        return total
+    }`)
+	s := cty.SetVal([]cty.Value{num(10), num(20), num(30)})
+	wantNum(t, call(t, funcs, "sum_keys", s), 3)  // counter keys 0+1+2
+	wantNum(t, call(t, funcs, "sum_vals", s), 60) // 10+20+30
+}
+
 func TestWhileBreakContinue(t *testing.T) {
 	funcs := compileFuncs(t, `func count_evens(n: number) -> number {
         var c = 0
