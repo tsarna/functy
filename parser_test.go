@@ -412,6 +412,45 @@ func hasFunc(res *Result, name string) bool {
 	return false
 }
 
+// An unexpected panic on the parse path (a functy bug, not a stack overflow) is
+// converted into an "Internal parser error" diagnostic and a usable, non-nil
+// Result, rather than propagating into and killing the host. The panicInjectHook
+// seam forces the panic a real bug would raise.
+func TestParsePanicBackstop(t *testing.T) {
+	defer func() { panicInjectHook = nil }()
+	panicInjectHook = func(stage string) {
+		if stage == "parse" {
+			panic("injected parser bug")
+		}
+	}
+	res, diags := NewParser().Parse([]byte("func f() { return 1 }"), "test")
+	if !hasSummary(diags, "Internal parser error") {
+		t.Fatalf("expected a recovered parser-panic diagnostic, got:\n%s", allDiags(diags))
+	}
+	if res == nil {
+		t.Fatal("a recovered panic must still yield a non-nil Result")
+	}
+}
+
+// A panic while formatting must never corrupt the file: Format returns src
+// unchanged (fmt's core invariant) plus an "Internal formatter error" diagnostic.
+func TestFormatPanicBackstop(t *testing.T) {
+	defer func() { panicInjectHook = nil }()
+	panicInjectHook = func(stage string) {
+		if stage == "format" {
+			panic("injected formatter bug")
+		}
+	}
+	src := []byte("func f() {\n    return 1\n}\n")
+	out, diags := NewParser().Format(src, "test")
+	if !hasSummary(diags, "Internal formatter error") {
+		t.Fatalf("expected a recovered formatter-panic diagnostic, got:\n%s", allDiags(diags))
+	}
+	if string(out) != string(src) {
+		t.Fatalf("formatter must return src unchanged on panic, got:\n%q", out)
+	}
+}
+
 // TestParseRecoverUnterminatedBrace verifies brace-aware recovery: an
 // unterminated function body must not swallow the declarations after it. A
 // bare `func` at statement position (closures are a non-goal) ends the runaway

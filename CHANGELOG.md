@@ -96,6 +96,18 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **Panic backstops on the parse, format, and reflection paths.** A Go panic on a
+  code path outside a compiled function (which cty's `Function.Call` recovers)
+  would previously propagate straight into the host — killing an editor/LSP
+  re-parsing a buffer. Three defense-in-depth recoveries were added: `Parse` /
+  `ParseAll` convert an unexpected panic into an "Internal parser error"
+  diagnostic and a usable Result; `Format` returns the source unchanged (never
+  corrupting the file) plus an "Internal formatter error"; and `help()` reflecting
+  over a host function whose return-type callback panics now renders the signature
+  without a return type instead of crashing. These do **not** catch a stack
+  overflow (`recover` cannot) — guarding parser recursion depth remains separate
+  work.
+
 - **"Unreachable code" now underlines the whole statement.** An unreachable
   assignment or expression statement carried a source range covering only its first
   token — just the target name for `x = compute()`, just the leading token for a

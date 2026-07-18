@@ -1,6 +1,7 @@
 package functy
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,10 +28,26 @@ func Format(src []byte, filename string) ([]byte, hcl.Diagnostics) {
 // never drop or reorder code. Expressions are reformatted with hclwrite (which
 // preserves their internal comments); statement layout, indentation, blank-line
 // runs, and statement/declaration comments are handled here.
-func (p *Parser) Format(src []byte, filename string) ([]byte, hcl.Diagnostics) {
+func (p *Parser) Format(src []byte, filename string) (out []byte, diags hcl.Diagnostics) {
 	res, diags := p.Parse(src, filename)
 	if diags.HasErrors() {
 		return src, diags
+	}
+	// A panic while formatting must never corrupt the file: return src unchanged
+	// (fmt's core invariant — never drop or reorder code) plus an error diagnostic,
+	// rather than propagating the panic into the host or a `fmt -w` writing garbage.
+	defer func() {
+		if r := recover(); r != nil {
+			out = src
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Internal formatter error",
+				Detail:   fmt.Sprintf("recovered from an unexpected panic while formatting: %v. This is a functy bug; please report it.", r),
+			})
+		}
+	}()
+	if panicInjectHook != nil {
+		panicInjectHook("format")
 	}
 	f := &formatter{src: src, comments: res.Comments}
 	f.file(res)

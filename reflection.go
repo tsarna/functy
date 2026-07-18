@@ -400,11 +400,24 @@ func ctyReturnType(f function.Function) (cty.Type, bool) {
 	for i, p := range params {
 		argTypes[i] = p.Type
 	}
-	ret, err := f.ReturnType(argTypes)
+	ret, err := safeReturnType(f, argTypes)
 	if err != nil || ret == cty.NilType || ret == cty.DynamicPseudoType {
 		return cty.NilType, false
 	}
 	return ret, true
+}
+
+// safeReturnType calls f.ReturnType with panic recovery. A host function's Type
+// callback is arbitrary host code, so a buggy one can panic; help() reflecting over
+// it must not crash. A panic is treated exactly like a reported error or a dynamic
+// result — "no static return type" — so the signature simply renders without one.
+func safeReturnType(f function.Function, argTypes []cty.Type) (ret cty.Type, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			ret, err = cty.NilType, fmt.Errorf("panic in return-type callback: %v", r)
+		}
+	}()
+	return f.ReturnType(argTypes)
 }
 
 // ctyParamString renders a cty parameter as name[: type], omitting the type when it

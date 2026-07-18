@@ -147,6 +147,31 @@ func TestHelpFuncCtyFallback(t *testing.T) {
 	}
 }
 
+// A host function whose return-type callback panics must not crash help(): a buggy
+// host Type callback is arbitrary code, and reflecting over it just renders the
+// signature without a return type, exactly as a dynamic result would.
+func TestHelpFuncRecoversReturnTypePanic(t *testing.T) {
+	boom := function.New(&function.Spec{
+		Params: []function.Parameter{{Name: "x", Type: cty.String}},
+		Type:   func([]cty.Value) (cty.Type, error) { panic("boom in Type callback") },
+		Impl:   func([]cty.Value, cty.Type) (cty.Value, error) { return cty.NullVal(cty.String), nil },
+	})
+	ctx := &hcl.EvalContext{Functions: map[string]function.Function{"boom": boom}}
+	help := HelpFunc(nil, func() *hcl.EvalContext { return ctx })
+
+	got, err := help.Call([]cty.Value{cty.StringVal("boom")})
+	if err != nil {
+		t.Fatalf("help call: %s", err)
+	}
+	s := got.AsString()
+	if !strings.Contains(s, "boom(x: string)") {
+		t.Errorf("help(\"boom\") = %q, want it to render the signature", s)
+	}
+	if strings.Contains(s, "->") {
+		t.Errorf("help(\"boom\") = %q, want no return type after a panicking callback", s)
+	}
+}
+
 // A host function whose parameter or return type is structural — an object, a list of
 // objects — must render that shape in functy's own grammar, not cty's FriendlyName,
 // which flattens every object to bare "object" and so hides the attributes that are

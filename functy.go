@@ -285,13 +285,39 @@ type lexedSource struct {
 	fd       fileDirectives
 }
 
+// panicInjectHook is a test-only fault injector for the panic-recovery backstops.
+// When non-nil it is called with the current stage — "parse" inside parseSources,
+// "format" inside Format — so a test can force a panic and verify the recover path.
+// It is always nil in production.
+var panicInjectHook func(stage string)
+
 // parseSources is the shared core of Parse/ParseAll. It lexes every source,
 // collects type aliases from all of them, resolves the aliases together
 // (order-independent, project-scoped) into one combined type environment, and
 // then parses each source against that environment so any source's annotations
 // can name any alias.
-func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
-	var diags hcl.Diagnostics
+func (p *Parser) parseSources(sources []Source) (result *Result, diags hcl.Diagnostics) {
+	// A panic on the parse path (unlike one inside a compiled function, which cty's
+	// Function.Call recovers) would otherwise propagate straight into the host and
+	// kill it — an editor/LSP re-parsing untrusted buffers has no cty boundary to
+	// catch it. Convert an unexpected panic into an error diagnostic and a usable
+	// (empty) Result so callers checking diags degrade cleanly. This does NOT catch a
+	// stack overflow (recover cannot); guarding parser recursion depth is separate.
+	defer func() {
+		if r := recover(); r != nil {
+			if result == nil {
+				result = &Result{maxSteps: p.maxSteps}
+			}
+			diags = diags.Append(&hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Internal parser error",
+				Detail:   fmt.Sprintf("recovered from an unexpected panic while parsing: %v. This is a functy bug; please report it.", r),
+			})
+		}
+	}()
+	if panicInjectHook != nil {
+		panicInjectHook("parse")
+	}
 
 	// tick treats any non-positive ceiling as unbounded (0 is the documented
 	// "unbounded"), so a negative MaxSteps would silently disable the execution
