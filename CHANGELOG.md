@@ -85,6 +85,13 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **Duplicate attribute names in an object type are now an error.** An annotation
+  like `object({ a = string, a = number })` was silently accepted: the resolver
+  overwrote the map entry so the later attribute won and the earlier one was
+  dropped, turning a simple typo into a quiet change of the declared shape.
+  `resolveObjectType` now rejects a repeated attribute name with an "Invalid object
+  type" diagnostic (`duplicate attribute "a".`) subjected to the offending key.
+
 - **Non-boolean and unknown conditions no longer panic.** Every condition site (`if`,
   `while`, three-clause `for`, an expression-less `switch` case, a `catch … if` guard,
   and the stdlib `cond()` / `assert()` builtins) called `cty.Value.True()` after only a

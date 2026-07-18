@@ -3,6 +3,7 @@ package functy
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2"
@@ -45,6 +46,30 @@ func TestResolverTypeexprParity(t *testing.T) {
 		if !tc.Cty().Equals(want) {
 			t.Errorf("%s: resolver gave %s, typeexpr gave %s", ann, tc.Cty().FriendlyName(), want.FriendlyName())
 		}
+	}
+}
+
+// TestObjectDuplicateAttr proves a repeated attribute name in an object type is a
+// hard error rather than silently letting the last declaration win, while a
+// non-duplicate object still resolves cleanly.
+func TestObjectDuplicateAttr(t *testing.T) {
+	dupExpr, diags := hclsyntax.ParseExpression([]byte(`object({ a = string, a = number })`), "ann", hcl.InitialPos)
+	if diags.HasErrors() {
+		t.Fatalf("parse: %s", diags.Error())
+	}
+	_, rdiags := newTypeEnv().resolveType(dupExpr, false)
+	if !rdiags.HasErrors() {
+		t.Fatalf("duplicate attribute resolved without error")
+	}
+	if got := rdiags.Error(); !strings.Contains(got, `duplicate attribute "a"`) {
+		t.Errorf("diagnostic = %q, want it to mention duplicate attribute %q", got, "a")
+	}
+
+	// A distinct-attribute object with the same types still resolves.
+	tc := resolveAnn(t, `object({ a = string, b = number })`)
+	want := cty.Object(map[string]cty.Type{"a": cty.String, "b": cty.Number})
+	if !tc.Cty().Equals(want) {
+		t.Errorf("non-duplicate object resolved to %s, want %s", tc.Cty().FriendlyName(), want.FriendlyName())
 	}
 }
 

@@ -481,6 +481,10 @@ func (e *typeEnv) resolveObjectType(arg hcl.Expression) (cty.Type, *typeexpr.Def
 			return cty.NilType, nil, typeDiag(pair.Key, "Invalid object type",
 				"Object attribute names must be identifiers.")
 		}
+		if _, seen := attrs[name]; seen {
+			return cty.NilType, nil, typeDiag(pair.Key, "Invalid object type",
+				fmt.Sprintf("duplicate attribute %q.", name))
+		}
 		valExpr := pair.Value
 		// optional(T) marks an optional attribute; optional(T, default) also gives it a
 		// default value that fills the attribute when absent (recorded in the defaults
