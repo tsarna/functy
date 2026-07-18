@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
 )
 
@@ -172,12 +173,48 @@ func (f *formatter) expr(e hcl.Expression) string {
 	s := strings.TrimPrefix(strings.TrimRight(string(out), "\n"), "_ = ")
 	lines := strings.Split(s, "\n")
 	pad := f.pad()
+	verbatim := heredocLines(s)
 	for i := 1; i < len(lines); i++ {
-		if lines[i] != "" {
+		if lines[i] != "" && !verbatim[i+1] {
 			lines[i] = pad + lines[i]
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// heredocLines returns the set of 1-based line numbers in expression s that are
+// heredoc body or closing-marker lines. Body bytes are literal string content and
+// the closer's leading whitespace is significant (it is what <<- strips), so those
+// lines must be emitted verbatim; only the line bearing the opener is a normal
+// line the formatter may re-indent.
+func heredocLines(s string) map[int]bool {
+	if !strings.Contains(s, "<<") {
+		return nil
+	}
+	// A closing marker only lexes as TokenCHeredoc when a newline follows it, and
+	// s (an expression fragment) usually ends at the marker itself.
+	tokens, _ := hclsyntax.LexExpression([]byte(s+"\n"), "", hcl.Pos{Line: 1, Column: 1, Byte: 0})
+	var verbatim map[int]bool
+	var openers []int // opener start lines; a stack, since interpolations can nest heredocs
+	for _, tok := range tokens {
+		switch tok.Type {
+		case hclsyntax.TokenOHeredoc:
+			openers = append(openers, tok.Range.Start.Line)
+		case hclsyntax.TokenCHeredoc:
+			if len(openers) == 0 {
+				continue
+			}
+			open := openers[len(openers)-1]
+			openers = openers[:len(openers)-1]
+			if verbatim == nil {
+				verbatim = make(map[int]bool)
+			}
+			for l := open + 1; l <= tok.Range.Start.Line; l++ {
+				verbatim[l] = true
+			}
+		}
+	}
+	return verbatim
 }
 
 // ---- top level --------------------------------------------------------------

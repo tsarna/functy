@@ -1,0 +1,29 @@
+func plain() -> string {
+    return <<EOT
+hello
+world
+EOT
+}
+
+func dashed(name: string) -> string {
+    if name != "" {
+        return <<-EOT
+                Hello, ${name}!
+                Welcome.
+                EOT
+    }
+    return "nobody"
+}
+
+func multi() -> object({ a = string, b = string }) {
+    return {
+      a = <<EOT
+first
+  keeps its own indent
+EOT
+      b = upper(<<-EOT
+      second
+      EOT
+      )
+    }
+}

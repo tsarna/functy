@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/zclconf/go-cty/cty"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite testdata/fmt/*.golden from the formatter output")
@@ -58,5 +60,47 @@ func TestFormatGolden(t *testing.T) {
 				t.Errorf("not idempotent — re-formatting %s changed it:\n--- again ---\n%s", golden, again)
 			}
 		})
+	}
+}
+
+// TestFormatPreservesHeredocValues asserts that fmt is meaning-preserving for
+// heredoc strings: each function in the heredoc fixture returns the identical cty
+// value before and after formatting (heredoc body bytes are literal content, so
+// re-indenting them would silently change the value), and that formatting the
+// original messy input is idempotent from the first application onward.
+func TestFormatPreservesHeredocValues(t *testing.T) {
+	src, err := os.ReadFile("testdata/fmt/heredoc.cty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted, diags := Format(src, "heredoc.cty")
+	if diags.HasErrors() {
+		t.Fatalf("format produced diagnostics: %s", diags.Error())
+	}
+
+	before := compileFuncs(t, string(src))
+	after := compileFuncs(t, string(formatted))
+	calls := []struct {
+		fn   string
+		args []cty.Value
+	}{
+		{"plain", nil},
+		{"dashed", []cty.Value{cty.StringVal("Ada")}},
+		{"multi", nil},
+	}
+	for _, c := range calls {
+		want := call(t, before, c.fn, c.args...)
+		got := call(t, after, c.fn, c.args...)
+		if !got.RawEquals(want) {
+			t.Errorf("%s: formatting changed the value:\n--- before ---\n%#v\n--- after ---\n%#v", c.fn, want, got)
+		}
+	}
+
+	again, diags := Format(formatted, "heredoc.cty")
+	if diags.HasErrors() {
+		t.Fatalf("re-format produced diagnostics: %s", diags.Error())
+	}
+	if string(again) != string(formatted) {
+		t.Errorf("not idempotent — format(format(x)) != format(x):\n--- again ---\n%s\n--- formatted ---\n%s", again, formatted)
 	}
 }

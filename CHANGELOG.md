@@ -83,6 +83,20 @@ tagged. Until then, everything lives under **Unreleased**.
     a test fails with a `*LimitError` rather than hanging.
   - API change: `BuildFunction` takes an additional `maxSteps int` argument.
 
+### Fixed
+
+- **`functy fmt` no longer corrupts heredoc string values.** The formatter re-indents
+  the continuation lines of every reformatted expression, but did not exclude heredoc
+  *body* lines — whose bytes are literal string content. A body-level `<<EOT` heredoc
+  had the current indent silently prepended to every line of its value, and the damage
+  compounded on each run (so `fmt` was neither meaning-preserving nor idempotent, and
+  `fmt -w` — or format-on-save — wrote the drift to disk). The formatter now lexes each
+  formatted expression fragment and emits every heredoc body line and its closing marker
+  verbatim; only the opener line (`<<EOT` / `<<-EOT`) is re-indented. This holds for the
+  indent-stripping `<<-EOT` form too (where the churn broke idempotency without changing
+  the value), for multiple and nested heredocs, and for heredocs inside a larger list,
+  object, or call-argument expression.
+
 ## [0.10.0] - 2026-07-15
 
 ### Added
