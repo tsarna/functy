@@ -1,6 +1,7 @@
 package functy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2"
@@ -448,6 +449,46 @@ func TestFormatPanicBackstop(t *testing.T) {
 	}
 	if string(out) != string(src) {
 		t.Fatalf("formatter must return src unchanged on panic, got:\n%q", out)
+	}
+}
+
+// Pathologically deep nesting must produce a "Nesting too deep" diagnostic rather
+// than overflow Go's stack — an uncatchable crash of the host. Covers both recursion
+// vectors: functy's own statement parser (nested blocks) and HCL's expression/type
+// parser, which functy hands spans to (nested parens, type constructors, alias RHS).
+// The test completing at all proves no stack overflow occurred.
+func TestParseNestingDepthGuards(t *testing.T) {
+	deepExpr := strings.Repeat("(", maxExprDepth+50) + "1" + strings.Repeat(")", maxExprDepth+50)
+	deepType := strings.Repeat("list(", maxExprDepth+50) + "string" + strings.Repeat(")", maxExprDepth+50)
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"blocks", "func f() {\n" + strings.Repeat("{\n", maxBlockDepth+50)},
+		{"parens", "func f() -> number { return " + deepExpr + " }"},
+		{"type constructors", "func f(x: " + deepType + ") -> number { return 0 }"},
+		{"alias rhs", "type T = " + deepType + "\nfunc f() -> number { return 0 }"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, diags := NewParser().AllowTopLevelVar(true).Parse([]byte(tc.src), "test")
+			if !hasSummary(diags, "Nesting too deep") {
+				t.Fatalf("expected a \"Nesting too deep\" diagnostic, got:\n%s", allDiags(diags))
+			}
+		})
+	}
+}
+
+// A deeply-but-not-pathologically nested file still parses: the caps sit far above
+// any realistic nesting, so a legitimate program is never rejected.
+func TestParseModerateNestingStillParses(t *testing.T) {
+	body := "return 0"
+	for i := 0; i < 100; i++ {
+		body = "if true {\n" + body + "\n}"
+	}
+	_, diags := NewParser().Parse([]byte("func f() -> number {\n"+body+"\n}"), "test")
+	if diags.HasErrors() {
+		t.Fatalf("a 100-deep-but-legit file should parse cleanly, got:\n%s", diags.Error())
 	}
 }
 

@@ -9,6 +9,22 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
+const (
+	// maxBlockDepth bounds { ... } nesting in the recursive-descent statement parser.
+	// The parser overflows Go's goroutine stack around ~175 K levels; 2000 is far
+	// below that (with headroom for the smaller stacks LSP goroutines run on) yet
+	// vastly deeper than any real code. Breaching it is a diagnostic, not a crash.
+	maxBlockDepth = 2000
+
+	// maxExprDepth bounds bracket nesting (parens, list/tuple/object constructors,
+	// index/call brackets) in an expression or type-annotation span before it is
+	// handed to hclsyntax.ParseExpression, which is itself unbounded-recursive and
+	// overflows around ~100 K. HCL uses more stack per level than functy's own
+	// parser, so this cap is tighter. Checked before ParseExpression, so a too-deep
+	// span becomes a diagnostic instead of an uncatchable stack overflow.
+	maxExprDepth = 500
+)
+
 // parser is the recursive-descent statement parser. It walks the functy token
 // stream itself and delegates every embedded expression and type annotation to
 // HCL by recovering the relevant byte span and calling hclsyntax.ParseExpression
@@ -34,6 +50,12 @@ type parser struct {
 
 	loops        []string // labels of enclosing loops ("" for an unlabeled loop)
 	pendingLabel string   // a label parsed but not yet attached to its loop
+
+	// blockDepth is the current nesting depth of { ... } bodies. tooDeep latches once
+	// the depth cap is breached so the recursion unwinds with a single diagnostic
+	// rather than a per-level cascade. See parseBlockBody and maxBlockDepth.
+	blockDepth int
+	tooDeep    bool
 
 	voidReturn         bool // inside a `-> null` function body
 	allowTopLevelVar   bool
@@ -164,6 +186,11 @@ func (p *parser) parseFile() *Result {
 	for {
 		p.skipTerminators()
 		if p.atEOF() {
+			break
+		}
+		// A nesting-depth breach anywhere in the file is fatal to a clean parse; stop
+		// rather than churn through the rest of a pathological input.
+		if p.tooDeep {
 			break
 		}
 		t := p.cur()
@@ -663,11 +690,28 @@ func (p *parser) skipToParamBoundary() {
 func (p *parser) parseBlockBody() ([]Statement, hcl.Range) {
 	open := p.cur() // '{'
 	p.advance()     // consume '{'
+
+	// Bound nesting depth so pathologically nested input (a 1 MB file of `{`) trips a
+	// diagnostic instead of overflowing Go's stack — an uncatchable crash of the host.
+	// Once too deep, latch and stop recursing: the enclosing parseStatements/parseFile
+	// loops break on the latch and the closing-brace check below is suppressed, so the
+	// whole unwind emits exactly one diagnostic rather than one per level.
+	p.blockDepth++
+	defer func() { p.blockDepth-- }()
+	if p.blockDepth > maxBlockDepth && !p.tooDeep {
+		p.tooDeep = true
+		p.errf(open.Range, "Nesting too deep",
+			fmt.Sprintf("Blocks are nested more than %d levels deep; reduce the nesting.", maxBlockDepth))
+	}
+	if p.tooDeep {
+		return nil, open.Range
+	}
+
 	stmts := p.parseStatements()
 	closeTok := p.cur()
 	if closeTok.Type == hclsyntax.TokenCBrace {
 		p.advance()
-	} else {
+	} else if !p.tooDeep {
 		p.errf(closeTok.Range, "Expected }", "Unterminated block; expected a closing brace.")
 	}
 	return stmts, hcl.RangeBetween(open.Range, closeTok.Range)
@@ -695,6 +739,11 @@ func (p *parser) parseStatements() []Statement {
 	for {
 		p.skipTerminators()
 		if p.cur().Type == hclsyntax.TokenCBrace || p.atEOF() {
+			break
+		}
+		// The nesting-depth cap was breached; unwind without parsing further (see
+		// parseBlockBody). Stops a linear rescan of the rest of a pathological file.
+		if p.tooDeep {
 			break
 		}
 		// Brace-aware recovery: a `func` keyword can never appear at statement
@@ -1114,6 +1163,7 @@ func (p *parser) parseCatchType() (TypeConstraint, string) {
 		return nil, ""
 	}
 	depth := 0
+	maxDepth := 0
 	i := p.pos
 	for {
 		t := p.tokens[i]
@@ -1128,6 +1178,9 @@ func (p *parser) parseCatchType() (TypeConstraint, string) {
 		}
 		if isOpenBracket(t.Type) {
 			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
 		} else if isCloseBracket(t.Type) && depth > 0 {
 			depth--
 		}
@@ -1135,6 +1188,9 @@ func (p *parser) parseCatchType() (TypeConstraint, string) {
 	}
 	endByte := p.tokens[i].Range.Start.Byte
 	p.pos = i
+	if p.spanTooDeep(maxDepth, hcl.RangeBetween(start.Range, p.tokens[i].Range), "type") {
+		return nil, ""
+	}
 	tc := p.resolveTypeSpan(start.Range.Start.Byte, endByte, start.Range.Start)
 	return tc, strings.TrimSpace(string(p.src[start.Range.Start.Byte:endByte]))
 }
@@ -1475,10 +1531,12 @@ type stopFunc func(t hclsyntax.TokenType, prevCompletes bool) bool
 
 // scanSpan scans from the current position, tracking bracket depth and ternary
 // nesting, until stop reports a boundary at depth 0. It returns the byte span of
-// the scanned region and the starting source position, and leaves the parser at
-// the stopping token. Newlines at depth 0 are continuations unless stop treats
-// them as terminators; a ternary ':' is never mistaken for a terminator.
-func (p *parser) scanSpan(stop stopFunc) (startByte, endByte int, startPos hcl.Pos) {
+// the scanned region, the starting source position, and the maximum bracket depth
+// reached (so a caller can reject a span too deep for hclsyntax.ParseExpression
+// before handing it over), and leaves the parser at the stopping token. Newlines at
+// depth 0 are continuations unless stop treats them as terminators; a ternary ':'
+// is never mistaken for a terminator.
+func (p *parser) scanSpan(stop stopFunc) (startByte, endByte int, startPos hcl.Pos, maxDepth int) {
 	startTok := p.cur()
 	startByte = startTok.Range.Start.Byte
 	startPos = startTok.Range.Start
@@ -1510,6 +1568,9 @@ func (p *parser) scanSpan(stop stopFunc) (startByte, endByte int, startPos hcl.P
 		}
 		if isOpenBracket(t.Type) {
 			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
 		} else if isCloseBracket(t.Type) && depth > 0 {
 			depth--
 		}
@@ -1528,7 +1589,21 @@ func (p *parser) scanSpan(stop stopFunc) (startByte, endByte int, startPos hcl.P
 	} else {
 		endByte = stopTok.Range.Start.Byte
 	}
-	return startByte, endByte, startPos
+	return startByte, endByte, startPos, maxDepth
+}
+
+// spanTooDeep reports whether a scanned expression/type span nests brackets deeper
+// than maxExprDepth, emitting a diagnostic if so. Such a span would overflow HCL's
+// own recursive-descent parser (an uncatchable crash), so a caller must not hand it
+// to hclsyntax.ParseExpression. rng underlines the span; what names it for the
+// message ("expression" / "type").
+func (p *parser) spanTooDeep(maxDepth int, rng hcl.Range, what string) bool {
+	if maxDepth <= maxExprDepth {
+		return false
+	}
+	p.errf(rng, "Nesting too deep",
+		fmt.Sprintf("This %s nests brackets more than %d levels deep; reduce the nesting.", what, maxExprDepth))
+	return true
 }
 
 func (p *parser) parseExprStop(stop stopFunc, what string) hcl.Expression {
@@ -1536,9 +1611,12 @@ func (p *parser) parseExprStop(stop stopFunc, what string) hcl.Expression {
 		p.errf(p.cur().Range, "Expected expression", fmt.Sprintf("Expected an %s expression here.", what))
 		return nil
 	}
-	sb, eb, sp := p.scanSpan(stop)
+	sb, eb, sp, md := p.scanSpan(stop)
 	if eb <= sb {
 		p.errf(p.cur().Range, "Expected expression", fmt.Sprintf("Expected an %s expression here.", what))
+		return nil
+	}
+	if p.spanTooDeep(md, hcl.Range{Filename: p.filename, Start: sp, End: p.tokens[p.pos].Range.Start}, "expression") {
 		return nil
 	}
 	expr, diags := hclsyntax.ParseExpression(p.src[sb:eb], p.filename, sp)
@@ -1554,9 +1632,12 @@ func (p *parser) parseType(allowNull bool) (TypeConstraint, string) {
 		p.errf(p.cur().Range, "Expected type", "Expected a type annotation here.")
 		return nil, ""
 	}
-	sb, eb, sp := p.scanSpan(stopType)
+	sb, eb, sp, md := p.scanSpan(stopType)
 	if eb <= sb {
 		p.errf(p.cur().Range, "Expected type", "Expected a type annotation here.")
+		return nil, ""
+	}
+	if p.spanTooDeep(md, hcl.Range{Filename: p.filename, Start: sp, End: p.tokens[p.pos].Range.Start}, "type") {
 		return nil, ""
 	}
 	// Resolve from the full span (HCL ignores comments), but slice the *source

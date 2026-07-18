@@ -96,6 +96,18 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **Parse-time nesting-depth caps prevent an uncatchable stack-overflow crash.**
+  Deeply nested input — a file of a million `{`, or an expression/type/alias with
+  ~100 K nested parens or `list(list(…))` — recursed until Go's goroutine stack
+  overflowed, which `recover` cannot catch, killing the host (reachable via `check`,
+  `fmt`, `run`, and any library `Parse`/`Format`). The recursive-descent statement
+  parser now caps `{ … }` nesting (2000) with a single diagnostic and a clean
+  unwind, and every expression/type span is checked for bracket depth (500) before
+  being handed to HCL's own unbounded-recursive parser — including the alias-RHS
+  pre-parse pass. A too-deep input is now a "Nesting too deep" diagnostic instead of
+  a crash; realistic nesting is unaffected. (Runtime recursion — a self-recursive
+  functy function — is a separate, still-open item.)
+
 - **`for … in` no longer double-copies the collection before iterating.** Ranging
   over a collection materialized the entire thing into a second slice of key/value
   pairs *before* the loop began, so the per-element step-limit checkpoint could not

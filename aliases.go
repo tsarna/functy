@@ -127,10 +127,20 @@ func parseAliasAt(tokens []token, i int, src []byte, filename string) (*aliasDec
 			"Expected type", "A type alias needs a type after =.")}
 	}
 
-	end := scanTypeSpanEnd(tokens, start)
+	end, maxDepth := scanTypeSpanEnd(tokens, start)
 	sb := tokens[start].Range.Start.Byte
 	sp := tokens[start].Range.Start
 	eb := tokens[end].Range.Start.Byte
+
+	// A type RHS nested deeper than maxExprDepth would overflow HCL's own recursive
+	// parser (an uncatchable crash), so reject it before ParseExpression — mirroring
+	// the guard the main parser applies to expression/type spans.
+	if maxDepth > maxExprDepth {
+		return nil, end, hcl.Diagnostics{aliasScanDiag(
+			hcl.RangeBetween(tokens[start].Range, tokens[end].Range),
+			"Nesting too deep",
+			fmt.Sprintf("This type nests brackets more than %d levels deep; reduce the nesting.", maxExprDepth))}
+	}
 
 	expr, ediags := hclsyntax.ParseExpression(src[sb:eb], filename, sp)
 	if ediags.HasErrors() {
@@ -145,9 +155,10 @@ func parseAliasAt(tokens []token, i int, src []byte, filename string) (*aliasDec
 }
 
 // scanTypeSpanEnd returns the index of the token that ends a type annotation
-// starting at index start: the first depth-0 newline/';'/EOF. Object-type braces
-// are balanced at depth > 0 and do not terminate.
-func scanTypeSpanEnd(tokens []token, start int) int {
+// starting at index start (the first depth-0 newline/';'/EOF; object-type braces
+// are balanced at depth > 0 and do not terminate) and the maximum bracket depth
+// reached, so the caller can reject a span too deep for hclsyntax.ParseExpression.
+func scanTypeSpanEnd(tokens []token, start int) (end, maxDepth int) {
 	depth := 0
 	j := start
 	for j < len(tokens) {
@@ -160,12 +171,15 @@ func scanTypeSpanEnd(tokens []token, start int) int {
 		}
 		if isOpenBracket(t.Type) {
 			depth++
+			if depth > maxDepth {
+				maxDepth = depth
+			}
 		} else if isCloseBracket(t.Type) && depth > 0 {
 			depth--
 		}
 		j++
 	}
-	return j
+	return j, maxDepth
 }
 
 // skipToTerminator returns the index of the next newline/';'/EOF at or after i.
