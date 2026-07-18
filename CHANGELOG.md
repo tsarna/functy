@@ -85,6 +85,14 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **A negative execution-step limit no longer silently means "unbounded".** The
+  interpreter treats any non-positive `MaxSteps` / `--max-steps` ceiling as
+  unbounded (0 is the documented "unbounded"), so a negative value — a host
+  intending a tight bound, or a `--max-steps=-1` typo — silently disabled the
+  primary runtime safety control. Parsing now emits a "Negative execution-step
+  limit" warning and falls back to unbounded, so the mistake is surfaced instead
+  of hidden.
+
 - **Extern overload collisions are no longer bypassed by whitespace.** The
   "Duplicate extern signature" check keys each overload form on its parameter
   types' rendered form. An unregistered (opaque) named type — the common case in

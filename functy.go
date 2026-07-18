@@ -211,6 +211,8 @@ func (p *Parser) RequireDeclaredTypes(v bool) *Parser {
 // `for` / `while`, but not recursion (each nested call starts a fresh count) nor
 // work aggregated across many small calls. 0 (the default) means unbounded, leaving
 // existing embeddings unchanged. The ceiling is captured immutably at compile time.
+// A negative value is a mistake — parsing warns and treats it as unbounded rather
+// than silently disabling the limit a host meant to set.
 // Returns the Parser for chaining.
 func (p *Parser) MaxSteps(v int) *Parser {
 	p.maxSteps = v
@@ -282,6 +284,22 @@ type lexedSource struct {
 func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
 
+	// tick treats any non-positive ceiling as unbounded (0 is the documented
+	// "unbounded"), so a negative MaxSteps would silently disable the execution
+	// limit a host meant to set. Surface it and fall back to unbounded rather than
+	// pretending a bound is in force.
+	effectiveMaxSteps := p.maxSteps
+	if effectiveMaxSteps < 0 {
+		diags = diags.Append(&hcl.Diagnostic{
+			Severity: hcl.DiagWarning,
+			Summary:  "Negative execution-step limit",
+			Detail: fmt.Sprintf(
+				"MaxSteps is %d; a negative limit is treated as unbounded. Pass a positive value to bound execution, or 0 to make unbounded explicit.",
+				p.maxSteps),
+		})
+		effectiveMaxSteps = 0
+	}
+
 	// Lex every source and read its leading directive block. Directives are read
 	// here — before aliases are collected — because //functy:extern decides whether
 	// a file contributes aliases at all: the parser rejects a `type` declaration in
@@ -346,7 +364,7 @@ func (p *Parser) parseSources(sources []Source) (*Result, hcl.Diagnostics) {
 		envByNS[ns] = nsEnv
 	}
 
-	merged := &Result{maxSteps: p.maxSteps}
+	merged := &Result{maxSteps: effectiveMaxSteps}
 	for _, a := range aliases {
 		env := envByNS[a.namespace]
 		if env == nil {

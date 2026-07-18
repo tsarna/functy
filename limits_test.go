@@ -170,6 +170,37 @@ func TestLimitUnboundedByDefault(t *testing.T) {
 	}
 }
 
+func TestLimitNegativeMaxStepsWarnsAndIsUnbounded(t *testing.T) {
+	// A negative ceiling is a mistake: tick would otherwise read it as unbounded
+	// with no signal. Parsing emits a warning (not an error, so the program still
+	// compiles) and falls back to unbounded, so a large finite loop still completes.
+	src := `func count() -> number {
+	var n = 0
+	for n < 50000 { n = n + 1 }
+	return n
+}`
+	res, diags := NewParser().MaxSteps(-1).Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("a negative limit must warn, not error:\n%s", diags.Error())
+	}
+	if !hasSummary(diags, "Negative execution-step limit") {
+		t.Fatalf("expected a negative-limit warning, got:\n%s", allDiags(diags))
+	}
+	var ctx *hcl.EvalContext
+	funcs, cdiags := res.Compile(func() *hcl.EvalContext { return ctx })
+	if cdiags.HasErrors() {
+		t.Fatalf("compile errors:\n%s", cdiags.Error())
+	}
+	ctx = &hcl.EvalContext{Functions: funcs, Variables: map[string]cty.Value{}}
+	got, err := funcs["count"].Call([]cty.Value{})
+	if err != nil {
+		t.Fatalf("unexpected error (negative limit should be unbounded, not a tight bound): %v", err)
+	}
+	if !got.RawEquals(cty.NumberIntVal(50000)) {
+		t.Fatalf("got %#v, want 50000", got)
+	}
+}
+
 func TestLimitBoundsTestBodies(t *testing.T) {
 	// A runaway loop in a `test` block surfaces as a (non-skipped) *LimitError rather
 	// than hanging.
