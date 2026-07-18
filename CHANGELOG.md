@@ -85,6 +85,12 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **"Unreachable code" now underlines the whole statement.** An unreachable
+  assignment or expression statement carried a source range covering only its first
+  token — just the target name for `x = compute()`, just the leading token for a
+  bare call — so the "Unreachable code" diagnostic underlined a fragment instead of
+  the statement. Both node kinds now span the full statement.
+
 - **A negative execution-step limit no longer silently means "unbounded".** The
   interpreter treats any non-positive `MaxSteps` / `--max-steps` ceiling as
   unbounded (0 is the documented "unbounded"), so a negative value — a host

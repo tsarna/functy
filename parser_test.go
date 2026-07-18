@@ -3,6 +3,7 @@ package functy
 import (
 	"testing"
 
+	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -321,6 +322,42 @@ func TestParseContinueOutsideLoop(t *testing.T) { parseErr(t, "func f() { contin
 
 func TestParseUnreachable(t *testing.T) {
 	parseErr(t, "func f() { return 1\n return 2 }")
+}
+
+// An "Unreachable code" diagnostic must underline the whole statement, not just its
+// first token — an unreachable `x = compute()` should point at all of it, not only
+// the target name (Assign) or the leading token (ExprStmt).
+func TestUnreachableRangeSpansFullStatement(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string // the exact source text the diagnostic should underline
+	}{
+		{"assign", "func f() {\nreturn 1\nx = 2 + 3\n}", "x = 2 + 3"},
+		{"exprstmt", "func f() {\nreturn 1\nlog(2 + 3)\n}", "log(2 + 3)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, diags := NewParser().Parse([]byte(tc.src), "test")
+			var d *hcl.Diagnostic
+			for _, cand := range diags {
+				if cand.Summary == "Unreachable code" {
+					d = cand
+					break
+				}
+			}
+			if d == nil {
+				t.Fatalf("no \"Unreachable code\" diagnostic in:\n%s", diags.Error())
+			}
+			if d.Subject == nil {
+				t.Fatal("diagnostic has no Subject range")
+			}
+			got := tc.src[d.Subject.Start.Byte:d.Subject.End.Byte]
+			if got != tc.want {
+				t.Errorf("underlined %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestParseDuplicateVar(t *testing.T) {

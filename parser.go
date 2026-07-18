@@ -836,14 +836,20 @@ func (p *parser) parseSimpleStmt(stop stopFunc) Statement {
 		p.advance() // name
 		p.advance() // '='
 		expr := p.parseExprStop(stop, "value")
-		return &Assign{Name: string(name.Bytes), Expr: expr, SrcRange: name.Range}
+		// Span the whole statement (target through value), not just the target name,
+		// so a diagnostic subjected here — e.g. "Unreachable code" — underlines the
+		// full assignment. p.pos-1 is the last token the value consumed.
+		return &Assign{Name: string(name.Bytes), Expr: expr, SrcRange: hcl.RangeBetween(name.Range, p.tokens[p.pos-1].Range)}
 	}
 	start := t.Range
 	expr := p.parseExprStop(stop, "expression")
 	if expr == nil {
 		return nil
 	}
-	return &ExprStmt{Expr: expr, SrcRange: start}
+	// Span the whole expression statement, not just its first token, so an
+	// "Unreachable code" diagnostic underlines all of it. p.pos-1 is the last token
+	// the expression consumed.
+	return &ExprStmt{Expr: expr, SrcRange: hcl.RangeBetween(start, p.tokens[p.pos-1].Range)}
 }
 
 // parseCaptureAssign parses the two-target error-capture forms `val, err = expr`
