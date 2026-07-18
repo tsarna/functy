@@ -81,23 +81,28 @@ func (r *Result) RunTests(evalCtxFn func() *hcl.EvalContext) []TestOutcome {
 // given eval context (all compiled functions + baseline).
 //
 // skip must be visible throughout a test's call graph — not just the top-level body
-// but any helper functions it calls, which late-bind to this same context — so it is
-// injected into the shared context for the duration of the run and restored after,
-// keeping `skip` a test-only builtin (absent from `functy run` / `check`).
+// but any helper functions it calls, which late-bind to this same context. Rather
+// than write `skip` into the caller's shared Functions map (a data race against any
+// concurrent evaluation using the same context, since compiled functions late-bind
+// to it), it is layered into a private child context that becomes the parent of
+// every test body. The caller's context is never mutated, keeping `skip` a test-only
+// builtin (absent from `functy run` / `check`).
 func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func(name string) bool) []TestOutcome {
-	if ctx := evalCtxFn(); ctx != nil {
-		if ctx.Functions == nil {
-			ctx.Functions = map[string]function.Function{}
-		}
-		prev, had := ctx.Functions["skip"]
-		ctx.Functions["skip"] = skipFunc
-		defer func() {
-			if had {
-				ctx.Functions["skip"] = prev
-			} else {
-				delete(ctx.Functions, "skip")
+	// Wrap evalCtxFn so it hands back a child context carrying only `skip`, chained to
+	// the caller's context. HCL walks the chain, so everything else — baseline
+	// functions, global vars — still resolves from the parent, and `skip` never
+	// touches the caller's map. Late-bound: rebuilt per call, like unitCtxFn.
+	skipCtxFn := evalCtxFn
+	if evalCtxFn != nil {
+		skipCtxFn = func() *hcl.EvalContext {
+			parent := evalCtxFn()
+			if parent == nil {
+				return &hcl.EvalContext{Functions: map[string]function.Function{"skip": skipFunc}}
 			}
-		}()
+			child := parent.NewChild()
+			child.Functions = map[string]function.Function{"skip": skipFunc}
+			return child
+		}
 	}
 
 	// A test body belongs to its file's namespace, so it must resolve that
@@ -108,20 +113,20 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 	// closure instead would be a silent, hard-to-see bug. Diagnostics are dropped
 	// here — duplicates are reported by the Compile every caller already runs.
 	//
-	// `skip` still resolves: it is injected into evalCtxFn()'s context above, which
-	// is the *parent* of the unit layer, and HCL walks the whole chain. (A namespace
-	// may itself declare `func skip()`, which shadows it for that namespace's tests
-	// — a consequence of local-wins, documented in doc/language.md.)
-	compiled, _ := r.CompileUnits(evalCtxFn)
+	// `skip` still resolves: skipCtxFn's child sits between the caller's context and
+	// each unit layer, and HCL walks the whole chain. (A namespace may itself declare
+	// `func skip()`, which shadows it for that namespace's tests — a consequence of
+	// local-wins, documented in doc/language.md.)
+	compiled, _ := r.CompileUnits(skipCtxFn)
 
 	outcomes := make([]TestOutcome, 0, len(r.Tests))
 	for _, td := range r.Tests {
 		if filter != nil && !filter(td.Name) {
 			continue
 		}
-		bodyCtxFn := evalCtxFn
+		bodyCtxFn := skipCtxFn
 		if table, ok := compiled.Units[td.Namespace]; ok {
-			bodyCtxFn = unitCtxFn(evalCtxFn, table, compiled.Vars, td.Namespace)
+			bodyCtxFn = unitCtxFn(skipCtxFn, table, compiled.Vars, td.Namespace)
 		}
 		// Bound test bodies by the same ceiling as normal functions, so a runaway
 		// loop in a test surfaces as a (non-skipped) *LimitError rather than hanging.

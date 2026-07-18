@@ -96,6 +96,15 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Fixed
 
+- **Running tests no longer mutates the caller's eval context.** `RunTests` /
+  `RunTestsMatching` injected the test-only `skip` builtin by writing it into the
+  caller's shared `Functions` map (and restoring it afterward). Because compiled
+  functions late-bind to that same context, the write raced with any concurrent
+  evaluation using it — a potential `concurrent map read and map write` crash. The
+  `skip` builtin is now layered into a private child context that parents each test
+  body, so it still resolves throughout the call graph while the caller's map is
+  never touched.
+
 - **Panic backstops on the parse, format, and reflection paths.** A Go panic on a
   code path outside a compiled function (which cty's `Function.Call` recovers)
   would previously propagate straight into the host — killing an editor/LSP
