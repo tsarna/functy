@@ -83,6 +83,17 @@ tagged. Until then, everything lives under **Unreleased**.
     a test fails with a `*LimitError` rather than hanging.
   - API change: `BuildFunction` takes an additional `maxSteps int` argument.
 
+### Documentation
+
+- **Documented the open-type host footgun.** An open type (`RegisterOpenType`)
+  validates only its predicate and passes the value through unchanged — it asserts
+  nothing about the value's Go representation. A host that later type-asserts such a
+  value while trusting a predicate looser than its consuming code assumes can be
+  handed an unexpected representation and panic. `RegisterOpenType`,
+  `predicateConstraint`, and the language guide's open-types section now spell this
+  out and point to `RegisterType` (identity) for when a specific capsule type is
+  required.
+
 ### Fixed
 
 - **"Unreachable code" now underlines the whole statement.** An unreachable

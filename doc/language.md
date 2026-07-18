@@ -248,6 +248,14 @@ functy ships one built-in open type, **`error`** — an object with at least a s
 annotation (`var err: error`, `func f(e: error)`), accepts a caught error or
 `null`, and rejects anything else.
 
+> **Host caution.** An open type asserts only "the predicate held," never a Go
+> representation — the value passes through unchanged. If host code later
+> type-asserts such a value (a capsule's concrete type, an attribute's type), the
+> predicate must have already validated exactly that; a predicate looser than what
+> the consuming code assumes hands it an unexpected representation and can panic it.
+> When a value must be a specific capsule type, use `RegisterType` (identity)
+> rather than an open predicate.
+
 A named **capsule** type (and any alias over one) **composes** inside collections
 and structural types — `list(widget)`, `object({ w = widget })` — enforced
 element-wise by identity. An **open** type does not: it has no single concrete cty

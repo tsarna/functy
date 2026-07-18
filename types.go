@@ -114,6 +114,11 @@ func (c identityConstraint) String() string { return c.name }
 // predicateConstraint enforces an open named type: the value must satisfy a
 // predicate and is otherwise passed through untouched (non-destructive), so extra
 // attributes survive. Null passes through.
+//
+// The pass-through is the point *and* the hazard: the constraint asserts only that
+// pred held, never a Go representation. A host that type-asserts the value
+// downstream is relying on pred to have validated exactly what that code assumes —
+// see Parser.RegisterOpenType.
 type predicateConstraint struct {
 	name string
 	pred func(cty.Value) error

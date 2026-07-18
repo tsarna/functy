@@ -77,6 +77,15 @@ func (p *Parser) RegisterType(name string, ty cty.Type) *Parser {
 // marker-capsule objects (e.g. a ctx carrying _ctx plus other fields) and
 // required-attribute objects (e.g. an error with at least a message). Returns the
 // Parser for chaining.
+//
+// An open type asserts only "this value satisfies pred," never a particular Go
+// representation. Because the value passes through unchanged, a host that later
+// type-asserts it in its own Go code (a capsule's concrete type, an object's
+// attribute types) is trusting pred to have checked exactly that: a predicate
+// looser than what the consuming code assumes hands that code an unexpected
+// representation and can panic it. Make pred validate everything the value's
+// consumers rely on. Use RegisterType instead when a value must be a specific
+// capsule type — that is enforced by type identity, not a predicate.
 func (p *Parser) RegisterOpenType(name string, pred func(cty.Value) error) *Parser {
 	p.types().RegisterOpenType(name, pred)
 	return p
