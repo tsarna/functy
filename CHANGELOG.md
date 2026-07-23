@@ -8,6 +8,23 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+### Added
+
+- **`eventually` / `never` — test-only polling assertions.** Two builtins for
+  testing state that settles asynchronously, injected into each test's eval
+  context alongside `skip` (absent from `functy run`/`check`).
+  `eventually(cond, timeout, interval?)` re-evaluates `cond` until it holds,
+  failing — like `assert`, with the condition's source range and operand values —
+  if it never did within `timeout`; `never(cond, timeout, interval?)` is the
+  inverse, failing the instant `cond` becomes true. `timeout`/`interval` are
+  Go-parseable duration strings (`"250ms"`, `"1s"`) or a number of seconds
+  (`interval` defaults to 10ms). The condition is captured lazily (like `assert`)
+  so it can be re-evaluated each poll; it observes change only when it re-reads
+  state that mutates between evaluations (a host function or a mutable capsule),
+  not a plain immutable local. See
+  [doc/language.md](doc/language.md#tests). The shared assert-failure builder was
+  factored out as `assertionError`.
+
 ## [0.11.0] - 2026-07-18
 
 ### Added

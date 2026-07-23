@@ -48,6 +48,19 @@ func (o TestOutcome) Diagnostics() hcl.Diagnostics {
 	}}
 }
 
+// testBuiltins returns the builtins that are meaningful only inside a test and so
+// are injected into each test's eval context by RunTests (not part of Stdlib):
+// skip, plus the eventually/never polling assertions. Rebuilt per call because it
+// is layered into a fresh private child context each time (see RunTestsMatching),
+// keeping it off the caller's shared Functions map.
+func testBuiltins() map[string]function.Function {
+	return map[string]function.Function{
+		"skip":       skipFunc,
+		"eventually": eventuallyFunc,
+		"never":      neverFunc,
+	}
+}
+
 // skipFunc is the test-scoped `skip("reason"?)` builtin: it raises a *SkipError that
 // unwinds the test body and marks the test skipped rather than passed or failed. It is
 // injected into each test's eval context by RunTests (not part of Stdlib), so `skip`
@@ -97,10 +110,10 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 		skipCtxFn = func() *hcl.EvalContext {
 			parent := evalCtxFn()
 			if parent == nil {
-				return &hcl.EvalContext{Functions: map[string]function.Function{"skip": skipFunc}}
+				return &hcl.EvalContext{Functions: testBuiltins()}
 			}
 			child := parent.NewChild()
-			child.Functions = map[string]function.Function{"skip": skipFunc}
+			child.Functions = testBuiltins()
 			return child
 		}
 	}
