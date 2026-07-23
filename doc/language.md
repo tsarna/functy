@@ -597,6 +597,13 @@ log_info("starting", { id = id })
 send(ctx, bus.main, "topic", payload)
 ```
 
+An expression statement that contains **no function call** produces a warning:
+functy has no first-class functions and no state-mutating operators, so every
+side effect flows through a call — an expression with none has no effect and its
+discarded value is dead code. `x + 1` on its own warns; `send(…)` or any
+expression with a call anywhere in it does not. Bind the value (`y := x + 1`) or
+`return` it if you meant to use it.
+
 ### Block scope
 
 A bare `{ … }` introduces a nested scope:

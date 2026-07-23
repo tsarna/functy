@@ -145,6 +145,15 @@ func (p *parser) errf(rng hcl.Range, summary, detail string) {
 	})
 }
 
+func (p *parser) warnf(rng hcl.Range, summary, detail string) {
+	p.diags = p.diags.Append(&hcl.Diagnostic{
+		Severity: hcl.DiagWarning,
+		Summary:  summary,
+		Detail:   detail,
+		Subject:  rng.Ptr(),
+	})
+}
+
 func (p *parser) skipTerminators() {
 	for isTerminator(p.cur().Type) {
 		p.advance()
@@ -898,7 +907,39 @@ func (p *parser) parseSimpleStmt(stop stopFunc) Statement {
 	// Span the whole expression statement, not just its first token, so an
 	// "Unreachable code" diagnostic underlines all of it. p.pos-1 is the last token
 	// the expression consumed.
-	return &ExprStmt{Expr: expr, SrcRange: hcl.RangeBetween(start, p.tokens[p.pos-1].Range)}
+	stmt := &ExprStmt{Expr: expr, SrcRange: hcl.RangeBetween(start, p.tokens[p.pos-1].Range)}
+	// A statement whose expression contains no function call has no side effect, so
+	// evaluating it purely to discard the result is dead code — warn. Conservative:
+	// any call at all suppresses the warning, since functy's only side effects flow
+	// through function calls (send, log, mutating a capsule, …). See exprIsPure.
+	if exprIsPure(expr) {
+		p.warnf(stmt.SrcRange, "Expression result is discarded",
+			"This expression statement contains no function call, so it has no side effect and its "+
+				"value is unused. Remove it, or bind the value (e.g. `x := …`) or return it.")
+	}
+	return stmt
+}
+
+// exprIsPure reports whether expr is obviously side-effect-free: it contains no
+// function call anywhere in its tree. functy has no first-class functions and no
+// operators that mutate state, so every side effect (send, log, a mutating capsule
+// op, …) flows through a call — an expression with none cannot affect anything, and
+// evaluating it only to discard the result is dead code. Deliberately conservative:
+// a single call anywhere suppresses the judgement (the call might be effectful), and
+// an expression we cannot inspect (not an hclsyntax node) is assumed impure.
+func exprIsPure(expr hcl.Expression) bool {
+	node, ok := expr.(hclsyntax.Node)
+	if !ok {
+		return false
+	}
+	hasCall := false
+	hclsyntax.VisitAll(node, func(n hclsyntax.Node) hcl.Diagnostics {
+		if _, ok := n.(*hclsyntax.FunctionCallExpr); ok {
+			hasCall = true
+		}
+		return nil
+	})
+	return !hasCall
 }
 
 // parseCaptureAssign parses the two-target error-capture forms `val, err = expr`

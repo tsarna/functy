@@ -10,6 +10,16 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **Discarded-expression warning.** An expression statement that contains no
+  function call now produces a warning: functy has no first-class functions and
+  no state-mutating operators, so an expression with no call has no side effect
+  and its discarded value is dead code (`x + 1` on its own warns). Any call
+  anywhere in the expression suppresses it — conservatively, the call may be
+  effectful — so `send(…)`, `log_info(…)`, `x > 0 ? f() : g()`, etc. are quiet.
+  Bare-expression evaluation in `functy eval` / the REPL is unaffected (those
+  paths never build an expression statement). See
+  [doc/language.md](doc/language.md#expression-statement).
+
 - **`eventually` / `never` — test-only polling assertions.** Two builtins for
   testing state that settles asynchronously, injected into each test's eval
   context alongside `skip` (absent from `functy run`/`check`).

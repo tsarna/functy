@@ -361,6 +361,55 @@ func TestUnreachableRangeSpansFullStatement(t *testing.T) {
 	}
 }
 
+// discardWarnings returns the "Expression result is discarded" warnings produced by
+// parsing src (and fails on any error diagnostic, so a case must otherwise be valid).
+func discardWarnings(t *testing.T, src string) []*hcl.Diagnostic {
+	t.Helper()
+	_, diags := NewParser().Parse([]byte(src), "test")
+	if diags.HasErrors() {
+		t.Fatalf("unexpected parse errors:\n%s", diags.Error())
+	}
+	var out []*hcl.Diagnostic
+	for _, d := range diags {
+		if d.Summary == "Expression result is discarded" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// A discarded expression statement with no function call is dead code — it must warn,
+// and the diagnostic must underline the whole statement.
+func TestPureExprStmtWarns(t *testing.T) {
+	src := "func f(x: number) -> number {\nx + 1\nreturn x\n}"
+	ws := discardWarnings(t, src)
+	if len(ws) != 1 {
+		t.Fatalf("expected 1 discard warning, got %d", len(ws))
+	}
+	if ws[0].Subject == nil {
+		t.Fatal("warning has no Subject range")
+	}
+	if got := src[ws[0].Subject.Start.Byte:ws[0].Subject.End.Byte]; got != "x + 1" {
+		t.Errorf("underlined %q, want %q", got, "x + 1")
+	}
+}
+
+// A function call anywhere in the expression suppresses the warning (the call may be
+// effectful), and non-ExprStmt statements never warn.
+func TestPureExprStmtNoWarnWithCall(t *testing.T) {
+	cases := []string{
+		"func f(x: number) { print(x) }",                    // bare call
+		"func f(x: number) { len([x]) }",                    // call nested in an arg
+		"func f(x: number) { x > 0 ? print(x) : print(0) }", // calls in ternary branches
+		"func f(x: number) { y := x + 1\nreturn y }",        // assignment, not an ExprStmt
+	}
+	for _, src := range cases {
+		if ws := discardWarnings(t, src); len(ws) != 0 {
+			t.Errorf("unexpected discard warning for %q:\n%s", src, ws[0].Detail)
+		}
+	}
+}
+
 func TestParseDuplicateVar(t *testing.T) {
 	parseErr(t, "func f() { var x = 1\n var x = 2 }")
 }

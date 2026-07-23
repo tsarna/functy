@@ -46,11 +46,6 @@ see `doc/stdlib.md`. Remaining additions:
   convention); whether to document **nested attributes** of rich-object globals
   (`sys.os`, `env.HOME`) rather than only the top-level object; and the registration API.
 
-## Language — expressions & sugar
-
-- **Pure-expression-statement warning.** Warn when an expression statement is
-  obviously side-effect-free (no function call) and its value is discarded.
-
 ## Functions
 
 - **`extern` declarations** — *shipped*, including `RegisterExterns`; see `doc/language.md`,
