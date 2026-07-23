@@ -1101,6 +1101,25 @@ test "add is commutative" {
   tests. The reason is optional (`skip()`), and `skip` may be called from a helper the
   test invokes, not only directly in the body. `skip` exists only while running tests;
   it is not available to `functy run`.
+- **`eventually` / `never`.** Test-only polling assertions for state that settles
+  asynchronously. `eventually(cond, timeout, interval?)` re-evaluates `cond` until it
+  holds, failing (like `assert`, with the condition's range and operands) if it never
+  did within `timeout`; `never(cond, timeout, interval?)` is the inverse — it polls for
+  the whole window and fails the instant `cond` becomes true. `timeout`/`interval` are
+  duration strings (`"250ms"`, `"1s"`) or a number of seconds (`interval` defaults to
+  10ms). Like `skip`, they exist only while running tests. They only observe change if
+  the condition re-reads state that mutates between evaluations — a host function or a
+  mutable capsule the runtime updates, not a plain immutable local. Both compose with
+  `try/catch` since the failure is an ordinary catchable error.
+
+  ```functy
+  test "worker eventually marks the job done" {
+      start_job()
+      eventually(job_status() == "done", "2s")
+      never(job_status() == "failed", "100ms")
+  }
+  ```
+
 - **Setup / teardown.** No special construct is needed: a test's setup is just the
   leading statements of its body, and `defer` gives per-test teardown that runs even
   when the test fails — `test "x" { var r = open(); defer close(r); … }`.

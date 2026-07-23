@@ -171,25 +171,32 @@ var assertFunc = function.New(&function.Spec{
 			}
 			msg = mv
 		}
-		ev := errorValue(msg, condClosure.Expression.Range())
-		// Enrich with the referenced variables' values (pytest-style), so a caught
-		// assertion can report why it failed. Attached independent of a custom
-		// message, which stays the headline.
-		if ops := conditionOperands(condClosure.Expression, condClosure.EvalContext); len(ops) > 0 {
-			objs := make([]cty.Value, len(ops))
-			for i, o := range ops {
-				objs[i] = cty.ObjectVal(map[string]cty.Value{
-					"name":  cty.StringVal(o.name),
-					"value": o.value,
-				})
-			}
-			// Heterogeneous operand objects → Tuple (a List would reject mixed types).
-			ev = withAttr(ev, "operands", cty.TupleVal(objs))
-			ev = withAttr(ev, "detail", cty.StringVal(renderOperands(ops)))
-		}
-		return cty.NilVal, &ThrownError{Value: ev}
+		return cty.NilVal, assertionError(condClosure.Expression, condClosure.EvalContext, msg)
 	},
 })
+
+// assertionError builds the catchable error an assertion failure raises: the
+// message (string or object, exactly like error()) stamped with the condition's
+// source range, enriched pytest-style with the referenced variables' values so a
+// caught assertion can report why it failed. The operand enrichment is attached
+// independent of a custom message, which stays the headline. Shared by assert and
+// the eventually/never poll builtins.
+func assertionError(expr hcl.Expression, ctx *hcl.EvalContext, msg cty.Value) *ThrownError {
+	ev := errorValue(msg, expr.Range())
+	if ops := conditionOperands(expr, ctx); len(ops) > 0 {
+		objs := make([]cty.Value, len(ops))
+		for i, o := range ops {
+			objs[i] = cty.ObjectVal(map[string]cty.Value{
+				"name":  cty.StringVal(o.name),
+				"value": o.value,
+			})
+		}
+		// Heterogeneous operand objects → Tuple (a List would reject mixed types).
+		ev = withAttr(ev, "operands", cty.TupleVal(objs))
+		ev = withAttr(ev, "detail", cty.StringVal(renderOperands(ops)))
+	}
+	return &ThrownError{Value: ev}
+}
 
 // condFunc is a lazy, multi-branch conditional.
 //
