@@ -8,6 +8,8 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-24
+
 ### Added
 
 - **`expect(cond, message?)` — soft / non-fatal test assertions.** The non-fatal twin
