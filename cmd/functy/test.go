@@ -150,16 +150,17 @@ type jsonSummary struct {
 }
 
 type jsonTest struct {
-	Name       string       `json:"name"`
-	Status     string       `json:"status"` // "passed", "failed", or "skipped"
-	DurationMs float64      `json:"duration_ms"`
-	Location   *jsonRange   `json:"location,omitempty"`    // the test block's source location
-	SkipReason string       `json:"skip_reason,omitempty"` // set only when status is "skipped"
-	Failure    *jsonFailure `json:"failure,omitempty"`     // set only when status is "failed"
+	Name       string        `json:"name"`
+	Status     string        `json:"status"` // "passed", "failed", or "skipped"
+	DurationMs float64       `json:"duration_ms"`
+	Location   *jsonRange    `json:"location,omitempty"`    // the test block's source location
+	SkipReason string        `json:"skip_reason,omitempty"` // set only when status is "skipped"
+	Failures   []jsonFailure `json:"failures,omitempty"`    // one per failure (soft expect() failures, then the hard failure)
 }
 
-// jsonFailure describes why a test failed, mirroring the first error diagnostic:
-// the assert/throw message, its operand detail, and the source range to underline.
+// jsonFailure describes one failure of a test, mirroring an error diagnostic: the
+// assert/expect/throw message, its operand detail, and the source range to underline.
+// A test may have several (each recorded expect() failure, plus a hard failure).
 type jsonFailure struct {
 	Message  string     `json:"message"`
 	Detail   string     `json:"detail,omitempty"`
@@ -207,7 +208,7 @@ func writeTestJSON(w io.Writer, outcomes []functy.TestOutcome, deselected int) (
 			rep.Summary.Skipped++
 		case o.Failed():
 			jt.Status = "failed"
-			jt.Failure = failureToJSON(o)
+			jt.Failures = failuresToJSON(o)
 			rep.Summary.Failed++
 			failed++
 		default:
@@ -225,23 +226,28 @@ func writeTestJSON(w io.Writer, outcomes []functy.TestOutcome, deselected int) (
 	return failed
 }
 
-// failureToJSON renders a failed outcome's first error diagnostic as a jsonFailure.
-func failureToJSON(o functy.TestOutcome) *jsonFailure {
+// failuresToJSON renders a failed outcome's error diagnostics as jsonFailures — one
+// per recorded expect() failure and per hard failure, in report order.
+func failuresToJSON(o functy.TestOutcome) []jsonFailure {
+	var out []jsonFailure
 	for _, d := range o.Diagnostics() {
 		if d.Severity != hcl.DiagError {
 			continue
 		}
-		f := &jsonFailure{Message: d.Summary, Detail: d.Detail}
+		f := jsonFailure{Message: d.Summary, Detail: d.Detail}
 		if d.Subject != nil {
 			f.Location = rangeToJSON(*d.Subject)
 		}
-		return f
+		out = append(out, f)
 	}
-	// A failed outcome always yields at least one error diagnostic, but fall back to
-	// the raw error rather than emitting a failure with no message.
-	msg := "test failed"
-	if o.Err != nil {
-		msg = o.Err.Error()
+	if len(out) == 0 {
+		// A failed outcome normally yields at least one error diagnostic, but fall back
+		// to the raw error rather than emitting a failure with no message.
+		msg := "test failed"
+		if o.Err != nil {
+			msg = o.Err.Error()
+		}
+		out = append(out, jsonFailure{Message: msg, Location: rangeToJSON(o.DefRange)})
 	}
-	return &jsonFailure{Message: msg, Location: rangeToJSON(o.DefRange)}
+	return out
 }

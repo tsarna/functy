@@ -20,32 +20,57 @@ type TestOutcome struct {
 	Err        error         // nil if the test passed; the skip or failure otherwise
 	Skipped    bool          // true if Err is a skip (not a failure)
 	SkipReason string        // the reason passed to skip(), if any
+
+	// SoftFailures are the failures recorded by expect(...) during the test, in the
+	// order they occurred. A test with any soft failure is failed even if its body
+	// otherwise ran to completion (or later called skip — a recorded failure wins over
+	// a skip). Empty for a test that used no soft assertions or passed them all.
+	SoftFailures []*ThrownError
 }
 
-// Passed reports whether the test ran to completion without error.
-func (o TestOutcome) Passed() bool { return o.Err == nil }
+// Passed reports whether the test ran to completion with no error and no recorded
+// soft failure.
+func (o TestOutcome) Passed() bool { return o.Err == nil && len(o.SoftFailures) == 0 }
 
-// Failed reports whether the test ended in a real failure (not a skip).
-func (o TestOutcome) Failed() bool { return o.Err != nil && !o.Skipped }
+// Failed reports whether the test ended in a real failure (a hard error or a recorded
+// soft failure) rather than a skip.
+func (o TestOutcome) Failed() bool {
+	return !o.Skipped && (o.Err != nil || len(o.SoftFailures) > 0)
+}
 
 // Diagnostics renders a failed test for the standard hcl diagnostic writer: a thrown
 // error (a failed assert or an explicit throw) with its source underline and operand
 // detail, or — for any other failure — a plain diagnostic located at the test block.
 // It returns nil for a passing or skipped test.
 func (o TestOutcome) Diagnostics() hcl.Diagnostics {
-	if o.Err == nil || o.Skipped {
+	if o.Passed() || o.Skipped {
 		return nil
 	}
-	var te *ThrownError
-	if errors.As(o.Err, &te) {
-		return te.Diagnostics()
+	var out hcl.Diagnostics
+	// Recorded soft failures first, in occurrence order.
+	for _, sf := range o.SoftFailures {
+		out = out.Extend(sf.Diagnostics())
 	}
-	rng := o.DefRange
-	return hcl.Diagnostics{{
-		Severity: hcl.DiagError,
-		Summary:  o.Err.Error(),
-		Subject:  &rng,
-	}}
+	// Then the hard failure, if any — but not a skip. A test with soft failures that
+	// later called skip is a failure (skip loses), yet its Err is a *SkipError, which
+	// is not itself a failure to render.
+	if o.Err != nil {
+		var se *SkipError
+		if errors.As(o.Err, &se) {
+			return out
+		}
+		var te *ThrownError
+		if errors.As(o.Err, &te) {
+			return out.Extend(te.Diagnostics())
+		}
+		rng := o.DefRange
+		return append(out, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  o.Err.Error(),
+			Subject:  &rng,
+		})
+	}
+	return out
 }
 
 // testBuiltins returns the builtins that are meaningful only inside a test and so
@@ -58,6 +83,7 @@ func testBuiltins() map[string]function.Function {
 		"skip":       skipFunc,
 		"eventually": eventuallyFunc,
 		"never":      neverFunc,
+		"expect":     expectFunc,
 	}
 }
 
@@ -93,27 +119,38 @@ func (r *Result) RunTests(evalCtxFn func() *hcl.EvalContext) []TestOutcome {
 // surfaces as a *ThrownError and a skip(...) as a *SkipError. The test body sees the
 // given eval context (all compiled functions + baseline).
 //
-// skip must be visible throughout a test's call graph — not just the top-level body
-// but any helper functions it calls, which late-bind to this same context. Rather
-// than write `skip` into the caller's shared Functions map (a data race against any
-// concurrent evaluation using the same context, since compiled functions late-bind
-// to it), it is layered into a private child context that becomes the parent of
-// every test body. The caller's context is never mutated, keeping `skip` a test-only
-// builtin (absent from `functy run` / `check`).
+// The test-only builtins (skip, eventually, never, expect) must be visible
+// throughout a test's call graph — not just the top-level body but any helper
+// functions it calls, which late-bind to this same context. Rather than write them
+// into the caller's shared Functions map (a data race against any concurrent
+// evaluation using the same context, since compiled functions late-bind to it), they
+// are layered into a private child context that becomes the parent of every test
+// body. The caller's context is never mutated, keeping them test-only builtins
+// (absent from `functy run` / `check`).
 func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func(name string) bool) []TestOutcome {
-	// Wrap evalCtxFn so it hands back a child context carrying only `skip`, chained to
-	// the caller's context. HCL walks the chain, so everything else — baseline
-	// functions, global vars — still resolves from the parent, and `skip` never
-	// touches the caller's map. Late-bound: rebuilt per call, like unitCtxFn.
-	skipCtxFn := evalCtxFn
+	// Wrap evalCtxFn so it hands back a child context carrying the test-only builtins
+	// (testBuiltins) plus the current test's soft-failure sink, chained to the caller's
+	// context. HCL walks the chain, so everything else — baseline functions, global
+	// vars — still resolves from the parent, and these never touch the caller's map.
+	// Late-bound: rebuilt per call, like unitCtxFn.
+	//
+	// currentSink is the sink for the test currently running (set per iteration below).
+	// expect(...) records soft failures into it; because tests run sequentially, one
+	// shared pointer captured by the context function is safe. It is installed as a
+	// reserved variable so it rides on the same child that carries the builtins —
+	// reachable from helper functions' contexts too (they compile against testCtxFn),
+	// which is why the sink lives here and not only on the test body's own context.
+	var currentSink *softSink
+	testCtxFn := evalCtxFn
 	if evalCtxFn != nil {
-		skipCtxFn = func() *hcl.EvalContext {
+		testCtxFn = func() *hcl.EvalContext {
 			parent := evalCtxFn()
 			if parent == nil {
-				return &hcl.EvalContext{Functions: testBuiltins()}
+				return &hcl.EvalContext{Functions: testBuiltins(), Variables: sinkVars(currentSink)}
 			}
 			child := parent.NewChild()
 			child.Functions = testBuiltins()
+			child.Variables = sinkVars(currentSink)
 			return child
 		}
 	}
@@ -126,11 +163,11 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 	// closure instead would be a silent, hard-to-see bug. Diagnostics are dropped
 	// here — duplicates are reported by the Compile every caller already runs.
 	//
-	// `skip` still resolves: skipCtxFn's child sits between the caller's context and
-	// each unit layer, and HCL walks the whole chain. (A namespace may itself declare
-	// `func skip()`, which shadows it for that namespace's tests — a consequence of
-	// local-wins, documented in doc/language.md.)
-	compiled, _ := r.CompileUnits(skipCtxFn)
+	// The test-only builtins still resolve: testCtxFn's child sits between the caller's
+	// context and each unit layer, and HCL walks the whole chain. (A namespace may
+	// itself declare e.g. `func skip()`, which shadows the builtin for that namespace's
+	// tests — a consequence of local-wins, documented in doc/language.md.)
+	compiled, _ := r.CompileUnits(testCtxFn)
 
 	// `test setup` blocks are shared setup spliced onto the front of every test in the
 	// *same file*, in source order. Group their bodies by filename here so each test
@@ -147,9 +184,9 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 		if filter != nil && !filter(td.Name) {
 			continue
 		}
-		bodyCtxFn := skipCtxFn
+		bodyCtxFn := testCtxFn
 		if table, ok := compiled.Units[td.Namespace]; ok {
-			bodyCtxFn = unitCtxFn(skipCtxFn, table, compiled.Vars, td.Namespace)
+			bodyCtxFn = unitCtxFn(testCtxFn, table, compiled.Vars, td.Namespace)
 		}
 		// Splice this file's setup ahead of the test body (same scope): its bindings
 		// are visible to the test, and its function-scoped `defer`s run at the test's
@@ -162,11 +199,14 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 		// Bound test bodies by the same ceiling as normal functions, so a runaway
 		// loop in a test surfaces as a (non-skipped) *LimitError rather than hanging.
 		fn := BuildFunction(&FuncDecl{Name: td.Name, Namespace: td.Namespace, Body: body}, bodyCtxFn, r.maxSteps)
+		currentSink = &softSink{} // fresh per test; expect(...) appends here via the context
 		start := time.Now()
 		_, err := fn.Call([]cty.Value{})
-		o := TestOutcome{Name: td.Name, DefRange: td.DefRange, Duration: time.Since(start), Err: err}
+		o := TestOutcome{Name: td.Name, DefRange: td.DefRange, Duration: time.Since(start), Err: err, SoftFailures: currentSink.failures}
 		var se *SkipError
-		if errors.As(err, &se) {
+		// A recorded soft failure wins over a later skip: a test that demonstrably
+		// failed is not skipped, even if its body then called skip().
+		if errors.As(err, &se) && len(o.SoftFailures) == 0 {
 			o.Skipped = true
 			o.SkipReason = se.Reason
 		}

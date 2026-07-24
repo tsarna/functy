@@ -302,11 +302,13 @@ sum = -3
         "status": "failed",
         "duration_ms": 0.055,
         "location": { "file": "examples/math.cty", "line": 8, "column": 1, "end_line": 10, "end_column": 2 },
-        "failure": {
-          "message": "sum should be positive",
-          "detail": "sum = -3",
-          "location": { "file": "examples/math.cty", "line": 9, "column": 12, "end_line": 9, "end_column": 21 }
-        }
+        "failures": [
+          {
+            "message": "sum should be positive",
+            "detail": "sum = -3",
+            "location": { "file": "examples/math.cty", "line": 9, "column": 12, "end_line": 9, "end_column": 21 }
+          }
+        ]
       },
       {
         "name": "work in progress",
@@ -321,11 +323,13 @@ sum = -3
   ```
 
   Each test entry carries a `status` (`"passed"`, `"failed"`, or `"skipped"`), a
-  `duration_ms`, and the test block's `location`. A failed test adds a `failure` with
-  the assert/throw `message`, its operand `detail` (when present), and the `location`
-  to underline; a skipped test adds its `skip_reason` (when given). Ranges are
-  1-based. A compilation failure still emits a well-formed report (with an empty
-  `tests` array) and exits non-zero, so consumers can always parse stderr.
+  `duration_ms`, and the test block's `location`. A failed test adds a `failures`
+  array — one entry per failure, so a test using soft [`expect`](language.md#tests)
+  assertions reports them all — each with the assert/expect/throw `message`, its
+  operand `detail` (when present), and the `location` to underline; a skipped test
+  adds its `skip_reason` (when given). Ranges are 1-based. A compilation failure still
+  emits a well-formed report (with an empty `tests` array) and exits non-zero, so
+  consumers can always parse stderr.
 
 ## fmt
 

@@ -10,6 +10,22 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **`expect(cond, message?)` — soft / non-fatal test assertions.** The non-fatal twin
+  of `assert` (the gtest `EXPECT_*` vs `ASSERT_*` distinction): on failure it records
+  the failure — with the same message, source range, and pytest-style operand
+  enrichment `assert` produces — and returns `false` instead of aborting, so a test can
+  check several things and report *every* failed expectation at once. A test with any
+  recorded `expect` failure fails, even if it later calls `skip(...)` (a demonstrated
+  failure wins over a skip). Like `skip`/`eventually`/`never` it is test-only (absent
+  from `functy run`/`check`). `TestOutcome` gains a `SoftFailures []*ThrownError` field.
+  See [doc/language.md](doc/language.md#tests).
+
+### Changed
+
+- **`functy test --json`: a failed test now carries a `failures` array** (one entry per
+  failure) instead of a single `failure` object, so soft `expect` failures are all
+  reported. **Breaking** for consumers of the JSON report.
+
 - **`test setup { … }` — shared per-file test setup.** A `test setup` block's
   statements are spliced onto the front of every `test` in the **same source file**,
   in the same scope, so its bindings are visible to each test and its `defer`s — being

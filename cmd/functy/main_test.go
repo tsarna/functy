@@ -537,14 +537,14 @@ test "wip" { skip("todo") }`
 				File string `json:"file"`
 				Line int    `json:"line"`
 			} `json:"location"`
-			Failure *struct {
+			Failures []struct {
 				Message  string `json:"message"`
 				Detail   string `json:"detail"`
 				Location *struct {
 					Line   int `json:"line"`
 					Column int `json:"column"`
 				} `json:"location"`
-			} `json:"failure"`
+			} `json:"failures"`
 		} `json:"tests"`
 		Summary struct {
 			Passed, Failed, Skipped, Deselected int
@@ -566,7 +566,7 @@ test "wip" { skip("todo") }`
 		byName[tc.Name] = i
 	}
 	sums := rep.Tests[byName["sums"]]
-	if sums.Status != "passed" || sums.Failure != nil {
+	if sums.Status != "passed" || len(sums.Failures) != 0 {
 		t.Fatalf("sums should be a clean pass: %+v", sums)
 	}
 	if sums.Location == nil || sums.Location.File != path {
@@ -574,19 +574,52 @@ test "wip" { skip("todo") }`
 	}
 
 	pos := rep.Tests[byName["positivity"]]
-	if pos.Status != "failed" || pos.Failure == nil {
-		t.Fatalf("positivity should be a failure: %+v", pos)
+	if pos.Status != "failed" || len(pos.Failures) != 1 {
+		t.Fatalf("positivity should be a failure with one entry: %+v", pos)
 	}
-	if pos.Failure.Message != "must be positive" || pos.Failure.Detail != "n = -3" {
-		t.Fatalf("failure message/detail wrong: %+v", pos.Failure)
+	if pos.Failures[0].Message != "must be positive" || pos.Failures[0].Detail != "n = -3" {
+		t.Fatalf("failure message/detail wrong: %+v", pos.Failures[0])
 	}
-	if pos.Failure.Location == nil {
-		t.Fatalf("failure should carry a source range to underline: %+v", pos.Failure)
+	if pos.Failures[0].Location == nil {
+		t.Fatalf("failure should carry a source range to underline: %+v", pos.Failures[0])
 	}
 
 	wip := rep.Tests[byName["wip"]]
 	if wip.Status != "skipped" || wip.SkipReason != "todo" {
 		t.Fatalf("wip should be skipped with a reason: %+v", wip)
+	}
+}
+
+func TestCLITestJSONMultipleSoftFailures(t *testing.T) {
+	// A test with soft expect() failures reports them all in the failures array.
+	src := `test "checks" {
+    expect(1 == 2, "one")
+    expect(3 == 4, "two")
+}`
+	path := writeCty(t, "t.cty", src)
+	_, out, err := execCLI(t, "test", "--json", path)
+	if err == nil {
+		t.Fatalf("expected a non-zero exit; report:\n%s", out)
+	}
+	var rep struct {
+		Tests []struct {
+			Status   string `json:"status"`
+			Failures []struct {
+				Message string `json:"message"`
+			} `json:"failures"`
+		} `json:"tests"`
+	}
+	if uerr := json.Unmarshal([]byte(out), &rep); uerr != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", uerr, out)
+	}
+	if len(rep.Tests) != 1 || rep.Tests[0].Status != "failed" {
+		t.Fatalf("unexpected tests: %+v", rep.Tests)
+	}
+	if len(rep.Tests[0].Failures) != 2 {
+		t.Fatalf("got %d failures, want 2: %+v", len(rep.Tests[0].Failures), rep.Tests[0].Failures)
+	}
+	if rep.Tests[0].Failures[0].Message != "one" || rep.Tests[0].Failures[1].Message != "two" {
+		t.Fatalf("failure messages wrong/out of order: %+v", rep.Tests[0].Failures)
 	}
 }
 

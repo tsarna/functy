@@ -246,6 +246,126 @@ func equalInt64(a, b []int64) bool {
 	return true
 }
 
+// --- soft assertions (expect) ------------------------------------------------
+
+// Every expect runs; each failure is recorded and the test fails reporting all of
+// them, rather than stopping at the first like assert.
+func TestExpectRecordsAllFailures(t *testing.T) {
+	src := `test "several checks" {
+    expect(1 == 2, "one")
+    expect(2 == 2)
+    expect(3 == 4, "three")
+}`
+	outcomes := compileAndRunTests(t, src)
+	if len(outcomes) != 1 {
+		t.Fatalf("got %d outcomes, want 1", len(outcomes))
+	}
+	o := outcomes[0]
+	if o.Passed() || !o.Failed() || o.Skipped {
+		t.Fatalf("test should fail (not pass/skip): %+v", o)
+	}
+	if len(o.SoftFailures) != 2 {
+		t.Fatalf("got %d soft failures, want 2 (the passing expect records nothing)", len(o.SoftFailures))
+	}
+	if got := o.SoftFailures[0].Value.GetAttr("message").AsString(); got != "one" {
+		t.Fatalf("first failure message = %q, want one", got)
+	}
+	// Both failures render in Diagnostics (two error diagnostics).
+	if n := len(o.Diagnostics()); n != 2 {
+		t.Fatalf("Diagnostics() has %d entries, want 2", n)
+	}
+}
+
+func TestExpectAllPassIsAPass(t *testing.T) {
+	src := `test "all good" {
+    expect(1 == 1)
+    expect(2 == 2)
+}`
+	outcomes := compileAndRunTests(t, src)
+	if len(outcomes) != 1 || !outcomes[0].Passed() {
+		t.Fatalf("expected 1 passing test, got %+v", outcomes)
+	}
+}
+
+// A failed expect enriches its recorded error with the condition's operands, exactly
+// like assert.
+func TestExpectCarriesOperandDetail(t *testing.T) {
+	src := `test "detail" {
+    var n = -3
+    expect(n > 0, "must be positive")
+}`
+	outcomes := compileAndRunTests(t, src)
+	sf := outcomes[0].SoftFailures
+	if len(sf) != 1 {
+		t.Fatalf("got %d soft failures, want 1", len(sf))
+	}
+	detail := sf[0].Value.GetAttr("detail")
+	if detail.IsNull() || detail.AsString() != "n = -3" {
+		t.Fatalf("operand detail = %#v, want \"n = -3\"", detail)
+	}
+}
+
+// A recorded soft failure wins over a later skip: the test is failed, not skipped.
+func TestExpectFailureBeatsLaterSkip(t *testing.T) {
+	src := `test "soft then skip" {
+    expect(false, "boom")
+    skip("later")
+}`
+	outcomes := compileAndRunTests(t, src)
+	o := outcomes[0]
+	if o.Skipped {
+		t.Fatalf("a test with a recorded failure must not be skipped: %+v", o)
+	}
+	if !o.Failed() {
+		t.Fatalf("test should be failed: %+v", o)
+	}
+}
+
+// A soft failure followed by a hard assert failure reports both.
+func TestExpectThenHardFailureReportsBoth(t *testing.T) {
+	src := `test "soft then hard" {
+    expect(false, "soft")
+    assert(false, "hard")
+}`
+	outcomes := compileAndRunTests(t, src)
+	o := outcomes[0]
+	if !o.Failed() || len(o.SoftFailures) != 1 || o.Err == nil {
+		t.Fatalf("want one soft failure plus a hard error: %+v", o)
+	}
+	if n := len(o.Diagnostics()); n != 2 {
+		t.Fatalf("Diagnostics() has %d entries, want 2 (soft + hard)", n)
+	}
+}
+
+// expect is test-only: it is injected by the runner, not present in a plain
+// (non-test) eval context, so `functy run`-style compilation cannot call it.
+func TestExpectIsTestOnly(t *testing.T) {
+	if _, ok := Stdlib()["expect"]; ok {
+		t.Fatal("expect must not be in Stdlib (it is test-only)")
+	}
+	src := `func f() -> bool { return expect(true) }`
+	res, diags := NewParser().Parse([]byte(src), "t.cty")
+	if diags.HasErrors() {
+		t.Fatalf("parse errors:\n%s", diags.Error())
+	}
+	var ctx *hcl.EvalContext
+	funcs, cdiags := res.Compile(func() *hcl.EvalContext { return ctx })
+	if cdiags.HasErrors() {
+		t.Fatalf("compile errors:\n%s", cdiags.Error())
+	}
+	all := map[string]function.Function{}
+	for k, v := range Stdlib() {
+		all[k] = v
+	}
+	for k, v := range funcs {
+		all[k] = v
+	}
+	ctx = &hcl.EvalContext{Functions: all, Variables: map[string]cty.Value{}}
+	if _, err := funcs["f"].Call(nil); err == nil {
+		t.Fatal("expected calling expect outside a test to fail (unknown function)")
+	}
+}
+
 func TestTestKeywordIsContextual(t *testing.T) {
 	// `test` remains usable as an ordinary function name.
 	src := `func test(x: number) -> number { return x * 2 }

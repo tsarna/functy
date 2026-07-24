@@ -1102,7 +1102,28 @@ test "add is commutative" {
   failed `assert`, an explicit `throw`, or an evaluation error. Because `assert` raises
   a catchable error carrying the condition's source range and operand values, a failing
   test reports *where* and *why* (e.g. `n = -3`). Like Go/pytest, a test stops at its
-  first failure.
+  first *hard* failure (`assert`/`throw`); use `expect` below to check several things
+  and see all the failures.
+- **`expect(cond, message?)` — soft assertions.** The non-fatal twin of `assert` (the
+  gtest `EXPECT_*` vs `ASSERT_*` distinction): on failure it **records** the failure —
+  the same message, source range, and operand enrichment `assert` produces — and
+  returns `false` instead of aborting, so the test keeps running and reports *every*
+  failed expectation at once. `assert` still aborts on the first failure; reach for it
+  when later checks are meaningless once one fails.
+
+  ```functy
+  test "user is fully populated" {
+      var u = load_user(1)
+      expect(u.name == "Ada")
+      expect(u.email != null)         // still runs even if the line above failed
+      expect(u.age > 0, "age must be positive")
+      assert(u.id == 1)               // hard: aborts here if it fails
+  }
+  ```
+
+  A test with any recorded `expect` failure **fails**, even if it later calls
+  `skip(...)` (a demonstrated failure wins over a skip). Like `skip`/`eventually`, it
+  is test-only — not available to `functy run`.
 - **`skip("reason")`.** A test-only builtin that stops the current test and marks it
   skipped (neither passed nor failed) — for work-in-progress or environment-gated
   tests. The reason is optional (`skip()`), and `skip` may be called from a helper the
