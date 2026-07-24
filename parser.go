@@ -58,6 +58,7 @@ type parser struct {
 	tooDeep    bool
 
 	voidReturn         bool // inside a `-> null` function body
+	inSetup            bool // inside a `test setup` block body (return is rejected there)
 	allowTopLevelVar   bool
 	allowTopLevelConst bool
 	strict             strictness
@@ -234,7 +235,13 @@ func (p *parser) parseFile() *Result {
 			if p.rejectInExtern(t.Range, "test") {
 				continue
 			}
-			if td := p.parseTestDecl(); td != nil {
+			// `test setup { … }` — the token after `test` is the ident `setup` (a
+			// named test has a string there). It's shared per-file setup, not a test.
+			if n := p.peek(1); n.Type == hclsyntax.TokenIdent && string(n.Bytes) == "setup" {
+				if sd := p.parseTestSetupDecl(); sd != nil {
+					result.Setups = append(result.Setups, sd)
+				}
+			} else if td := p.parseTestDecl(); td != nil {
 				result.Tests = append(result.Tests, td)
 			}
 		case p.atNamespaceKeyword():
@@ -549,6 +556,29 @@ func (p *parser) parseTestDecl() *TestDecl {
 		return nil // description error already reported; body consumed to avoid cascade
 	}
 	return &TestDecl{Name: name, Namespace: p.ns, Body: body, BodyRange: brange, DefRange: hcl.RangeBetween(kw.Range, p.tokens[p.pos-1].Range)}
+}
+
+// parseTestSetupDecl parses a top-level `test setup { … }` block: shared setup whose
+// body is spliced onto the front of each same-file test (see RunTestsMatching). The
+// caller has already confirmed the token after `test` is the ident `setup`. The body
+// is parsed like a function body, except `return` is rejected (via p.inSetup) because
+// the block runs as the prefix of a test and a return would exit before the test's own
+// statements.
+func (p *parser) parseTestSetupDecl() *SetupDecl {
+	kw := p.cur()
+	p.advance() // test
+	p.advance() // setup
+
+	if p.cur().Type != hclsyntax.TokenOBrace {
+		p.errf(p.cur().Range, "Expected test setup body", "A test setup block must be followed by a { ... } body.")
+		p.recoverToTopLevel()
+		return nil
+	}
+	prevSetup := p.inSetup
+	p.inSetup = true
+	body, brange := p.parseBlockBody()
+	p.inSetup = prevSetup
+	return &SetupDecl{Namespace: p.ns, Body: body, BodyRange: brange, DefRange: hcl.RangeBetween(kw.Range, p.tokens[p.pos-1].Range)}
 }
 
 func (p *parser) parseParams() ([]Param, hcl.Range) {
@@ -1043,6 +1073,14 @@ func (p *parser) parseReturn() Statement {
 	kw := p.cur()
 	p.advance()
 	ret := &Return{SrcRange: kw.Range}
+	// A `test setup` body is spliced ahead of each test's statements, so a return here
+	// would exit the test before its own body runs. functy has no nested functions, so
+	// every return in the block belongs to the (would-be) test function — the flag
+	// catches nested returns too. Reported, then parsing continues for AST/fmt fidelity.
+	if p.inSetup {
+		p.errf(kw.Range, "Return not allowed in a test setup block",
+			"A test setup block runs as the prefix of each test; a return would exit the test before its body. Remove it.")
+	}
 	if isTerminator(p.cur().Type) || p.cur().Type == hclsyntax.TokenCBrace || p.atEOF() {
 		return ret // bare return
 	}

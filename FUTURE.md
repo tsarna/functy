@@ -481,9 +481,9 @@ links the library directly and supplies its own richer context). Planned additio
   file-swallowing cases are *shipped*. Remaining nicety (lower priority): an **unterminated heredoc** (`<<EOT` with no closing
   marker) is the same class but derails via a different token pattern (`TokenOHeredoc`
   without a close) and is not yet resynchronized. Rare enough to defer.
-- **Inline tests** — *shipped*: Remaining niceties: soft /
-  non-fatal assertions or a `t`-style test context (today a test stops at its first
-  failure); and shared `beforeEach`-style setup (fresh mutable fixtures per test).
+- **Inline tests** — *shipped*, including per-file shared setup (`test setup { … }`;
+  see `doc/language.md`). Remaining nicety: soft / non-fatal assertions or a `t`-style
+  test context (today a test stops at its first failure).
 
 ## Type system
 

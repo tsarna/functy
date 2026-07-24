@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/function"
 )
 
 // compileAndRunTests parses and compiles src (with the stdlib merged in), then runs
@@ -56,6 +57,193 @@ test "two" { assert(f() == 1) }`
 	if len(res.Funcs) != 1 {
 		t.Fatalf("got %d funcs, want 1 (tests are not functions)", len(res.Funcs))
 	}
+}
+
+// --- test setup blocks -------------------------------------------------------
+
+func TestParseTestSetupBlock(t *testing.T) {
+	src := `test setup { var a = 1 }
+test "t" { assert(a == 1) }
+test setup { var b = 2 }`
+	res, diags := NewParser().Parse([]byte(src), "t.cty")
+	if diags.HasErrors() {
+		t.Fatalf("parse errors:\n%s", diags.Error())
+	}
+	if len(res.Setups) != 2 {
+		t.Fatalf("got %d setup blocks, want 2", len(res.Setups))
+	}
+	if len(res.Tests) != 1 {
+		t.Fatalf("got %d tests, want 1 (setup blocks are not tests)", len(res.Tests))
+	}
+}
+
+// `test setup` reuses the `test` keyword; both must stay contextual — a `setup`
+// function and a `test setup` block coexist, and `test` remains a callable name.
+func TestTestSetupKeywordIsContextual(t *testing.T) {
+	src := `func setup() -> number { return 7 }
+test setup { var s = setup() }
+test "setup() the function still callable" { assert(s == 7) }`
+	outcomes := compileAndRunTests(t, src)
+	if len(outcomes) != 1 || !outcomes[0].Passed() {
+		t.Fatalf("expected 1 passing test, got %+v", outcomes)
+	}
+}
+
+func TestReturnInSetupIsRejected(t *testing.T) {
+	// Even nested inside an if — every return in the block belongs to the test
+	// function, since functy has no nested functions.
+	_, diags := NewParser().Parse([]byte("test setup {\n    if true { return }\n}\n"), "t.cty")
+	if !diags.HasErrors() {
+		t.Fatal("expected a parse error for return in a test setup block")
+	}
+	if !hasSummary(diags, "Return not allowed in a test setup block") {
+		t.Fatalf("unexpected diagnostics:\n%s", diags.Error())
+	}
+}
+
+// A setup block's bindings are visible in every test, and the block re-runs fresh
+// per test (a host counter incremented in setup advances test-to-test).
+func TestSetupBindingVisibleAndFreshPerTest(t *testing.T) {
+	src := `test setup { var db = next() }
+test "first" { assert(db == 1) }
+test "second" { assert(db == 2) }`
+	outcomes := runTestsWithEnv(t, src, map[string]function.Function{"next": counterFunc()}, nil)
+	if len(outcomes) != 2 {
+		t.Fatalf("got %d outcomes, want 2", len(outcomes))
+	}
+	for _, o := range outcomes {
+		if !o.Passed() {
+			t.Fatalf("test %q should pass: %v", o.Name, o.Err)
+		}
+	}
+}
+
+// A setup `defer` is function-scoped, so it runs at the test's end — after the
+// test's own defers (LIFO) — and it runs even when the test fails.
+func TestSetupTeardownRunsPerTestLIFO(t *testing.T) {
+	rec, log := recorder()
+	src := `test setup {
+    record(1)
+    defer record(2)
+}
+test "passes" {
+    record(3)
+    defer record(4)
+    assert(true)
+}
+test "fails" {
+    record(5)
+    defer record(6)
+    assert(false)
+}`
+	outcomes := runTestsWithEnv(t, src, map[string]function.Function{"record": rec}, nil)
+	if len(outcomes) != 2 {
+		t.Fatalf("got %d outcomes, want 2", len(outcomes))
+	}
+	if !outcomes[0].Passed() || !outcomes[1].Failed() {
+		t.Fatalf("outcomes = %+v", outcomes)
+	}
+	// Test 1: setup body (1), test body (3), defers LIFO — test's (4) then setup's (2).
+	// Test 2 re-runs setup fresh (1), test body (5), fails at assert — defers on unwind
+	// LIFO: test's (6) then setup's (2). The failing test still runs the shared setup
+	// teardown, and setup re-runs per test (the leading 1 appears twice).
+	want := []int64{1, 3, 4, 2, 1, 5, 6, 2}
+	if !equalInt64(*log, want) {
+		t.Fatalf("record order = %v, want %v", *log, want)
+	}
+}
+
+func TestSetupSkipSkipsTest(t *testing.T) {
+	src := `test setup { skip("no db") }
+test "gated" { assert(false) }`
+	outcomes := compileAndRunTests(t, src)
+	if len(outcomes) != 1 {
+		t.Fatalf("got %d outcomes, want 1", len(outcomes))
+	}
+	if !outcomes[0].Skipped {
+		t.Fatalf("test should be skipped, err=%v", outcomes[0].Err)
+	}
+	if outcomes[0].SkipReason != "no db" {
+		t.Fatalf("skip reason = %q, want %q", outcomes[0].SkipReason, "no db")
+	}
+}
+
+// Setup is per-file: a `test setup` in one file applies only to tests in that file,
+// not to tests of the same namespace declared in another file.
+func TestSetupIsPerFile(t *testing.T) {
+	res, diags := NewParser().ParseAll([]Source{
+		{Filename: "a.cty", Bytes: []byte("test setup { var db = 1 }\ntest \"a sees db\" { assert(db == 1) }\n")},
+		{Filename: "b.cty", Bytes: []byte("test \"b does not see db\" { assert(db == 1) }\n")},
+	})
+	if diags.HasErrors() {
+		t.Fatalf("parse errors:\n%s", diags.Error())
+	}
+	var ctx *hcl.EvalContext
+	funcs, cdiags := res.Compile(func() *hcl.EvalContext { return ctx })
+	if cdiags.HasErrors() {
+		t.Fatalf("compile errors:\n%s", cdiags.Error())
+	}
+	all := testStdlib()
+	for k, v := range Stdlib() {
+		all[k] = v
+	}
+	for k, v := range funcs {
+		all[k] = v
+	}
+	ctx = &hcl.EvalContext{Functions: all, Variables: map[string]cty.Value{}}
+	outcomes := res.RunTests(func() *hcl.EvalContext { return ctx })
+
+	byName := map[string]TestOutcome{}
+	for _, o := range outcomes {
+		byName[o.Name] = o
+	}
+	if a, ok := byName["a sees db"]; !ok || !a.Passed() {
+		t.Fatalf("test in file a should pass (sees its own setup): %+v", a)
+	}
+	if b, ok := byName["b does not see db"]; !ok || !b.Failed() {
+		t.Fatalf("test in file b should fail (must not see file a's setup): %+v", b)
+	}
+}
+
+// counterFunc returns a niladic host function yielding 1, 2, 3, … on successive
+// calls — a stand-in for per-test-fresh state established in setup.
+func counterFunc() function.Function {
+	n := int64(0)
+	return function.New(&function.Spec{
+		Type: function.StaticReturnType(cty.Number),
+		Impl: func(_ []cty.Value, _ cty.Type) (cty.Value, error) {
+			n++
+			return cty.NumberIntVal(n), nil
+		},
+	})
+}
+
+// recorder returns a host function record(n) that appends n to a shared log, plus a
+// pointer to that log — for asserting the order in which setup/test/defer code runs.
+func recorder() (function.Function, *[]int64) {
+	var log []int64
+	f := function.New(&function.Spec{
+		Params: []function.Parameter{{Name: "n", Type: cty.Number}},
+		Type:   function.StaticReturnType(cty.DynamicPseudoType),
+		Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
+			n, _ := args[0].AsBigFloat().Int64()
+			log = append(log, n)
+			return cty.NullVal(cty.DynamicPseudoType), nil
+		},
+	})
+	return f, &log
+}
+
+func equalInt64(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestTestKeywordIsContextual(t *testing.T) {

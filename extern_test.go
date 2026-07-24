@@ -143,6 +143,7 @@ func TestExternRejectsNonFuncDeclarations(t *testing.T) {
 		{"var", "var x = 1\n"},
 		{"const", "const x = 1\n"},
 		{"test", "test \"t\" {\n    return 1\n}\n"},
+		{"test setup", "test setup {\n    var x = 1\n}\n"},
 		{"type", "type Id = string\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1127,9 +1127,36 @@ test "add is commutative" {
   }
   ```
 
-- **Setup / teardown.** No special construct is needed: a test's setup is just the
-  leading statements of its body, and `defer` gives per-test teardown that runs even
-  when the test fails — `test "x" { var r = open(); defer close(r); … }`.
+- **Setup / teardown.** A single test's setup is just the leading statements of its
+  body, and `defer` gives per-test teardown that runs even when the test fails —
+  `test "x" { var r = open(); defer close(r); … }`. To share that across tests, a
+  **`test setup { … }`** block is spliced onto the front of every test **in the same
+  file**, in the same scope:
+
+  ```functy
+  test setup {
+      var db = fresh_db()      // binding visible to every test below
+      defer db_close(db)       // shared teardown — runs at each test's end
+  }
+
+  test "insert then read" {
+      db_put(db, "k", 1)
+      assert(db_get(db, "k") == 1)
+  }
+  ```
+
+  - It runs **fresh before each test** (each test is a separate call), and its
+    `defer`s are function-scoped, so they run at that test's end — after the test's
+    own `defer`s (LIFO) and even when the test fails. This is the only way to share
+    teardown, since functy has no first-class functions to return a cleanup from a
+    helper.
+  - **Per file, not per namespace:** a `test setup` applies only to tests in its own
+    source file, so two files (even in the same namespace) can have different setups.
+    A file may declare several `test setup` blocks; they concatenate in source order.
+  - Because it becomes part of the test function, a `skip(...)`, `throw`, or failing
+    `assert` in setup skips or fails the test. A `return` is a compile error (it would
+    exit the test before its body). `setup` here is contextual — it is special only
+    right after `test`, so `func setup()` and `setup(x)` still work.
 - **Scope.** A test body sees everything the host's eval context provides: all
   functions defined in the sources (and any host/baseline functions), plus top-level
   `const`/`var`. It is compiled and run just like a niladic function.
@@ -1147,13 +1174,14 @@ test "add is commutative" {
 ## Grammar
 
 ```ebnf
-File        = [ NamespaceDecl ] ( { FuncDecl | TestDecl } | ExternFile ) .
+File        = [ NamespaceDecl ] ( { FuncDecl | TestDecl | SetupDecl } | ExternFile ) .
 ExternFile  = (* a file whose leading block has //functy:extern *)
               { ExternDecl } .
 NamespaceDecl = "namespace" ident { "::" ident } Term .
 FuncDecl    = "func" ident "(" [ ParamList ] ")" [ "->" Type ] Block .
 ExternDecl  = "func" ident "(" [ ParamList ] ")" [ "->" Type ] Term .
 TestDecl    = "test" string Block .
+SetupDecl   = "test" "setup" Block .
 ParamList   = Param { "," Param } [ "," Variadic ] | Variadic .
 Param       = ident [ "?" ] [ ":" Type ] [ "=" Expr ] .   (* "?" only in an extern file *)
 Variadic    = "*" ident [ ":" Type ] .

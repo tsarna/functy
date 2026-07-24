@@ -79,6 +79,21 @@ type TestDecl struct {
 
 func (t *TestDecl) srcRange() hcl.Range { return t.DefRange }
 
+// SetupDecl is a top-level `test setup { … }` block: shared setup whose statements
+// are spliced onto the front of every test in the *same source file* (see
+// RunTestsMatching), in the same scope, so its bindings are visible to each test and
+// its `defer`s run — function-scoped — at each test's end. `test setup` reuses the
+// contextual `test` keyword (the token after `test` is the ident `setup`, not a
+// string). A file may declare several; they concatenate in source order.
+type SetupDecl struct {
+	Namespace string      // the namespace of the file the block was declared in ("" = global)
+	Body      []Statement // body statements, spliced ahead of each test's body
+	BodyRange hcl.Range   // the `{ ... }` body span, for rendering (fmt)
+	DefRange  hcl.Range   // spans `test` … closing `}`; DefRange.Filename groups by file
+}
+
+func (s *SetupDecl) srcRange() hcl.Range { return s.DefRange }
+
 // NamespaceDecl is a file's leading `namespace a::b` declaration.
 //
 // A namespace name is one or more `::`-separated identifiers: `namespace foo` is

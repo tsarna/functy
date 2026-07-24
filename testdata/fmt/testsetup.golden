@@ -1,0 +1,12 @@
+test setup {
+    var db = open()
+    defer close(db)
+}
+
+test "reads what setup opened" {
+    assert(db != null)
+}
+
+test setup {
+    var extra = 1
+}

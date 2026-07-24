@@ -437,6 +437,7 @@ func (p *Parser) parseSources(sources []Source) (result *Result, diags hcl.Diagn
 		merged.Funcs = append(merged.Funcs, r.Funcs...)
 		merged.Externs = append(merged.Externs, r.Externs...)
 		merged.Tests = append(merged.Tests, r.Tests...)
+		merged.Setups = append(merged.Setups, r.Setups...)
 		merged.Consts = append(merged.Consts, r.Consts...)
 		merged.Vars = append(merged.Vars, r.Vars...)
 		merged.Namespaces = append(merged.Namespaces, r.Namespaces...)
@@ -600,11 +601,12 @@ func externShape(fn *FuncDecl) string {
 // (rather than a bare map) so additional collected output can be added without
 // breaking callers.
 type Result struct {
-	Funcs  []*FuncDecl // parsed function declarations
-	Tests  []*TestDecl // parsed test blocks (not registered as callable functions)
-	Consts []Decl      // top-level const declarations (only when enabled)
-	Vars   []Decl      // top-level var declarations (only when enabled)
-	Types  []TypeAlias // top-level type aliases (namespace-scoped; see TypeAlias)
+	Funcs  []*FuncDecl  // parsed function declarations
+	Tests  []*TestDecl  // parsed test blocks (not registered as callable functions)
+	Setups []*SetupDecl // `test setup` blocks, spliced ahead of each same-file test
+	Consts []Decl       // top-level const declarations (only when enabled)
+	Vars   []Decl       // top-level var declarations (only when enabled)
+	Types  []TypeAlias  // top-level type aliases (namespace-scoped; see TypeAlias)
 
 	// maxSteps is the Tier-1 execution-limit ceiling stamped from the Parser at
 	// parse time and read by CompileUnits when it builds each function. 0 =

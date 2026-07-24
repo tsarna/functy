@@ -132,6 +132,16 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 	// local-wins, documented in doc/language.md.)
 	compiled, _ := r.CompileUnits(skipCtxFn)
 
+	// `test setup` blocks are shared setup spliced onto the front of every test in the
+	// *same file*, in source order. Group their bodies by filename here so each test
+	// prepends only its own file's setup (a file has one namespace, so the spliced
+	// statements resolve names in the test's namespace as if written inline).
+	setupByFile := map[string][]Statement{}
+	for _, sd := range r.Setups {
+		f := sd.DefRange.Filename
+		setupByFile[f] = append(setupByFile[f], sd.Body...)
+	}
+
 	outcomes := make([]TestOutcome, 0, len(r.Tests))
 	for _, td := range r.Tests {
 		if filter != nil && !filter(td.Name) {
@@ -141,9 +151,17 @@ func (r *Result) RunTestsMatching(evalCtxFn func() *hcl.EvalContext, filter func
 		if table, ok := compiled.Units[td.Namespace]; ok {
 			bodyCtxFn = unitCtxFn(skipCtxFn, table, compiled.Vars, td.Namespace)
 		}
+		// Splice this file's setup ahead of the test body (same scope): its bindings
+		// are visible to the test, and its function-scoped `defer`s run at the test's
+		// end (LIFO, so after the test's own defers). A failed assert / skip / throw in
+		// setup fails / skips the test, since it is now part of the test function.
+		body := td.Body
+		if pre := setupByFile[td.DefRange.Filename]; len(pre) > 0 {
+			body = append(append(make([]Statement, 0, len(pre)+len(td.Body)), pre...), td.Body...)
+		}
 		// Bound test bodies by the same ceiling as normal functions, so a runaway
 		// loop in a test surfaces as a (non-skipped) *LimitError rather than hanging.
-		fn := BuildFunction(&FuncDecl{Name: td.Name, Namespace: td.Namespace, Body: td.Body}, bodyCtxFn, r.maxSteps)
+		fn := BuildFunction(&FuncDecl{Name: td.Name, Namespace: td.Namespace, Body: body}, bodyCtxFn, r.maxSteps)
 		start := time.Now()
 		_, err := fn.Call([]cty.Value{})
 		o := TestOutcome{Name: td.Name, DefRange: td.DefRange, Duration: time.Since(start), Err: err}

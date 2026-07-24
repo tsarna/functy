@@ -10,6 +10,18 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ### Added
 
+- **`test setup { … }` — shared per-file test setup.** A `test setup` block's
+  statements are spliced onto the front of every `test` in the **same source file**,
+  in the same scope, so its bindings are visible to each test and its `defer`s — being
+  function-scoped — run at each test's end (LIFO after the test's own defers, and even
+  when the test fails). This is the only way to share *teardown*, since functy has no
+  first-class functions to return a cleanup from a helper. It runs fresh before each
+  test; a `skip`/`throw`/failed `assert` in it skips or fails the test; a `return` is a
+  compile error. Scope is **per file, not per namespace** — two files in one namespace
+  can have different setups, and a file may declare several (concatenated in source
+  order). `setup` is contextual (special only right after `test`), so `func setup()`
+  still works. See [doc/language.md](doc/language.md#tests).
+
 - **Discarded-expression warning.** An expression statement that contains no
   function call now produces a warning: functy has no first-class functions and
   no state-mutating operators, so an expression with no call has no side effect

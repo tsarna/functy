@@ -271,6 +271,10 @@ func topLevelItems(res *Result) []topItem {
 		td := td
 		items = append(items, topItem{td.DefRange.Start, td.BodyRange.End, func(f *formatter) { f.testDecl(td) }})
 	}
+	for _, sd := range res.Setups {
+		sd := sd
+		items = append(items, topItem{sd.DefRange.Start, sd.BodyRange.End, func(f *formatter) { f.setupDecl(sd) }})
+	}
 	for i := range res.Consts {
 		d := res.Consts[i]
 		items = append(items, topItem{d.DefRange.Start, declEnd(d), func(f *formatter) { f.topDecl("const", d) }})
@@ -414,6 +418,13 @@ func (f *formatter) testDecl(td *TestDecl) {
 	f.emitSeq(td.Body, td.BodyRange.End.Byte)
 	f.indent--
 	f.writeLine("}" + f.trailing(td.BodyRange.End))
+}
+
+func (f *formatter) setupDecl(sd *SetupDecl) {
+	f.openBlock("test setup", sd.BodyRange)
+	f.emitSeq(sd.Body, sd.BodyRange.End.Byte)
+	f.indent--
+	f.writeLine("}" + f.trailing(sd.BodyRange.End))
 }
 
 func (f *formatter) topDecl(kw string, d Decl) {
