@@ -17,7 +17,8 @@ package symbols
 
 import (
 	"fmt"
-	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/tsarna/functy"
@@ -35,9 +36,9 @@ type SymbolsBlock struct {
 	// functy namespace it came from.
 	Label string `hcl:"name,label"`
 
-	// Source is a module-style source address resolved against the builder's base
-	// directory. It names a *directory* — a functy "unit", all its `.cty` files
-	// parsed together — not a single file.
+	// Source is a module-style source address resolved by the builder's
+	// SourceLoader. It names a whole functy "unit" — conventionally a directory,
+	// all its `.cty` files parsed together — not a single file.
 	Source string `hcl:"source"`
 
 	// Namespace selects which functy namespace within the unit to bind; "" (omitted)
@@ -47,19 +48,41 @@ type SymbolsBlock struct {
 	DefRange hcl.Range `hcl:",def_range"`
 }
 
+// SourceLoader resolves one symbols block's source string to the unit's
+// sources. It owns path resolution and its own diagnostics: the Builder passes
+// each block's Source verbatim and reports whatever diagnostics the loader
+// returns without wrapping, re-summarizing, or attaching its own subject, so
+// the loader should produce complete, host-flavored diagnostics (with a
+// subject range in the host's config if it has one). The Builder itself never
+// touches the filesystem; a host that wants plain disk loading can wrap
+// functy.ParseSources in a loader.
+//
+// Returning zero sources and no diagnostics is valid and yields an empty unit,
+// the same as an empty source directory. Each Source.Filename is used as-is: it
+// becomes the filename in diagnostic ranges and the key in Built.Files, so the
+// loader controls the key shape (absolute vs. workdir-relative).
+type SourceLoader func(source string) ([]functy.Source, hcl.Diagnostics)
+
 // Builder assembles a symbol table from a set of binding blocks. It is configured
 // with a fluent chain so future knobs can be added without breaking callers:
 //
 //	built, diags := symbols.NewBuilder().
-//	    WithBaseDir(moduleDir).
+//	    WithSourceLoader(loader).
 //	    WithBaseFunctions(hostFuncs).
 //	    WithBlocks(blocks...).
 //	    Build()
+//
+// Function resolution within a unit is base-first: the host table from
+// WithBaseFunctions is laid down and the unit's own exported functions are
+// overlaid, so a library's exported global-namespace function shadows a
+// same-named base function for that unit's consts and late-bound calls (Build
+// emits a warning for each such collision). The host-facing exported table
+// (Built.Functions, symbols::label::name keys) is unaffected by construction.
 type Builder struct {
 	blocks    []SymbolsBlock
-	baseDir   string
 	baseFuncs map[string]function.Function
 	maxSteps  int
+	loader    SourceLoader
 }
 
 // NewBuilder returns an empty Builder. maxSteps defaults to 0 (unbounded); a host
@@ -72,13 +95,33 @@ func (b *Builder) WithBlocks(blocks ...SymbolsBlock) *Builder {
 	return b
 }
 
-// WithBaseDir sets the directory each block's Source is resolved against.
-func (b *Builder) WithBaseDir(dir string) *Builder { b.baseDir = dir; return b }
+// WithSourceLoader supplies the loader that resolves each block's Source string
+// to its sources. It is required: the Builder performs no filesystem access of
+// its own, and Build reports an error if no loader is set. The loader receives
+// each Source string verbatim.
+//
+// The per-Builder unit cache is keyed by the block's raw Source string, so a
+// host that wants two blocks to share one parse must hand the Builder
+// already-normalized source strings. One Builder instance is expected to serve
+// one host scope (e.g. one module), so collisions across differing base
+// directories are not the Builder's concern.
+func (b *Builder) WithSourceLoader(fn SourceLoader) *Builder {
+	b.loader = fn
+	return b
+}
 
 // WithBaseFunctions supplies the host's function registry (OpenTofu's builtins).
 // functy library functions late-bind to it — they call these by bare name, and so
 // do const initializers — so anything a library references must be present. A
 // pure library that calls nothing may leave it nil.
+//
+// Within a unit the base table is laid down first and the unit's exported
+// functions are overlaid, so an exported global-namespace library function
+// shadows a same-named base function for that unit's consts and late-bound
+// calls; Build emits a warning for each such collision. Namespaced functions
+// (ns::name keys) cannot collide with bare base names and never warn. Private
+// (_-prefixed) functions shadow only inside their own unit's late-bind layer
+// and never warn either — they are withheld from the overlay entirely.
 func (b *Builder) WithBaseFunctions(funcs map[string]function.Function) *Builder {
 	b.baseFuncs = funcs
 	return b
@@ -104,7 +147,12 @@ type Built struct {
 	Symbols cty.Value
 
 	// Files maps filename to parsed bytes, for rendering diagnostics with source
-	// snippets (hcl.NewDiagnosticTextWriter).
+	// snippets (hcl.NewDiagnosticTextWriter). Keys are exactly each source's
+	// Source.Filename as the loader provided it — the Builder never rewrites
+	// them. Diagnostic range filenames and these keys are therefore always
+	// consistent with each other by construction, and a host controls the key
+	// shape (absolute vs. workdir-relative) by controlling the Filename it puts
+	// on each Source.
 	Files map[string]*hcl.File
 
 	// types is the type-plane lookup [label][typeName] backing Type(). Unexported
@@ -126,13 +174,19 @@ func (bt *Built) Type(label, name string) (cty.Type, bool) {
 	return ty, ok
 }
 
-// unit is one parsed source directory: its parse result and compiled functions.
+// unit is one parsed source unit: its parse result and compiled functions.
 // The per-namespace consts are evaluated into compiled.Vars by parseUnit, which is
-// where projectConsts reads them. Cached per resolved source path so two blocks
+// where projectConsts reads them. Cached per source string so two blocks
 // pointing at the same source with different namespaces parse it once.
 type unit struct {
 	res      *functy.Result
 	compiled *functy.Compiled
+
+	// errored records whether the unit's parse/compile/eval produced error
+	// diagnostics; it gates the namespace-existence check (which would report
+	// spurious typo errors against a half-parsed unit) and is carried on the
+	// unit so cache hits see it too.
+	errored bool
 }
 
 // Build parses each block's source once, projects the requested namespace under
@@ -146,6 +200,15 @@ func (b *Builder) Build() (*Built, hcl.Diagnostics) {
 		types:     map[string]map[string]cty.Type{},
 	}
 	labelObjs := map[string]cty.Value{}
+
+	if b.loader == nil && len(b.blocks) > 0 {
+		built.Symbols = cty.EmptyObjectVal
+		return built, hcl.Diagnostics{&hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "No source loader configured",
+			Detail:   "The symbols Builder requires a SourceLoader (WithSourceLoader) to resolve block sources; it performs no filesystem access of its own.",
+		}}
+	}
 
 	seenLabel := map[string]bool{}
 	units := map[string]*unit{}
@@ -162,20 +225,25 @@ func (b *Builder) Build() (*Built, hcl.Diagnostics) {
 		}
 		seenLabel[blk.Label] = true
 
-		path := blk.Source
-		if b.baseDir != "" {
-			path = filepath.Join(b.baseDir, blk.Source)
-		}
+		// The raw Source string is both the loader argument and the cache key.
+		key := blk.Source
 
-		u, ok := units[path]
+		u, ok := units[key]
 		if !ok {
 			var udiags hcl.Diagnostics
-			u, udiags = b.parseUnit(path, built.Files)
+			u, udiags = b.parseUnit(key, built.Files)
 			diags = diags.Extend(udiags)
-			units[path] = u // cache even on error, keyed by path, so we don't re-report
+			units[key] = u // cache even on error, keyed by source, so we don't re-report
 		}
 		if u == nil {
 			continue
+		}
+
+		if !u.errored {
+			if nsDiags := checkNamespace(blk, u); nsDiags.HasErrors() {
+				diags = diags.Extend(nsDiags)
+				continue
+			}
 		}
 
 		built.Functions = mergeFunctions(built.Functions, projectFunctions(blk, u), &diags)
@@ -187,12 +255,13 @@ func (b *Builder) Build() (*Built, hcl.Diagnostics) {
 	return built, diags
 }
 
-// parseUnit parses and compiles one source directory, evaluating its consts into
+// parseUnit loads (via the SourceLoader), parses, and compiles one source
+// unit, evaluating its consts into
 // a fresh eval context. Top-level const is enabled and top-level var rejected: a
 // var in a shared, plan-time library is meaningless (evaluated once, never
 // mutated), so it is a parse error rather than a silently dropped declaration.
-func (b *Builder) parseUnit(path string, files map[string]*hcl.File) (*unit, hcl.Diagnostics) {
-	sources, diags := functy.ParseSources(path)
+func (b *Builder) parseUnit(source string, files map[string]*hcl.File) (*unit, hcl.Diagnostics) {
+	sources, diags := b.loader(source)
 	for _, s := range sources {
 		files[s.Filename] = &hcl.File{Bytes: s.Bytes}
 	}
@@ -238,7 +307,108 @@ func (b *Builder) parseUnit(path string, files map[string]*hcl.File) (*unit, hcl
 
 	diags = diags.Extend(functy.EvalNamespacedDecls(res.Consts, ctx, compiled))
 
-	return &unit{res: res, compiled: compiled}, diags
+	diags = diags.Extend(baseShadowWarnings(res, b.baseFuncs))
+
+	return &unit{res: res, compiled: compiled, errored: diags.HasErrors()}, diags
+}
+
+// baseShadowWarnings warns for each exported global-namespace function whose
+// bare name collides with a base-table key: the overlay in parseUnit makes the
+// library's declaration win for this unit's consts and late-bound calls.
+// Namespaced functions carry ns::name keys and cannot collide with bare base
+// names; private functions never enter the overlay. Neither warns. Emitted once
+// per unit (not per block), so two blocks sharing a source warn once.
+func baseShadowWarnings(res *functy.Result, baseFuncs map[string]function.Function) hcl.Diagnostics {
+	var diags hcl.Diagnostics
+	for _, fn := range res.Funcs {
+		if fn.Namespace != "" || fn.IsPrivate() {
+			continue
+		}
+		if _, shadows := baseFuncs[fn.Name]; !shadows {
+			continue
+		}
+		diags = diags.Append(&hcl.Diagnostic{
+			Severity: hcl.DiagWarning,
+			Summary:  "Library function shadows a base function",
+			Detail: fmt.Sprintf(
+				"%q is also the name of a function provided by the host. Within this library, calls to %s and const initializers resolve to this declaration rather than the host's function; the exported symbols::<label>::%s table entry is unaffected. Rename this function to avoid the ambiguity.",
+				fn.Name, fn.Name, fn.Name),
+			Subject: fn.DefRange.Ptr(),
+		})
+	}
+	return diags
+}
+
+// checkNamespace reports an error when the block's namespace has no exported
+// declarations in the unit: either the namespace does not exist at all (a
+// typo-shaped foot-gun that would otherwise bind an empty-but-valid surface and
+// surface later as confusing "unknown function" errors), or it exists but holds
+// only private declarations. An empty unit (zero sources, e.g. an empty source
+// directory) has no namespaces at all, so binding even the global namespace
+// against it is an error — that is how "your source directory has no .cty
+// files" surfaces at bind time.
+func checkNamespace(blk SymbolsBlock, u *unit) hcl.Diagnostics {
+	exists := false
+	exported := false
+	nsSet := map[string]bool{}
+	note := func(ns string, private bool) {
+		nsSet[ns] = true
+		if ns == blk.Namespace {
+			exists = true
+			if !private {
+				exported = true
+			}
+		}
+	}
+	for _, fn := range u.res.Funcs {
+		note(fn.Namespace, fn.IsPrivate())
+	}
+	for i := range u.res.Consts {
+		note(u.res.Consts[i].Namespace, u.res.Consts[i].IsPrivate())
+	}
+	for _, a := range u.res.Types {
+		note(a.Namespace, a.IsPrivate())
+	}
+
+	if exported {
+		return nil
+	}
+
+	requested := fmt.Sprintf("namespace %q", blk.Namespace)
+	if blk.Namespace == "" {
+		requested = "the global namespace"
+	}
+
+	var detail string
+	switch {
+	case exists:
+		detail = fmt.Sprintf(
+			"In %s, %s exists but exports nothing: it contains only private (underscore-prefixed) declarations.",
+			blk.Source, requested)
+	case len(nsSet) > 0:
+		names := make([]string, 0, len(nsSet))
+		for ns := range nsSet {
+			if ns == "" {
+				ns = "(global)"
+			}
+			names = append(names, ns)
+		}
+		sort.Strings(names)
+		detail = fmt.Sprintf(
+			"%s does not contain any declarations in %s. Namespaces declared in this source: %s.",
+			blk.Source, requested, strings.Join(names, ", "))
+	default:
+		detail = fmt.Sprintf(
+			"%s contains no declarations at all, so there is nothing to bind %s to. Is the source empty?",
+			blk.Source, requested)
+	}
+
+	return hcl.Diagnostics{&hcl.Diagnostic{
+		Severity: hcl.DiagError,
+		Summary:  "Symbols namespace has no declarations",
+		Detail:   detail,
+		Subject:  blk.DefRange.Ptr(),
+	}}
 }
 
 // projectFunctions selects the unit's exported functions in the block's namespace

@@ -1,6 +1,8 @@
 package symbols
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/hcl/v2"
@@ -9,6 +11,14 @@ import (
 	"github.com/zclconf/go-cty/cty/function"
 	"github.com/zclconf/go-cty/cty/function/stdlib"
 )
+
+// testdataLoader resolves source strings against the testdata fixtures on disk,
+// standing in for a host loader.
+func testdataLoader() SourceLoader {
+	return func(source string) ([]functy.Source, hcl.Diagnostics) {
+		return functy.ParseSources(filepath.Join("testdata", source))
+	}
+}
 
 // baseFuncs is the host (stand-in for OpenTofu's) function registry the fixtures
 // call by bare name: functy's language stdlib plus the go-cty builtins the
@@ -35,7 +45,7 @@ func hasSummary(diags hcl.Diagnostics, summary string) bool {
 
 func TestBuild_GlobalLibrary(t *testing.T) {
 	built, diags := NewBuilder().
-		WithBaseDir("testdata").
+		WithSourceLoader(testdataLoader()).
 		WithBaseFunctions(baseFuncs()).
 		WithBlocks(SymbolsBlock{Label: "lib", Source: "lib"}).
 		Build()
@@ -93,7 +103,7 @@ func TestBuild_GlobalLibrary(t *testing.T) {
 
 func TestBuild_NamespaceProjection(t *testing.T) {
 	built, diags := NewBuilder().
-		WithBaseDir("testdata").
+		WithSourceLoader(testdataLoader()).
 		WithBaseFunctions(baseFuncs()).
 		WithBlocks(SymbolsBlock{Label: "net", Source: "nslib", Namespace: "acme::net"}).
 		Build()
@@ -119,23 +129,33 @@ func TestBuild_NamespaceProjection(t *testing.T) {
 	}
 }
 
-func TestBuild_WrongNamespaceIsEmpty(t *testing.T) {
-	// Binding the global surface of a namespaced library yields nothing.
+func TestBuild_WrongNamespaceIsError(t *testing.T) {
+	// Binding the global surface of a namespaced library is a bind-time error
+	// (the namespace has no declarations), naming the namespaces that do exist.
 	built, diags := NewBuilder().
-		WithBaseDir("testdata").
+		WithSourceLoader(testdataLoader()).
 		WithBaseFunctions(baseFuncs()).
 		WithBlocks(SymbolsBlock{Label: "net", Source: "nslib"}).
 		Build()
-	if diags.HasErrors() {
-		t.Fatalf("unexpected diagnostics: %s", diags)
+	if !diags.HasErrors() {
+		t.Fatalf("expected a namespace-not-found error")
 	}
+	if !hasSummary(diags, "Symbols namespace has no declarations") {
+		t.Errorf("expected Symbols namespace has no declarations, got %s", diags)
+	}
+	var detail string
+	for _, d := range diags {
+		if d.Summary == "Symbols namespace has no declarations" {
+			detail = d.Detail
+		}
+	}
+	if !strings.Contains(detail, "acme::net") {
+		t.Errorf("error detail should list the available namespace acme::net, got %q", detail)
+	}
+	// The failed binding projects nothing.
 	if len(built.Functions) != 0 {
-		t.Errorf("expected no functions for the global surface, got %v", keys(built.Functions))
+		t.Errorf("expected no functions for the failed binding, got %v", keys(built.Functions))
 	}
-	if attrs := built.Symbols.GetAttr("net").Type().AttributeTypes(); len(attrs) != 0 {
-		t.Errorf("expected no consts for the global surface, got %v", attrs)
-	}
-	// The namespaced `cidr` type must not cross under the global surface either.
 	if _, ok := built.Type("net", "cidr"); ok {
 		t.Errorf("namespaced type cidr must not appear on the global surface")
 	}
@@ -143,7 +163,7 @@ func TestBuild_WrongNamespaceIsEmpty(t *testing.T) {
 
 func TestBuild_DuplicateLabel(t *testing.T) {
 	_, diags := NewBuilder().
-		WithBaseDir("testdata").
+		WithSourceLoader(testdataLoader()).
 		WithBaseFunctions(baseFuncs()).
 		WithBlocks(
 			SymbolsBlock{Label: "lib", Source: "lib"},
@@ -160,7 +180,7 @@ func TestBuild_DuplicateLabel(t *testing.T) {
 
 func TestBuild_MissingSource(t *testing.T) {
 	_, diags := NewBuilder().
-		WithBaseDir("testdata").
+		WithSourceLoader(testdataLoader()).
 		WithBaseFunctions(baseFuncs()).
 		WithBlocks(SymbolsBlock{Label: "lib", Source: "does-not-exist"}).
 		Build()
@@ -171,7 +191,7 @@ func TestBuild_MissingSource(t *testing.T) {
 
 func TestBuild_TopLevelVarRejected(t *testing.T) {
 	_, diags := NewBuilder().
-		WithBaseDir("testdata").
+		WithSourceLoader(testdataLoader()).
 		WithBaseFunctions(baseFuncs()).
 		WithBlocks(SymbolsBlock{Label: "bad", Source: "badvar"}).
 		Build()
@@ -184,7 +204,7 @@ func TestBuild_SharedSourceTwoLabels(t *testing.T) {
 	// Two labels on the same source: the unit is parsed once (cached by path) and
 	// projected under each label.
 	built, diags := NewBuilder().
-		WithBaseDir("testdata").
+		WithSourceLoader(testdataLoader()).
 		WithBaseFunctions(baseFuncs()).
 		WithBlocks(
 			SymbolsBlock{Label: "a", Source: "lib"},

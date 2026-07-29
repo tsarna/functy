@@ -9,7 +9,7 @@ import (
 // Can a function reference a const declared in its own namespace by bare name?
 func TestBuild_FunctionSeesNamespaceConst(t *testing.T) {
 	built, diags := NewBuilder().
-		WithBaseDir("testdata").
+		WithSourceLoader(testdataLoader()).
 		WithBaseFunctions(baseFuncs()).
 		WithBlocks(SymbolsBlock{Label: "foo", Source: "nsconst", Namespace: "foo"}).
 		Build()
@@ -35,7 +35,7 @@ func TestBuild_FunctionSeesNamespaceConst(t *testing.T) {
 // duplicate-declaration diagnostic.
 func TestBuild_NamespaceConstsDoNotCollide(t *testing.T) {
 	built, diags := NewBuilder().
-		WithBaseDir("testdata").
+		WithSourceLoader(testdataLoader()).
 		WithBaseFunctions(baseFuncs()).
 		WithBlocks(
 			SymbolsBlock{Label: "foo", Source: "nsconst", Namespace: "foo"},
