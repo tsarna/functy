@@ -19,7 +19,7 @@ const Extension = ".cty"
 // Each argument may be:
 //
 //   - a string path to a .cty file, or to a directory (walked recursively,
-//     skipping dot-directories, collecting every .cty file);
+//     skipping dot-directories and dot-files, collecting every .cty file);
 //   - a []string of such paths;
 //   - an embed.FS (walked recursively for .cty files);
 //   - a Source, used as-is;
@@ -87,6 +87,9 @@ func sourcesFromPath(path string) ([]Source, hcl.Diagnostics) {
 			}
 			return nil
 		}
+		if strings.HasPrefix(info.Name(), ".") {
+			return nil
+		}
 		if strings.HasSuffix(p, Extension) {
 			fileSources, fdiags := readFileSource(p)
 			diags = diags.Extend(fdiags)
@@ -123,7 +126,13 @@ func sourcesFromFS(fsys embed.FS) ([]Source, hcl.Diagnostics) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(p, Extension) {
+		if d.IsDir() {
+			if p != "." && strings.HasPrefix(d.Name(), ".") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), ".") || !strings.HasSuffix(p, Extension) {
 			return nil
 		}
 		b, readErr := fs.ReadFile(fsys, p)
