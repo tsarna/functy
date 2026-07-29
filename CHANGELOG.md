@@ -8,6 +8,47 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-29
+
+### Changed
+
+- **`symbols.Builder` now requires a `SourceLoader`; `WithBaseDir` is removed.**
+  **Breaking** for the `symbols/` package: the Builder performs no filesystem
+  access of its own. A host supplies `WithSourceLoader(fn)`, which receives each
+  block's `Source` string verbatim, owns path resolution, and returns complete,
+  host-flavored diagnostics that the Builder passes through untouched. The
+  per-Builder unit cache is keyed by the raw `Source` string, and `Build()`
+  reports an error if blocks are present but no loader is configured. A host
+  wanting plain disk loading wraps `functy.ParseSources` in a loader. Driven by
+  the OpenTofu embedding, which reads sources through its own filesystem
+  abstraction.
+
+- **`ParseSources` now skips dot-files as well as dot-directories.** Hidden
+  files are unexpected as source code; the directory and `embed.FS` walks skip
+  any dot-prefixed entry (the walk root itself is exempt), so a hidden `.cty`
+  file is no longer silently included in a unit.
+
+### Added
+
+- **`symbols`: warning when a library function shadows a base function.** An
+  exported global-namespace `func` whose bare name collides with a
+  `WithBaseFunctions` key now produces a warning (once per unit, subject at the
+  declaration): within that unit, consts and late-bound calls resolve to the
+  library's declaration rather than the host's. Namespaced (`ns::name`) and
+  private (`_`-prefixed) functions never warn. The host-facing
+  `symbols::label::name` table is unaffected.
+
+- **`symbols`: binding a namespace with no exported declarations is now an
+  error** instead of a silently empty surface. The diagnostic distinguishes a
+  namespace that doesn't exist (listing the namespaces that do), one that
+  exists but contains only private declarations, and a unit with no
+  declarations at all — so an empty source directory surfaces at bind time
+  rather than as confusing downstream "unknown function" errors.
+
+- **`symbols`: `Built.Files` key contract documented.** Keys are exactly each
+  source's `Source.Filename` as the loader provided it, never rewritten, so
+  diagnostic range filenames and snippet-rendering keys agree by construction.
+
 ## [0.12.0] - 2026-07-24
 
 ### Added
