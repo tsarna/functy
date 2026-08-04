@@ -88,20 +88,6 @@ func DocFunc(evalCtxFn func() *hcl.EvalContext) function.Function {
 // not recoverable from cty — so the fallback shows the raw required-plus-variadic
 // shape. Declaring an extern for it is how that is fixed.
 func HelpFunc(res *Result, evalCtxFn func() *hcl.EvalContext) function.Function {
-	var funcs, externs []*FuncDecl
-	if res != nil {
-		funcs = res.Funcs
-		// Both extern sets are equally real to reflection: one was declared by the
-		// parsed sources, the other registered by the host (RegisterExterns). They are
-		// separate fields only so that tools which render *a source* can't emit the
-		// host's declarations into it. File externs go first, so that on a duplicate
-		// — which checkExternNames has already reported as an error — the one with an
-		// editable source wins the index.
-		externs = append(append([]*FuncDecl(nil), res.Externs...), res.HostExterns...)
-	}
-	funcByName, funcByBare := indexDecls(funcs)
-	externByName, externByBare := indexDecls(externs)
-
 	return function.New(&function.Spec{
 		Description: `Return a human-readable help summary for a function by name: help("f"). Includes its signature, description, and per-parameter docs; null if there is no such function. Called with no argument, help() lists the names of all available functions.`,
 		Params:      []function.Parameter{},
@@ -109,7 +95,7 @@ func HelpFunc(res *Result, evalCtxFn func() *hcl.EvalContext) function.Function 
 		Type:        function.StaticReturnType(cty.String),
 		Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
 			if len(args) == 0 {
-				return cty.StringVal(renderFuncList(funcByName, externByName, evalCtxFn)), nil
+				return cty.StringVal(strings.Join(res.FuncNames(evalCtxFn), "\n")), nil
 			}
 			if !args[0].IsKnown() {
 				return cty.UnknownVal(cty.String), nil
@@ -118,30 +104,20 @@ func HelpFunc(res *Result, evalCtxFn func() *hcl.EvalContext) function.Function 
 				return cty.NullVal(cty.String), nil
 			}
 			name := args[0].AsString()
-			if fn, ok := funcByName[name]; ok {
-				return cty.StringVal(renderFuncHelp(fn)), nil
-			}
-			// Externs are consulted *before* the eval context, because an extern names
-			// a function that is in the context: the whole reason it exists is that the
-			// cty metadata there renders the collapsed VarParam shape instead of the
-			// real signature. Letting the context win would defeat the feature.
-			if fn, ok := externByName[name]; ok {
-				return cty.StringVal(renderFuncHelp(fn)), nil
+			if fn := res.LookupFuncDecls(name); len(fn) > 0 {
+				return cty.StringVal(RenderFuncHelp(fn)), nil
 			}
 			if evalCtxFn != nil {
 				if ctx := evalCtxFn(); ctx != nil {
 					if f, ok := ctx.Functions[name]; ok {
-						return cty.StringVal(renderCtyHelp(name, f)), nil
+						return cty.StringVal(RenderCtyHelp(name, f)), nil
 					}
 				}
 			}
 			// Last: a bare name that is unambiguous across the namespaces. Ordered
 			// after the eval-context lookup so it can never shadow a host function.
-			if fn, ok := funcByBare[name]; ok {
-				return cty.StringVal(renderFuncHelp(fn)), nil
-			}
-			if fn, ok := externByBare[name]; ok {
-				return cty.StringVal(renderFuncHelp(fn)), nil
+			if fn := res.LookupBareFuncDecls(name); len(fn) > 0 {
+				return cty.StringVal(RenderFuncHelp(fn)), nil
 			}
 			return cty.NullVal(cty.String), nil // no such function
 		},
@@ -185,20 +161,114 @@ func indexDecls(decls []*FuncDecl) (byName, byBare map[string][]*FuncDecl) {
 	return byName, byBare
 }
 
-// renderFuncList returns the sorted, newline-separated names of every available
-// function, for the no-argument help() form: the assembled eval context (which
-// holds host- and functy-defined functions in one flat map), unioned with the
-// declarations.
+// decls returns the two declaration sets reflection searches, in the order it
+// searches them.
 //
-// The union is unconditional, and must be: an extern is by definition *not* in the
-// eval context (it names a function the host registered under its own machinery, or
-// one help simply cannot see), so anything short of a union would drop externs the
-// moment a context exists — which, in the CLI, is always.
+// Both extern sets are equally real to it: one was declared by the parsed
+// sources, the other registered by the host (RegisterExterns). They are separate
+// fields only so that tools which render *a source* cannot emit the host's
+// declarations into it, so they are returned as one search set. File externs go
+// first, so that on a duplicate — which checkExternNames has already reported as
+// an error — the one with an editable source is what a reader sees first.
+func (r *Result) decls() (funcs, externs []*FuncDecl) {
+	if r == nil {
+		return nil, nil
+	}
+	return r.Funcs, append(append([]*FuncDecl(nil), r.Externs...), r.HostExterns...)
+}
+
+// LookupFuncDecls returns the declarations of the function named by its
+// qualified name, or nil when none declares it.
+//
+// The result is a *set* because one name may carry several signatures — an
+// overload set (see checkExternNames). Pass it to RenderFuncHelp for the text
+// help() produces, or read the declarations directly to render them your own way.
+//
+// Externs are searched after the parsed functions but, deliberately, before any
+// eval context: an extern names a function that is *in* the context, and the
+// whole reason it exists is that the cty metadata there renders the collapsed
+// VarParam shape instead of the real signature. A host reproducing help()'s
+// precedence therefore does:
+//
+//	if d := res.LookupFuncDecls(n); len(d) > 0 { … RenderFuncHelp(d) }
+//	if f, ok := ctx.Functions[n]; ok        { … RenderCtyHelp(n, f) }
+//	if d := res.LookupBareFuncDecls(n); len(d) > 0 { … RenderFuncHelp(d) }
+func (r *Result) LookupFuncDecls(name string) []*FuncDecl {
+	funcs, externs := r.decls()
+	for _, set := range []([]*FuncDecl){funcs, externs} {
+		byName, _ := indexDecls(set)
+		if d, ok := byName[name]; ok {
+			return d
+		}
+	}
+	return nil
+}
+
+// LookupBareFuncDecls returns the declarations of a function named without its
+// namespace — help("baz") for `ns::baz` — when that bare name is unambiguous.
+//
+// A bare name declared in more than one namespace resolves to nothing rather
+// than to a guess; BareNameCandidates says which ones it could have meant, so a
+// caller can report the ambiguity instead of a bare absence.
+//
+// Ordered after the eval-context lookup by every caller, so it can never shadow
+// a host function.
+func (r *Result) LookupBareFuncDecls(name string) []*FuncDecl {
+	funcs, externs := r.decls()
+	for _, set := range []([]*FuncDecl){funcs, externs} {
+		_, byBare := indexDecls(set)
+		if d, ok := byBare[name]; ok {
+			return d
+		}
+	}
+	return nil
+}
+
+// BareNameCandidates returns the qualified names a bare name could refer to,
+// sorted.
+//
+// One name is what LookupBareFuncDecls resolves; more than one is why it
+// resolves nothing, and is the difference between "ambiguous" and "no such
+// function" — which a caller cannot otherwise tell apart, since both come back
+// empty. None means the bare name is not declared anywhere.
+//
+// Private declarations are included: they are not host-visible, but reflection is
+// a developer tool and knowing that `foo` is ambiguous with a private `ns::foo`
+// is exactly what explains the answer.
+func (r *Result) BareNameCandidates(name string) []string {
+	funcs, externs := r.decls()
+	seen := make(map[string]bool)
+	for _, set := range []([]*FuncDecl){funcs, externs} {
+		for _, fn := range set {
+			if fn.Name == name {
+				seen[fn.QualifiedName()] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// FuncNames returns the sorted names of every available function: the directory
+// the no-argument help() lists.
+//
+// The assembled eval context (which holds host- and functy-defined functions in
+// one flat map) is unioned with the declarations. The union is unconditional, and
+// must be: an extern is by definition *not* in the eval context (it names a
+// function the host registered under its own machinery, or one reflection simply
+// cannot see), so anything short of a union would drop externs the moment a
+// context exists — which, in a CLI, is always.
+//
+// evalCtxFn may be nil, which yields the declared names alone.
 //
 // Private functions never appear. From the eval context that is structural rather
 // than filtered — they were never put in the host's map — and the declarations are
-// filtered below to match.
-func renderFuncList(funcByName, externByName map[string][]*FuncDecl, evalCtxFn func() *hcl.EvalContext) string {
+// filtered here to match.
+func (r *Result) FuncNames(evalCtxFn func() *hcl.EvalContext) []string {
 	names := make(map[string]struct{})
 	if evalCtxFn != nil {
 		if ctx := evalCtxFn(); ctx != nil {
@@ -207,11 +277,13 @@ func renderFuncList(funcByName, externByName map[string][]*FuncDecl, evalCtxFn f
 			}
 		}
 	}
-	for _, decls := range []map[string][]*FuncDecl{funcByName, externByName} {
-		for n, set := range decls {
-			// An overload set's members share a name, so privacy is a property of the
-			// name and any member answers for all of them.
-			if len(set) == 0 || set[0].IsPrivate() {
+	funcs, externs := r.decls()
+	for _, set := range []([]*FuncDecl){funcs, externs} {
+		byName, _ := indexDecls(set)
+		for n, decls := range byName {
+			// An overload set's members share a name, so privacy is a property of
+			// the name and any member answers for all of them.
+			if len(decls) == 0 || decls[0].IsPrivate() {
 				continue
 			}
 			names[n] = struct{}{}
@@ -222,13 +294,13 @@ func renderFuncList(funcByName, externByName map[string][]*FuncDecl, evalCtxFn f
 		sorted = append(sorted, n)
 	}
 	sort.Strings(sorted)
-	return strings.Join(sorted, "\n")
+	return sorted
 }
 
 // paramDoc is one entry of a rendered "Parameters:" section.
 type paramDoc struct{ name, doc string }
 
-// renderFuncHelp renders help for a functy function from its declaration: an exact
+// RenderFuncHelp renders help for a functy function from its declaration: an exact
 // signature, the function's doc, and a per-parameter section for documented params.
 //
 // fns is a *set*, because an extern name may carry several signatures — an overload
@@ -244,7 +316,7 @@ type paramDoc struct{ name, doc string }
 // forms (first occurrence of a name wins). Documenting the family once, above the
 // first form, is the expected style; if several forms carry distinct docs, each is
 // kept, in order.
-func renderFuncHelp(fns []*FuncDecl) string {
+func RenderFuncHelp(fns []*FuncDecl) string {
 	if len(fns) == 0 {
 		return ""
 	}
@@ -335,9 +407,9 @@ func renderParam(p Param) string {
 	return b.String()
 }
 
-// renderCtyHelp renders best-effort help for a non-functy function from its cty
+// RenderCtyHelp renders best-effort help for a non-functy function from its cty
 // metadata: the parameter names/types cty exposes, plus descriptions.
-func renderCtyHelp(name string, f function.Function) string {
+func RenderCtyHelp(name string, f function.Function) string {
 	var b strings.Builder
 	b.WriteString(name)
 	b.WriteByte('(')

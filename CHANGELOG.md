@@ -8,6 +8,34 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-04
+
+### Added
+
+- **The reflection primitives `help()` is built from are now exported.** A host
+  that wants to render a function its own way — a structured signature, a
+  parameter table, a page with links — had to embed `help()`'s text as an opaque
+  blob, because everything behind it was unexported. Now:
+
+  - `(*Result).LookupFuncDecls(name)` — the declarations of a qualified name, as
+    a set, because one name may carry an overload set.
+  - `(*Result).LookupBareFuncDecls(name)` — the same for a bare name that is
+    unambiguous across namespaces.
+  - `(*Result).BareNameCandidates(name)` — the qualified names a bare name could
+    have meant. This is what distinguishes *ambiguous* from *no such function*,
+    which are otherwise both an empty set: a caller can now say which it was
+    instead of reporting a bare absence for both.
+  - `(*Result).FuncNames(evalCtxFn)` — the sorted directory the no-argument
+    `help()` lists, as a slice rather than a joined string.
+  - `RenderFuncHelp(decls)` and `RenderCtyHelp(name, fn)` — the two renderers,
+    for a caller that wants the text after all.
+
+  `HelpFunc` is now assembled from exactly these, so they are a decomposition of
+  it rather than a second implementation free to drift; a test asserts the
+  composition reproduces `help()` byte for byte. Behaviour is unchanged.
+
+  All four methods tolerate a nil `*Result`, as `HelpFunc` already did.
+
 ## [0.13.0] - 2026-07-29
 
 ### Changed
