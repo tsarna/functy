@@ -8,6 +8,30 @@ tagged. Until then, everything lives under **Unreleased**.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-04
+
+### Added
+
+- **The rendering primitives behind `help()`'s output, exported.** 0.14.0
+  exported the *lookup* primitives but not the pieces that turn a declaration
+  into text, so a host laying a function out itself — signature as a heading,
+  parameters as a table — still had to reimplement them and would drift:
+
+  - `RenderFuncSignature(decl)` — one form's calling convention, the line
+    `RenderFuncHelp` leads with.
+  - `RenderCtySignature(name, fn)` — the same for a function with no
+    declaration. Not reproducible outside this package: the return type has to
+    be asked for with a speculative call that may panic.
+  - `(Param).DisplayName()` — the parameter's name carrying its surface marker
+    (`*rest`, `name?`), which the signature and the parameter table must agree
+    on.
+  - `TypeString(ty)` — a cty type in functy's own type-annotation grammar, the
+    value of `typeof()`. A host that renders types its own way produces a second
+    grammar for one type system.
+
+  `RenderFuncHelp` and `RenderCtyHelp` are now assembled from these, and their
+  output is unchanged.
+
 ## [0.14.0] - 2026-08-04
 
 ### Added

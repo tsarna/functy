@@ -330,10 +330,10 @@ func RenderFuncHelp(fns []*FuncDecl) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(renderSignature(fn))
+		b.WriteString(RenderFuncSignature(fn))
 
 		for _, p := range fn.Params {
-			name := paramDisplayName(p)
+			name := p.DisplayName()
 			if p.Doc == "" || seenParam[name] {
 				continue
 			}
@@ -353,9 +353,15 @@ func RenderFuncHelp(fns []*FuncDecl) string {
 	return b.String()
 }
 
-// renderSignature renders one form: the name it is callable under, its parameters,
-// and its return type.
-func renderSignature(fn *FuncDecl) string {
+// RenderFuncSignature renders one form of a declaration: the name it is callable
+// under, its parameters, and its return type — the line that heads help()'s
+// output for it.
+//
+// Exported alongside RenderFuncHelp for a host that lays a function out itself:
+// a page wants the signature and the parameters as separate elements, so that
+// the parameter list can become a table and re-wrap, which the single rendered
+// block cannot.
+func RenderFuncSignature(fn *FuncDecl) string {
 	var b strings.Builder
 	b.WriteString(fn.QualifiedName())
 	b.WriteByte('(')
@@ -373,11 +379,12 @@ func renderSignature(fn *FuncDecl) string {
 	return b.String()
 }
 
-// paramDisplayName is the parameter's name carrying whatever marker its surface
+// DisplayName is the parameter's name carrying whatever marker its surface
 // syntax puts *on the name* — the variadic star, or the optional-without-default
 // `?`. Both the signature line and the aligned "Parameters:" column key on it, so
-// they stay consistent with each other.
-func paramDisplayName(p Param) string {
+// they stay consistent with each other, and a host rendering its own parameter
+// table keys on it for the same reason.
+func (p Param) DisplayName() string {
 	if p.Variadic {
 		return "*" + p.Name
 	}
@@ -391,7 +398,7 @@ func paramDisplayName(p Param) string {
 // [*]name[?][: T][ = default].
 func renderParam(p Param) string {
 	var b strings.Builder
-	b.WriteString(paramDisplayName(p))
+	b.WriteString(p.DisplayName())
 	if p.Type != nil {
 		b.WriteString(": ")
 		b.WriteString(p.Type.String())
@@ -411,6 +418,38 @@ func renderParam(p Param) string {
 // metadata: the parameter names/types cty exposes, plus descriptions.
 func RenderCtyHelp(name string, f function.Function) string {
 	var b strings.Builder
+	b.WriteString(RenderCtySignature(name, f))
+
+	var docs []paramDoc
+	for i, p := range f.Params() {
+		if p.Description != "" {
+			docs = append(docs, paramDoc{ctyParamName(p, i), p.Description})
+		}
+	}
+	if vp := f.VarParam(); vp != nil && vp.Description != "" {
+		docs = append(docs, paramDoc{"*" + ctyVarParamName(*vp), vp.Description})
+	}
+
+	if d := f.Description(); d != "" {
+		b.WriteString("\n\n")
+		b.WriteString(d)
+	}
+	b.WriteString(renderParamDocs(docs))
+	return b.String()
+}
+
+// RenderCtySignature renders a non-functy function's calling convention from its
+// cty metadata: the parameter names and types cty exposes, and the return type
+// where one can be computed.
+//
+// The sibling of RenderFuncSignature, for the functions that have no declaration
+// — which is most of a host's. A host laying a function out itself needs the
+// signature separately from the parameter documentation, and cannot reproduce
+// this: the return type has to be asked for with a speculative call that may
+// panic, and the rule for when a type annotation is noise rather than
+// information lives here.
+func RenderCtySignature(name string, f function.Function) string {
+	var b strings.Builder
 	b.WriteString(name)
 	b.WriteByte('(')
 	first := true
@@ -420,41 +459,38 @@ func RenderCtyHelp(name string, f function.Function) string {
 		}
 		first = false
 	}
-	var docs []paramDoc
 	for i, p := range f.Params() {
 		sep()
-		pn := p.Name
-		if pn == "" {
-			pn = fmt.Sprintf("arg%d", i+1)
-		}
-		b.WriteString(ctyParamString(pn, p.Type))
-		if p.Description != "" {
-			docs = append(docs, paramDoc{pn, p.Description})
-		}
+		b.WriteString(ctyParamString(ctyParamName(p, i), p.Type))
 	}
 	if vp := f.VarParam(); vp != nil {
 		sep()
-		vn := vp.Name
-		if vn == "" {
-			vn = "args"
-		}
 		b.WriteString("*")
-		b.WriteString(ctyParamString(vn, vp.Type))
-		if vp.Description != "" {
-			docs = append(docs, paramDoc{"*" + vn, vp.Description})
-		}
+		b.WriteString(ctyParamString(ctyVarParamName(*vp), vp.Type))
 	}
 	b.WriteByte(')')
 	if ret, ok := ctyReturnType(f); ok {
 		b.WriteString(" -> ")
-		b.WriteString(typeString(ret))
+		b.WriteString(TypeString(ret))
 	}
-	if d := f.Description(); d != "" {
-		b.WriteString("\n\n")
-		b.WriteString(d)
-	}
-	b.WriteString(renderParamDocs(docs))
 	return b.String()
+}
+
+// ctyParamName is a positional parameter's name, or a synthesized one when cty
+// carries none.
+func ctyParamName(p function.Parameter, i int) string {
+	if p.Name == "" {
+		return fmt.Sprintf("arg%d", i+1)
+	}
+	return p.Name
+}
+
+// ctyVarParamName is the variadic parameter's name, without its star.
+func ctyVarParamName(p function.Parameter) string {
+	if p.Name == "" {
+		return "args"
+	}
+	return p.Name
 }
 
 // ctyReturnType asks a cty function what it returns when called with exactly its
@@ -501,7 +537,7 @@ func ctyParamString(name string, ty cty.Type) string {
 	if ty == cty.NilType || ty == cty.DynamicPseudoType {
 		return name
 	}
-	return name + ": " + typeString(ty)
+	return name + ": " + TypeString(ty)
 }
 
 // renderParamDocs renders the aligned "Parameters:" section, or "" when no

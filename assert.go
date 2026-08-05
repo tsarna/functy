@@ -92,7 +92,7 @@ func renderValue(v cty.Value) string {
 	if b, err := ctyjson.Marshal(v, v.Type()); err == nil {
 		return string(b)
 	}
-	return typeString(v.Type())
+	return TypeString(v.Type())
 }
 
 // renderOperands renders gathered operands as "name = value, name = value" for the

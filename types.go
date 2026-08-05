@@ -46,7 +46,7 @@ func (c convertConstraint) Cty() cty.Type                         { return c.ty 
 // was written in — `list(string)`, `object({ a = string })` — rather than cty's prose
 // FriendlyName, which says "list of string" and flattens every object to bare "object".
 // This is what a signature shows, so it has to round-trip back through the resolver.
-func (c convertConstraint) String() string { return typeString(c.ty) }
+func (c convertConstraint) String() string { return TypeString(c.ty) }
 
 // defaultedConstraint is a convertConstraint whose annotation carried at least one
 // optional object attribute with a default (`optional(T, default)`). Before converting,

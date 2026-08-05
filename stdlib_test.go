@@ -129,7 +129,7 @@ func TestTypeofRoundTrips(t *testing.T) {
 		if diags.HasErrors() {
 			t.Fatalf("ParseType(%q): %s", s, diags.Error())
 		}
-		if got := typeString(tc.Cty()); got != s {
+		if got := TypeString(tc.Cty()); got != s {
 			t.Fatalf("round-trip: %q -> %q", s, got)
 		}
 	}

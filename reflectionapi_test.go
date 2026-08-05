@@ -264,6 +264,141 @@ func TestRenderCtyHelp(t *testing.T) {
 	}
 }
 
+func TestRenderFuncSignature(t *testing.T) {
+	res := parseForReflection(t, "//functy:extern\n\n"+
+		"func get(ctx?: ctx, thing, fallback = null, *rest: string) -> any\n")
+
+	got := res.LookupFuncDecls("get")
+	if len(got) != 1 {
+		t.Fatalf("got %d decls, want 1", len(got))
+	}
+	// The markers a name carries, the annotated types, and the return type.
+	if want := "get(ctx?: ctx, thing, fallback = null, *rest: string) -> any"; RenderFuncSignature(got[0]) != want {
+		t.Errorf("RenderFuncSignature = %q, want %q", RenderFuncSignature(got[0]), want)
+	}
+}
+
+// The signature is the line RenderFuncHelp leads with — that is what makes it
+// safe for a host to render the two parts separately.
+func TestRenderFuncSignatureIsHelpsFirstLine(t *testing.T) {
+	res := parseForReflection(t, "//functy:extern\n\n"+
+		"// Doc.\nfunc f(a: string, // about a\n) -> number\n")
+
+	got := res.LookupFuncDecls("f")
+	if len(got) != 1 {
+		t.Fatalf("got %d decls, want 1", len(got))
+	}
+	sig := RenderFuncSignature(got[0])
+	if help := RenderFuncHelp(got); !strings.HasPrefix(help, sig+"\n") {
+		t.Errorf("RenderFuncHelp does not lead with the signature:\n sig: %q\nhelp: %q", sig, help)
+	}
+}
+
+func TestParamDisplayName(t *testing.T) {
+	res := parseForReflection(t, "//functy:extern\n\nfunc f(plain, opt?, *rest) -> any\n")
+	decls := res.LookupFuncDecls("f")
+	if len(decls) != 1 {
+		t.Fatalf("got %d decls, want 1", len(decls))
+	}
+
+	var got []string
+	for _, p := range decls[0].Params {
+		got = append(got, p.DisplayName())
+	}
+	if !reflect.DeepEqual(got, []string{"plain", "opt?", "*rest"}) {
+		t.Errorf("DisplayName = %v, want [plain opt? *rest]", got)
+	}
+}
+
+func TestRenderCtySignature(t *testing.T) {
+	f := function.New(&function.Spec{
+		Params:   []function.Parameter{{Name: "s", Type: cty.String}},
+		VarParam: &function.Parameter{Name: "rest", Type: cty.Number},
+		Type:     function.StaticReturnType(cty.Bool),
+		Impl:     func([]cty.Value, cty.Type) (cty.Value, error) { return cty.True, nil },
+	})
+	if want := "upper(s: string, *rest: number) -> bool"; RenderCtySignature("upper", f) != want {
+		t.Errorf("RenderCtySignature = %q, want %q", RenderCtySignature("upper", f), want)
+	}
+
+	// A dynamic parameter carries no annotation: "any" is noise, not
+	// information. It also makes cty's own ReturnType dynamic, so there is no
+	// static return type left to state either.
+	dyn := function.New(&function.Spec{
+		Params: []function.Parameter{{Name: "s", Type: cty.String}, {Name: "x", Type: cty.DynamicPseudoType}},
+		Type:   function.StaticReturnType(cty.Bool),
+		Impl:   func([]cty.Value, cty.Type) (cty.Value, error) { return cty.True, nil },
+	})
+	if want := "f(s: string, x)"; RenderCtySignature("f", dyn) != want {
+		t.Errorf("RenderCtySignature = %q, want %q", RenderCtySignature("f", dyn), want)
+	}
+
+	// Unnamed parameters are numbered.
+	bare := function.New(&function.Spec{
+		Params: []function.Parameter{{Type: cty.String}},
+		Type:   function.StaticReturnType(cty.String),
+		Impl:   func([]cty.Value, cty.Type) (cty.Value, error) { return cty.StringVal(""), nil },
+	})
+	if want := "f(arg1: string) -> string"; RenderCtySignature("f", bare) != want {
+		t.Errorf("RenderCtySignature = %q, want %q", RenderCtySignature("f", bare), want)
+	}
+}
+
+// A return-type callback may panic on speculative arguments. Recovering is why
+// a host cannot reproduce this signature itself.
+func TestRenderCtySignatureSurvivesAPanickingReturnType(t *testing.T) {
+	boom := function.New(&function.Spec{
+		Params: []function.Parameter{{Name: "x", Type: cty.String}},
+		Type:   func([]cty.Value) (cty.Type, error) { panic("boom in Type callback") },
+		Impl:   func([]cty.Value, cty.Type) (cty.Value, error) { return cty.NullVal(cty.String), nil },
+	})
+
+	got := RenderCtySignature("boom", boom)
+	if got != "boom(x: string)" {
+		t.Errorf("RenderCtySignature = %q, want the signature with no return type", got)
+	}
+}
+
+func TestRenderCtySignatureIsHelpsFirstLine(t *testing.T) {
+	f := function.New(&function.Spec{
+		Description: "Upper-cases a string.",
+		Params:      []function.Parameter{{Name: "s", Type: cty.String, Description: "the string"}},
+		Type:        function.StaticReturnType(cty.String),
+		Impl:        func([]cty.Value, cty.Type) (cty.Value, error) { return cty.StringVal(""), nil },
+	})
+
+	sig := RenderCtySignature("upper", f)
+	if help := RenderCtyHelp("upper", f); !strings.HasPrefix(help, sig) {
+		t.Errorf("RenderCtyHelp does not lead with the signature:\n sig: %q\nhelp: %q", sig, help)
+	}
+}
+
+// The grammar is functy's own, so a rendered type round-trips as a type
+// annotation. A host rendering types its own way produces a second grammar for
+// one type system.
+func TestTypeString(t *testing.T) {
+	for _, tc := range []struct {
+		ty   cty.Type
+		want string
+	}{
+		{cty.String, "string"},
+		{cty.Number, "number"},
+		{cty.Bool, "bool"},
+		{cty.DynamicPseudoType, "any"},
+		{cty.List(cty.String), "list(string)"},
+		{cty.Map(cty.Number), "map(number)"},
+		{cty.Set(cty.Bool), "set(bool)"},
+		{cty.Object(map[string]cty.Type{"a": cty.String}), "object({ a = string })"},
+		{cty.Tuple([]cty.Type{cty.String, cty.Number}), "tuple([string, number])"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			if got := TypeString(tc.ty); got != tc.want {
+				t.Errorf("TypeString = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // The primitives must compose back into exactly what help() returns — that is
 // what makes them a decomposition of it rather than a second implementation
 // free to drift.

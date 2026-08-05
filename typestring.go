@@ -35,13 +35,18 @@ func richCapsule(ty cty.Type) (cty.Type, bool) {
 	return cty.NilType, false
 }
 
-// typeString renders a cty type in functy's own type-annotation grammar — the same
+// TypeString renders a cty type in functy's own type-annotation grammar — the same
 // syntax used in declarations — so it round-trips through the type resolver:
 // `string`, `list(string)`, `map(number)`, `object({ a = string, b = bool })`,
 // `tuple([string, number])`. Unlike hcl/v2/ext/typeexpr's TypeString it does not
 // panic on capsule types (functy has them); a capsule — or a rich object wrapping
 // one — renders as its type name. This is the value of typeof().
-func typeString(ty cty.Type) string {
+//
+// Exported so a host describing a function, a variable, or a value spells its
+// type the way functy does. A host that renders types its own way produces a
+// second grammar for one type system, and a reader cannot tell which they are
+// reading.
+func TypeString(ty cty.Type) string {
 	switch {
 	case ty == cty.String:
 		return "string"
@@ -54,11 +59,11 @@ func typeString(ty cty.Type) string {
 	case ty.IsCapsuleType():
 		return ty.FriendlyName()
 	case ty.IsListType():
-		return "list(" + typeString(ty.ElementType()) + ")"
+		return "list(" + TypeString(ty.ElementType()) + ")"
 	case ty.IsSetType():
-		return "set(" + typeString(ty.ElementType()) + ")"
+		return "set(" + TypeString(ty.ElementType()) + ")"
 	case ty.IsMapType():
-		return "map(" + typeString(ty.ElementType()) + ")"
+		return "map(" + TypeString(ty.ElementType()) + ")"
 	case ty.IsObjectType():
 		if cap, ok := richCapsule(ty); ok {
 			return cap.FriendlyName()
@@ -74,7 +79,7 @@ func typeString(ty cty.Type) string {
 		sort.Strings(names)
 		parts := make([]string, len(names))
 		for i, name := range names {
-			at := typeString(ats[name])
+			at := TypeString(ats[name])
 			// Optional attributes exist only in a type *constraint* (a declaration), not
 			// in the type of a value, so this branch is dead for typeof() and live for
 			// rendering a signature — where dropping the marker would misreport a
@@ -89,7 +94,7 @@ func typeString(ty cty.Type) string {
 		ets := ty.TupleElementTypes()
 		parts := make([]string, len(ets))
 		for i, et := range ets {
-			parts[i] = typeString(et)
+			parts[i] = TypeString(et)
 		}
 		return "tuple([" + strings.Join(parts, ", ") + "])"
 	default:
@@ -105,7 +110,7 @@ func typeString(ty cty.Type) string {
 // Where d is nil (a subtree with no defaults) it delegates to plain typeString.
 func typeStringDefaults(ty cty.Type, d *typeexpr.Defaults) string {
 	if d == nil {
-		return typeString(ty)
+		return TypeString(ty)
 	}
 	switch {
 	case ty.IsListType():
@@ -148,7 +153,7 @@ func typeStringDefaults(ty cty.Type, d *typeexpr.Defaults) string {
 		}
 		return "object({ " + strings.Join(parts, ", ") + " })"
 	default:
-		return typeString(ty)
+		return TypeString(ty)
 	}
 }
 
