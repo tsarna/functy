@@ -20,3 +20,30 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+
+  # One check for branch protection to require, instead of naming this
+  # workflow's jobs: the gate is *handed* their results, so adding, renaming or
+  # splitting a job here never means editing a protection rule again. It is also
+  # where a red Renovate PR is handed to a Devin session -- a sibling job, never
+  # a dependency of the gate, so it cannot affect this check's conclusion.
+  # Definition and the full list of handoff preconditions: tsarna/ci-shared.
+  #
+  # All four permissions are required even though only the handoff uses them:
+  # GitHub checks statically that no job in a called workflow requests more than
+  # the caller grants, and fails the whole run at startup if one does -- skipped
+  # jobs included.
+  ci-success:
+    name: CI Success
+    if: always()
+    needs: [test]
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      id-token: write
+    # Pinned by commit, as a moving tag here would let anyone who could push one
+    # to ci-shared run code in every calling repo. Renovate keeps it current
+    # from the trailing version comment.
+    uses: tsarna/ci-shared/.github/workflows/ci-gate.yml@621c3863df12355a95883b304be52831e2161b0a # v1.1.0
+    with:
+      needs: ${{ toJSON(needs) }}
