@@ -1,0 +1,35 @@
+name: Devin outcome notice
+
+# When a Devin session finishes a Renovate PR it sets a devin-* label and
+# leaves a one-line summary in its PR comment. This forwards that label to
+# tsarna/ci-shared, which reads the summary and posts it to Slack.
+#
+# Separate from the CI workflow on purpose: adding `labeled` to its
+# pull_request types would re-run the whole suite on every label change.
+on:
+  pull_request:
+    types: [labeled]
+
+# Granted here because GitHub validates a called workflow's requested
+# permissions against the caller's AT RUN STARTUP -- before any `if:` is
+# considered, and including jobs that end up skipped. Too few here fails the
+# entire run, not the job.
+permissions:
+  contents: read
+  id-token: write
+  issues: read
+  pull-requests: read
+
+jobs:
+  notify:
+    # Cheap filter so unrelated labels never start a runner. The called
+    # workflow repeats this and adds the author check.
+    if: >-
+      startsWith(github.event.label.name, 'devin-')
+      && github.event.label.name != 'devin-in-progress'
+    # Pinned by commit, as a moving tag here would let anyone who could push
+    # one to ci-shared run code in every calling repo. Renovate keeps it
+    # current from the trailing version comment.
+    uses: tsarna/ci-shared/.github/workflows/devin-notify.yml@85244f4e73be1b93e928818027f8dee55e4e8006 # v1.2.0
+    with:
+      label: ${{ github.event.label.name }}
