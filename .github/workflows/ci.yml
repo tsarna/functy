@@ -44,6 +44,6 @@ jobs:
     # Pinned by commit, as a moving tag here would let anyone who could push one
     # to ci-shared run code in every calling repo. Renovate keeps it current
     # from the trailing version comment.
-    uses: tsarna/ci-shared/.github/workflows/ci-gate.yml@621c3863df12355a95883b304be52831e2161b0a # v1.1.0
+    uses: tsarna/ci-shared/.github/workflows/ci-gate.yml@85244f4e73be1b93e928818027f8dee55e4e8006 # v1.2.0
     with:
       needs: ${{ toJSON(needs) }}
